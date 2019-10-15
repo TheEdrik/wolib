@@ -1,0 +1,4 @@
+Warehouse optimization routines
+
+pack  -- bin-packing heuristics skeleton
+
