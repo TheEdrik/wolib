@@ -11,8 +11,6 @@
 ## optionally, restrict the number of elements selected ('MAX_ELEMS')
 ##
 ## outputs list of not-selected entries if env contains 'NONSEL'
-##
-## Author: T Visegrady  <tamas.visegrady(at)gmail.com>
 
 
 ## input format
@@ -92,6 +90,8 @@ TUPLE_N, PCT = 0, None
 
 MAX_TUPLE_N = 4      ## try bundling 1..<this many> entries as single swap unit
                      ## we do not currently build combinations incrementally
+
+tFORMATS = [ 'csv', 'plain', ]
 
 
 ##--------------------------------------
@@ -240,12 +240,19 @@ def ordered(grp):
 
 
 ##--------------------------------------
-def elem2str(elem):
+def elem2str(elem, format='plain'):
 	"pretty-format internal-format element (or return empty string)"
 
 	if elem:
-		return("id=[{}] pri={} sec={} [line {}]"
-		      .format(elem[2], elem[0], elem[1], elem[3]))
+		if (format == 'plain'):
+			return("id=[{}] pri={} sec={} [line {}]"
+			      .format(elem[2], elem[0], elem[1], elem[3]))
+
+		elif (format == 'csv'):
+			return(elem[2])
+
+		else:
+			raise ValueError("unsupported format")
 	return ''
 
 
@@ -259,8 +266,11 @@ def elem2str(elem):
 ##
 ## NOP for empty 
 ##
-def report(sel, nsel, msg=None, remain=True, chk_oversize=True):
-	stotal = 0
+def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
+	if not format in tFORMATS:
+		raise ValueError(f"invalid report format [{format}]")
+
+	stotal, prefix = 0, ''
 	if sel:
 		stotal = arr2sums(sel)[0]
 
@@ -274,7 +284,10 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True):
 
 	if (msg):
 		print(msg)
-	print("selection: {} elements, total={}".format(len(sel), stotal),
+	if (format == 'csv'):
+		prefix = '#'
+
+	print(f"{prefix}selection: {len(sel)} elements, total={stotal}",
 	      end='')
 	if remain:
 		print(", margin={} ({:.2f}% of {})"
@@ -283,11 +296,19 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True):
 
 	if sel:
 		for s in enumerate(ordered(sel)):
-			print('elem[{}]: '.format(s[0]) +elem2str(s[1]))
+			if (format == 'plain'):
+				print('elem[{}]: '.format(s[0])
+				      + elem2str(s[1], format))
+			else:
+				print(f'{s[1][0]},{s[1][1]},' +
+				      f'{elem2str(s[1], format)}')
 		print()
 
 	if nsel:
+		if (format == 'csv'):
+			print('#', end='')
 		print("not selected: {} elements" .format(len(nsel)))
+
 		for s in enumerate(ordered(nsel)):
 			print('  ## not.sel[{}]: '.format(s[0]) +elem2str(s[1]))
 		print()
@@ -408,6 +429,40 @@ def tuple2idxstring(tuple):
 
 
 ##--------------------------------------
+## update non/selected set: apply add/remove index list
+##
+## 'prev' and 'curr' >0 implies this change improvement from 'prev' to 'curr'
+##
+## local copies of arrays are processed: prevent updating [passed-by-ref] arrays
+## this is inefficient, but considered tolerably bad for reasonable sizes
+##
+def add_and_remove(sel, nsel, add_idxs, rm_idxs, curr=0, prev=0, log=True):
+	sel, nsel = sel[:], nsel[:]
+
+			## TODO: assert in-range indexes
+
+			## process add/rm indexes in reverse (decreasing)
+			## order, so entries are pop'ped back to front
+			##
+	si  = list(sorted(rm_idxs,  reverse=True))
+	nsi = list(sorted(add_idxs, reverse=True))
+
+	if log:
+		print("## indexes to deselect: "+ ','.join(str(s) for s in si))
+		print("## indexes to select: "+ ','.join(str(s) for s in nsi))
+		if curr and prev:
+			print(f"## total changes {prev} -> {curr}")
+
+	add = list(nsel.pop(i) for i in nsi)
+	rm  = list(sel.pop(i)  for i in si)
+
+	sel.extend(add)
+	nsel.extend(rm)
+
+	return sel, nsel
+
+
+##--------------------------------------
 ## is there any swap removing 'scount' entries from 'sel' and adding
 ## 'nscount' from 'nsel' which imporves on primary-sum over current
 ## selection?
@@ -417,6 +472,9 @@ def tuple2idxstring(tuple):
 ##            updated primary sum, respectively, if a selection improves
 ##            the current selection
 ##
+## 'all_best', when not None, is the global optimum so far
+## log any state which exceeds that
+##
 ## since combinations are evaluated in cross-product, cache any sum(...)
 ## evaluated over non/selected tuples. quality change is difference
 ## of added/removed tuples (all cached)
@@ -424,7 +482,7 @@ def tuple2idxstring(tuple):
 ## caller MUST verify that adding (scount -nscount) to the selection
 ## still remains under element-count limit
 ##
-def klfm_swap_one(sel, nsel, scount=1, nscount=1):
+def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None):
 	if (scount < 1) or (nscount < 1):
 		raise ValueError("invalid selection-swap size")
 
@@ -442,6 +500,7 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1):
 		return None, None, None              ## already primary-optimal
 
 		## return (increasing-ordered) list of entries to swap
+		##
 	sidx  = list(range(len(sel)))
 	nsidx = list(range(len(nsel)))
 
@@ -473,6 +532,7 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1):
 
 				## exhaustive-match potential swap in/out
 				## combinations
+				##
 	for st, nst in itertools.product(
 			itertools.combinations(sidx, scount),
 			itertools.combinations(nsidx, nscount)):
@@ -491,8 +551,8 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1):
 
 			## TODO: unchanged primary, improved secondary?
 
-		sum1updated = sum1 -sums[skey][0] +sums[nskey][0]
-		sum2updated = sum2 -sums[skey][1] +sums[nskey][1]
+		sum1updated = sum1 -sums[ skey ][0] +sums[ nskey ][0]
+		sum2updated = sum2 -sums[ skey ][1] +sums[ nskey ][1]
 
 		if (sum1updated > MAX1):
 			continue      ## swap increases primary sum above limit
@@ -503,25 +563,43 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1):
 			continue     ## no improvement over any preceding swaps
 
 				## register this difference as current-best
+				##
 		best_sum1, best_sum2 = sum1updated, sum2updated
 		swap_del, swap_add   = st, nst
 
 		print("## remove:")
 		for si in st:
 			print('##  - ' +elem2str(sel[si]))
+
 		print("## add:")
 		for nsi in nst:
 			print('##  + ' +elem2str(nsel[nsi]))
 		print("## primary sum improves {}->{} "
 		      .format(sum1, best_sum1), end='')
+
 		print("(remain: {}->{})".format(MAX1-sum1, MAX1-best_sum1))
 		print(flush=True)
+
+				## if this is the global optimum, log it
+				## redundant, but it ensures the best choice
+				## is somewhere visible in log
+				##
+				## work on temp non/select-array copies,
+				## to prevent updating original array
+				##
+		if (all_best != None) and (best_sum1 > all_best):
+			sbest, nsbest = add_and_remove(sel, nsel, swap_add,
+			                               swap_del, log=False)
+
+			report(sbest, nsbest, msg='# best combination, so far:')
+			all_best = best_sum1
+
 
 			## pathological case: terminate: no overhead at all
 		if (MAX1 == best_sum1):
 			break
 
-	return swap_add, swap_del, best_sum1
+	return swap_add, swap_del, best_sum1, all_best
 
 
 ##--------------------------------------
@@ -553,7 +631,7 @@ def over_pct_threshold(selected):
 ## 'sel' and 'nsel' are internal-format arrays, of current selected
 ## and non-selected entries, respectively
 ##
-def klfm_swap(sel, nsel, max_tuple_n):
+def klfm_swap(sel, nsel, max_tuple_n, all_best=None):
 	if not sel or not nsel:
 		return None
 
@@ -562,6 +640,9 @@ def klfm_swap(sel, nsel, max_tuple_n):
 		## find the best swap possibility from 1..N, 1..N-element
 		## combinations from non/selected sets
 
+		## all_best is global optimum
+		## best     is best for current swap
+		##
 	best, add, rm = None, None, None
 
 	for scount, nscount in itertools.product(range(1, max_tuple_n +1),
@@ -570,7 +651,8 @@ def klfm_swap(sel, nsel, max_tuple_n):
 		if MAX_ELEMS and ((len(sel) -scount +nscount) > MAX_ELEMS):
 			continue                 ## stay below elem-count limit
 
-		s1, s2, nsum = klfm_swap_one(sel, nsel, scount, nscount)
+		s1, s2, nsum, all_best = klfm_swap_one(sel, nsel, scount,
+		                                       nscount, all_best)
 
 		if (not s1) or (not s2) or (not nsum):
 			print('## {}+{} swap: no improvement'
@@ -589,21 +671,9 @@ def klfm_swap(sel, nsel, max_tuple_n):
 	if not best:
 		return None                            ## no improvement
 
-			## process add/rm indexes in reverse (decreasing)
-			## order, so entries are pop'ped back to front
-	si  = list(sorted(rm,  reverse=True))
-	nsi = list(sorted(add, reverse=True))
-	print("## indexes to deselect: "+ ','.join(str(s) for s in si))
-	print("## indexes to select: "+ ','.join(str(s) for s in nsi))
-	print("## total changes {} -> {}".format(sum1, best))
+	sel, nsel = add_and_remove(sel, nsel, add, rm)
 
-	add = list(nsel.pop(i) for i in nsi)
-	rm  = list(sel.pop(i)  for i in si)
-
-	sel.extend(add)
-	nsel.extend(rm)
-
-	return best -sum1
+	return best -sum1, all_best
 
 
 ##--------------------------------------
@@ -668,12 +738,14 @@ if __name__ == '__main__':
 
 	report(sel, nsel, msg='best-fit decreasing raw output:')
 
-	impr, round = True, 0
+	impr, all_best, round = True, sum(e[0] for e in sel), 0
+
 	while impr:
 		if over_pct_threshold(sel):
 			break
 
-		impr, round = klfm_swap(sel, nsel, MAX_TUPLE_N), round+1
+		impr, all_best = klfm_swap(sel, nsel, MAX_TUPLE_N, all_best)
+		round = round+1
 
 		if impr and (impr > 0):
 			report(sel, nsel, msg=f'KLFM improvement, r {round}')
