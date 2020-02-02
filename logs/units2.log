@@ -55,7 +55,7 @@ best-fit decreasing raw output:
 ## add:
 ##  + id=[unit12] pri=704390005 sec=1 [line 12]
 ##  + id=[unit23] pri=684129345 sec=1 [line 23]
-## global optimum improves 0->8405343786(margin: 8541500000->136156214)
+## global optimum improves 8361120240->8405343786(margin: 180379760->136156214)
 
 # best combination, so far:
 #selection: 10 elements, total=8405343786, margin=136156214 (1.59% of 8541500000)

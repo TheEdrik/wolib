@@ -785,9 +785,10 @@ if __name__ == '__main__':
 	report(sel, nsel, msg='best-fit decreasing raw output:')
 
 	impr, round = True, 0
-	vSOLUTION[ 'sum'        ] = 0
+	vSOLUTION[ 'sum'        ] = arr2sums(sel)[0]
 	vSOLUTION[ 'selection'  ] = []
 	vSOLUTION[ 'nselection' ] = []
+		## these will be filled if any swap improves on BFD plan
 
 	while impr:
 		if over_pct_threshold(sel):
