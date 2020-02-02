@@ -1,1147 +1,2744 @@
-## called as:
-##     MAX1=8541500000 TUPLE_N=7 NONSEL=1 pack.py ...
-##--------------------------------------
+## MAX1=8541500000
+
+## add id=[unit15] pri=1344295804 sec=1 [line 15]
+## sum: 0 -> 1344295804 [left=7197204196, 84.26%]
+## add id=[unit21] pri=1246183781 sec=1 [line 21]
+## sum: 1344295804 -> 2590479585 [left=5951020415, 69.67%]
+## add id=[unit06] pri=1153793216 sec=1 [line 6]
+## sum: 2590479585 -> 3744272801 [left=4797227199, 56.16%]
+## add id=[unit25] pri=1125331626 sec=1 [line 25]
+## sum: 3744272801 -> 4869604427 [left=3671895573, 42.99%]
+## add id=[unit14] pri=985151810 sec=1 [line 14]
+## sum: 4869604427 -> 5854756237 [left=2686743763, 31.46%]
+## add id=[unit20] pri=907516388 sec=1 [line 20]
+## sum: 5854756237 -> 6762272625 [left=1779227375, 20.83%]
+## add id=[unit07] pri=830732728 sec=1 [line 7]
+## sum: 6762272625 -> 7593005353 [left=948494647, 11.10%]
+## add id=[unit19] pri=709027875 sec=1 [line 19]
+## sum: 7593005353 -> 8302033228 [left=239466772, 2.80%]
+## add id=[unit22] pri=59087012 sec=1 [line 22]
+## sum: 8302033228 -> 8361120240 [left=180379760, 2.11%]
 
 best-fit decreasing raw output:
-#selection: 12 elements, total=8535937808, margin=5562192 (0.07% of 8541500000)
-570619793,1,unit02
-762784911,1,unit03
-627329105,1,unit06
-720659926,1,unit07
-649770468,1,unit08
-710185464,1,unit09
-676751639,1,unit12
-685227972,1,unit13
-467516301,1,unit16
-830732728,1,unit19
-709027875,1,unit24
-1125331626,1,unit26
+#selection: 9 elements, total=8361120240, margin=180379760 (2.11% of 8541500000)
+1153793216,1,unit06
+830732728,1,unit07
+985151810,1,unit14
+1344295804,1,unit15
+709027875,1,unit19
+907516388,1,unit20
+1246183781,1,unit21
+59087012,1,unit22
+1125331626,1,unit25
 
-#not selected: 14 elements
-  ## not.sel[0]: id=[unit01] pri=459509303 sec=1 [line 1]
-  ## not.sel[1]: id=[unit04] pri=181390317 sec=1 [line 4]
-  ## not.sel[2]: id=[unit05] pri=492204853 sec=1 [line 5]
-  ## not.sel[3]: id=[unit10] pri=456345033 sec=1 [line 10]
-  ## not.sel[4]: id=[unit11] pri=529097143 sec=1 [line 11]
-  ## not.sel[5]: id=[unit14] pri=509445950 sec=1 [line 14]
-  ## not.sel[6]: id=[unit15] pri=510178105 sec=1 [line 15]
-  ## not.sel[7]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[8]: id=[unit18] pri=473710930 sec=1 [line 18]
-  ## not.sel[9]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[10]: id=[unit21] pri=500590923 sec=1 [line 21]
-  ## not.sel[11]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[12]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[13]: id=[unit25] pri=59087012 sec=1 [line 25]
+#not selected: 16 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[4]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[5]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[6]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[7]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[8]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[9]: id=[unit12] pri=704390005 sec=1 [line 12]
+  ## not.sel[10]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[11]: id=[unit16] pri=597736947 sec=1 [line 16]
+  ## not.sel[12]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[13]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[14]: id=[unit23] pri=684129345 sec=1 [line 23]
+  ## not.sel[15]: id=[unit24] pri=607152452 sec=1 [line 24]
 
 ## 1+1 swap: no improvement
 ## remove:
-##  - id=[unit09] pri=710185464 sec=1 [line 9]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8536239804 (remain: 5562192->5260196)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+## global optimum improves 0->8405343786(margin: 8541500000->136156214)
 
 # best combination, so far:
-#selection: 13 elements, total=8536239804, margin=5260196 (0.06% of 8541500000)
-570619793,1,unit02
-762784911,1,unit03
-181390317,1,unit04
-627329105,1,unit06
-720659926,1,unit07
-649770468,1,unit08
-529097143,1,unit11
-676751639,1,unit12
-685227972,1,unit13
-467516301,1,unit16
-830732728,1,unit19
-709027875,1,unit24
-1125331626,1,unit26
+#selection: 10 elements, total=8405343786, margin=136156214 (1.59% of 8541500000)
+1153793216,1,unit06
+830732728,1,unit07
+704390005,1,unit12
+985151810,1,unit14
+709027875,1,unit19
+907516388,1,unit20
+1246183781,1,unit21
+59087012,1,unit22
+684129345,1,unit23
+1125331626,1,unit25
 
-#not selected: 13 elements
-  ## not.sel[0]: id=[unit01] pri=459509303 sec=1 [line 1]
-  ## not.sel[1]: id=[unit05] pri=492204853 sec=1 [line 5]
-  ## not.sel[2]: id=[unit09] pri=710185464 sec=1 [line 9]
-  ## not.sel[3]: id=[unit10] pri=456345033 sec=1 [line 10]
-  ## not.sel[4]: id=[unit14] pri=509445950 sec=1 [line 14]
-  ## not.sel[5]: id=[unit15] pri=510178105 sec=1 [line 15]
-  ## not.sel[6]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[7]: id=[unit18] pri=473710930 sec=1 [line 18]
-  ## not.sel[8]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[9]: id=[unit21] pri=500590923 sec=1 [line 21]
-  ## not.sel[10]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[11]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[12]: id=[unit25] pri=59087012 sec=1 [line 25]
+#not selected: 15 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[4]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[5]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[6]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[7]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[8]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[9]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[10]: id=[unit15] pri=1344295804 sec=1 [line 15]
+  ## not.sel[11]: id=[unit16] pri=597736947 sec=1 [line 16]
+  ## not.sel[12]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[13]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[14]: id=[unit24] pri=607152452 sec=1 [line 24]
+
+## primary sum improves 8361120240->8405343786(remain: 180379760->136156214)
 
 ## remove:
-##  - id=[unit24] pri=709027875 sec=1 [line 24]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8537397393 (remain: 5562192->4102607)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+## global optimum improves 8405343786->8503455809(margin: 136156214->38044191)
 
 # best combination, so far:
-#selection: 13 elements, total=8537397393, margin=4102607 (0.05% of 8541500000)
-570619793,1,unit02
-762784911,1,unit03
-181390317,1,unit04
-627329105,1,unit06
-720659926,1,unit07
-649770468,1,unit08
-710185464,1,unit09
-529097143,1,unit11
-676751639,1,unit12
-685227972,1,unit13
-467516301,1,unit16
-830732728,1,unit19
-1125331626,1,unit26
+#selection: 10 elements, total=8503455809, margin=38044191 (0.45% of 8541500000)
+1153793216,1,unit06
+830732728,1,unit07
+704390005,1,unit12
+985151810,1,unit14
+1344295804,1,unit15
+709027875,1,unit19
+907516388,1,unit20
+59087012,1,unit22
+684129345,1,unit23
+1125331626,1,unit25
 
-#not selected: 13 elements
-  ## not.sel[0]: id=[unit01] pri=459509303 sec=1 [line 1]
-  ## not.sel[1]: id=[unit05] pri=492204853 sec=1 [line 5]
-  ## not.sel[2]: id=[unit10] pri=456345033 sec=1 [line 10]
-  ## not.sel[3]: id=[unit14] pri=509445950 sec=1 [line 14]
-  ## not.sel[4]: id=[unit15] pri=510178105 sec=1 [line 15]
-  ## not.sel[5]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[6]: id=[unit18] pri=473710930 sec=1 [line 18]
-  ## not.sel[7]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[8]: id=[unit21] pri=500590923 sec=1 [line 21]
-  ## not.sel[9]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[10]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[11]: id=[unit24] pri=709027875 sec=1 [line 24]
-  ## not.sel[12]: id=[unit25] pri=59087012 sec=1 [line 25]
+#not selected: 15 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[4]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[5]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[6]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[7]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[8]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[9]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[10]: id=[unit16] pri=597736947 sec=1 [line 16]
+  ## not.sel[11]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[12]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[13]: id=[unit21] pri=1246183781 sec=1 [line 21]
+  ## not.sel[14]: id=[unit24] pri=607152452 sec=1 [line 24]
+
+## primary sum improves 8361120240->8503455809(remain: 180379760->38044191)
 
 ## remove:
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
 ## add:
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541167409 (remain: 5562192->332591)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+## global optimum improves 8503455809->8518869481(margin: 38044191->22630519)
 
 # best combination, so far:
-#selection: 13 elements, total=8541167409, margin=332591 (0.00% of 8541500000)
-570619793,1,unit02
-762784911,1,unit03
-181390317,1,unit04
-627329105,1,unit06
-720659926,1,unit07
-649770468,1,unit08
-710185464,1,unit09
-685227972,1,unit13
-467516301,1,unit16
-830732728,1,unit19
-500590923,1,unit21
-709027875,1,unit24
-1125331626,1,unit26
+#selection: 10 elements, total=8518869481, margin=22630519 (0.26% of 8541500000)
+830732728,1,unit07
+704390005,1,unit12
+985151810,1,unit14
+1344295804,1,unit15
+709027875,1,unit19
+907516388,1,unit20
+1246183781,1,unit21
+59087012,1,unit22
+607152452,1,unit24
+1125331626,1,unit25
 
-#not selected: 13 elements
-  ## not.sel[0]: id=[unit01] pri=459509303 sec=1 [line 1]
-  ## not.sel[1]: id=[unit05] pri=492204853 sec=1 [line 5]
-  ## not.sel[2]: id=[unit10] pri=456345033 sec=1 [line 10]
-  ## not.sel[3]: id=[unit11] pri=529097143 sec=1 [line 11]
-  ## not.sel[4]: id=[unit12] pri=676751639 sec=1 [line 12]
-  ## not.sel[5]: id=[unit14] pri=509445950 sec=1 [line 14]
-  ## not.sel[6]: id=[unit15] pri=510178105 sec=1 [line 15]
-  ## not.sel[7]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[8]: id=[unit18] pri=473710930 sec=1 [line 18]
-  ## not.sel[9]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[10]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[11]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[12]: id=[unit25] pri=59087012 sec=1 [line 25]
+#not selected: 15 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[4]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[5]: id=[unit06] pri=1153793216 sec=1 [line 6]
+  ## not.sel[6]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[7]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[8]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[9]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[10]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[11]: id=[unit16] pri=597736947 sec=1 [line 16]
+  ## not.sel[12]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[13]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[14]: id=[unit23] pri=684129345 sec=1 [line 23]
+
+## primary sum improves 8361120240->8518869481(remain: 180379760->22630519)
 
 ## remove:
-##  - id=[unit08] pri=649770468 sec=1 [line 8]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
 ## add:
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541268587 (remain: 5562192->231413)
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+## global optimum improves 8518869481->8521333753(margin: 22630519->20166247)
 
 # best combination, so far:
-#selection: 13 elements, total=8541268587, margin=231413 (0.00% of 8541500000)
-570619793,1,unit02
-762784911,1,unit03
-181390317,1,unit04
-627329105,1,unit06
-720659926,1,unit07
-710185464,1,unit09
-676751639,1,unit12
-685227972,1,unit13
-467516301,1,unit16
-473710930,1,unit18
-830732728,1,unit19
-709027875,1,unit24
-1125331626,1,unit26
+#selection: 10 elements, total=8521333753, margin=20166247 (0.24% of 8541500000)
+629877384,1,unit05
+830732728,1,unit07
+985151810,1,unit14
+1344295804,1,unit15
+709027875,1,unit19
+907516388,1,unit20
+1246183781,1,unit21
+59087012,1,unit22
+684129345,1,unit23
+1125331626,1,unit25
 
-#not selected: 13 elements
-  ## not.sel[0]: id=[unit01] pri=459509303 sec=1 [line 1]
-  ## not.sel[1]: id=[unit05] pri=492204853 sec=1 [line 5]
-  ## not.sel[2]: id=[unit08] pri=649770468 sec=1 [line 8]
-  ## not.sel[3]: id=[unit10] pri=456345033 sec=1 [line 10]
-  ## not.sel[4]: id=[unit11] pri=529097143 sec=1 [line 11]
-  ## not.sel[5]: id=[unit14] pri=509445950 sec=1 [line 14]
-  ## not.sel[6]: id=[unit15] pri=510178105 sec=1 [line 15]
-  ## not.sel[7]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[8]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[9]: id=[unit21] pri=500590923 sec=1 [line 21]
-  ## not.sel[10]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[11]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[12]: id=[unit25] pri=59087012 sec=1 [line 25]
+#not selected: 15 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[4]: id=[unit06] pri=1153793216 sec=1 [line 6]
+  ## not.sel[5]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[6]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[7]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[8]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[9]: id=[unit12] pri=704390005 sec=1 [line 12]
+  ## not.sel[10]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[11]: id=[unit16] pri=597736947 sec=1 [line 16]
+  ## not.sel[12]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[13]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[14]: id=[unit24] pri=607152452 sec=1 [line 24]
 
-## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-## add:
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8540546385 (remain: 5562192->953615)
+## primary sum improves 8361120240->8521333753(remain: 180379760->20166247)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
 ## add:
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8540719452 (remain: 5562192->780548)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+## global optimum improves 8521333753->8537915566(margin: 20166247->3584434)
+
+# best combination, so far:
+#selection: 10 elements, total=8537915566, margin=3584434 (0.04% of 8541500000)
+1153793216,1,unit06
+830732728,1,unit07
+704390005,1,unit12
+985151810,1,unit14
+1344295804,1,unit15
+597736947,1,unit16
+709027875,1,unit19
+907516388,1,unit20
+1246183781,1,unit21
+59087012,1,unit22
+
+#not selected: 15 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[4]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[5]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[6]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[7]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[8]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[9]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[10]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[11]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[12]: id=[unit23] pri=684129345 sec=1 [line 23]
+  ## not.sel[13]: id=[unit24] pri=607152452 sec=1 [line 24]
+  ## not.sel[14]: id=[unit25] pri=1125331626 sec=1 [line 25]
+
+## primary sum improves 8361120240->8537915566(remain: 180379760->3584434)
 
 ## remove:
-##  - id=[unit24] pri=709027875 sec=1 [line 24]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
 ## add:
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541098192 (remain: 5562192->401808)
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+## global optimum improves 8537915566->8540554449(margin: 3584434->945551)
 
-## 1+4 swap: no improvement
+# best combination, so far:
+#selection: 10 elements, total=8540554449, margin=945551 (0.01% of 8541500000)
+1153793216,1,unit06
+830732728,1,unit07
+489213650,1,unit10
+985151810,1,unit14
+1344295804,1,unit15
+597736947,1,unit16
+709027875,1,unit19
+1246183781,1,unit21
+59087012,1,unit22
+1125331626,1,unit25
+
+#not selected: 15 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[4]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[5]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[6]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[7]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[8]: id=[unit12] pri=704390005 sec=1 [line 12]
+  ## not.sel[9]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[10]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[11]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[12]: id=[unit20] pri=907516388 sec=1 [line 20]
+  ## not.sel[13]: id=[unit23] pri=684129345 sec=1 [line 23]
+  ## not.sel[14]: id=[unit24] pri=607152452 sec=1 [line 24]
+
+## primary sum improves 8361120240->8540554449(remain: 180379760->945551)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8496827957(remain: 180379760->44672043)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8538609470(remain: 180379760->2890530)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8540213371(remain: 180379760->1286629)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+## add:
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## global optimum improves 8540554449->8541287729(margin: 945551->212271)
+
+# best combination, so far:
+#selection: 11 elements, total=8541287729, margin=212271 (0.00% of 8541500000)
+467516301,1,unit01
+474258246,1,unit02
+1153793216,1,unit06
+830732728,1,unit07
+484576723,1,unit08
+985151810,1,unit14
+1344295804,1,unit15
+709027875,1,unit19
+907516388,1,unit20
+59087012,1,unit22
+1125331626,1,unit25
+
+#not selected: 14 elements
+  ## not.sel[0]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[1]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[2]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[3]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[4]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[5]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[6]: id=[unit12] pri=704390005 sec=1 [line 12]
+  ## not.sel[7]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[8]: id=[unit16] pri=597736947 sec=1 [line 16]
+  ## not.sel[9]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[10]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[11]: id=[unit21] pri=1246183781 sec=1 [line 21]
+  ## not.sel[12]: id=[unit23] pri=684129345 sec=1 [line 23]
+  ## not.sel[13]: id=[unit24] pri=607152452 sec=1 [line 24]
+
+## primary sum improves 8361120240->8541287729(remain: 180379760->212271)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+## add:
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8493903006(remain: 180379760->47596994)
+## (swap is only local optimum)
+
 ## 1+5 swap: no improvement
 ## 1+6 swap: no improvement
 ## 1+7 swap: no improvement
+## 1+8 swap: no improvement
 ## 2+1 swap: no improvement
 ## remove:
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-## primary sum improves 8535937808->8537076962 (remain: 5562192->4423038)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+## primary sum improves 8361120240->8444368797(remain: 180379760->97131203)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit24] pri=709027875 sec=1 [line 24]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-## primary sum improves 8535937808->8536043376 (remain: 5562192->5456624)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+## primary sum improves 8361120240->8536759362(remain: 180379760->4740638)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit13] pri=685227972 sec=1 [line 13]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-## primary sum improves 8535937808->8538878824 (remain: 5562192->2621176)
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8539650289(remain: 180379760->1849711)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit13] pri=685227972 sec=1 [line 13]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-## primary sum improves 8535937808->8540192086 (remain: 5562192->1307914)
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+## primary sum improves 8361120240->8540974529(remain: 180379760->525471)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-## primary sum improves 8535937808->8541439619 (remain: 5562192->60381)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8534886969(remain: 180379760->6613031)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8539707832(remain: 180379760->1792168)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+## primary sum improves 8361120240->8539739045(remain: 180379760->1760955)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+## primary sum improves 8361120240->8540642017(remain: 180379760->857983)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+## primary sum improves 8361120240->8540907504(remain: 180379760->592496)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+## primary sum improves 8361120240->8396189841(remain: 180379760->145310159)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+## primary sum improves 8361120240->8488580406(remain: 180379760->52919594)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+## primary sum improves 8361120240->8517041996(remain: 180379760->24458004)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+## primary sum improves 8361120240->8539283010(remain: 180379760->2216990)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+## primary sum improves 8361120240->8539941539(remain: 180379760->1558461)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8540994753(remain: 180379760->505247)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## global optimum improves 8541287729->8541377523(margin: 212271->122477)
 
 # best combination, so far:
-#selection: 13 elements, total=8541439619, margin=60381 (0.00% of 8541500000)
-570619793,1,unit02
-762784911,1,unit03
-627329105,1,unit06
-720659926,1,unit07
-649770468,1,unit08
-710185464,1,unit09
-529097143,1,unit11
-685227972,1,unit13
-510178105,1,unit15
-467516301,1,unit16
-473710930,1,unit18
-709027875,1,unit24
-1125331626,1,unit26
+#selection: 11 elements, total=8541377523, margin=122477 (0.00% of 8541500000)
+1153793216,1,unit06
+830732728,1,unit07
+332818306,1,unit13
+985151810,1,unit14
+275022593,1,unit17
+368646748,1,unit18
+709027875,1,unit19
+907516388,1,unit20
+1246183781,1,unit21
+607152452,1,unit24
+1125331626,1,unit25
 
-#not selected: 13 elements
-  ## not.sel[0]: id=[unit01] pri=459509303 sec=1 [line 1]
-  ## not.sel[1]: id=[unit04] pri=181390317 sec=1 [line 4]
-  ## not.sel[2]: id=[unit05] pri=492204853 sec=1 [line 5]
-  ## not.sel[3]: id=[unit10] pri=456345033 sec=1 [line 10]
-  ## not.sel[4]: id=[unit12] pri=676751639 sec=1 [line 12]
-  ## not.sel[5]: id=[unit14] pri=509445950 sec=1 [line 14]
-  ## not.sel[6]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[7]: id=[unit19] pri=830732728 sec=1 [line 19]
-  ## not.sel[8]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[9]: id=[unit21] pri=500590923 sec=1 [line 21]
-  ## not.sel[10]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[11]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[12]: id=[unit25] pri=59087012 sec=1 [line 25]
+#not selected: 14 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[4]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[5]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[6]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[7]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[8]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[9]: id=[unit12] pri=704390005 sec=1 [line 12]
+  ## not.sel[10]: id=[unit15] pri=1344295804 sec=1 [line 15]
+  ## not.sel[11]: id=[unit16] pri=597736947 sec=1 [line 16]
+  ## not.sel[12]: id=[unit22] pri=59087012 sec=1 [line 22]
+  ## not.sel[13]: id=[unit23] pri=684129345 sec=1 [line 23]
+
+## primary sum improves 8361120240->8541377523(remain: 180379760->122477)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit08] pri=649770468 sec=1 [line 8]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8541467711 (remain: 5562192->32289)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## global optimum improves 8541377523->8541444765(margin: 122477->55235)
 
 # best combination, so far:
-#selection: 13 elements, total=8541467711, margin=32289 (0.00% of 8541500000)
-570619793,1,unit02
-762784911,1,unit03
-627329105,1,unit06
-720659926,1,unit07
-710185464,1,unit09
-456345033,1,unit10
-529097143,1,unit11
-676751639,1,unit12
-685227972,1,unit13
-467516301,1,unit16
-500590923,1,unit21
-709027875,1,unit24
-1125331626,1,unit26
+#selection: 11 elements, total=8541444765, margin=55235 (0.00% of 8541500000)
+1153793216,1,unit06
+830732728,1,unit07
+500590923,1,unit09
+704390005,1,unit12
+332818306,1,unit13
+985151810,1,unit14
+1344295804,1,unit15
+597736947,1,unit16
+907516388,1,unit20
+59087012,1,unit22
+1125331626,1,unit25
 
-#not selected: 13 elements
-  ## not.sel[0]: id=[unit01] pri=459509303 sec=1 [line 1]
-  ## not.sel[1]: id=[unit04] pri=181390317 sec=1 [line 4]
-  ## not.sel[2]: id=[unit05] pri=492204853 sec=1 [line 5]
-  ## not.sel[3]: id=[unit08] pri=649770468 sec=1 [line 8]
-  ## not.sel[4]: id=[unit14] pri=509445950 sec=1 [line 14]
-  ## not.sel[5]: id=[unit15] pri=510178105 sec=1 [line 15]
-  ## not.sel[6]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[7]: id=[unit18] pri=473710930 sec=1 [line 18]
-  ## not.sel[8]: id=[unit19] pri=830732728 sec=1 [line 19]
-  ## not.sel[9]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[10]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[11]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[12]: id=[unit25] pri=59087012 sec=1 [line 25]
+#not selected: 14 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[4]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[5]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[6]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[7]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[8]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[9]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[10]: id=[unit19] pri=709027875 sec=1 [line 19]
+  ## not.sel[11]: id=[unit21] pri=1246183781 sec=1 [line 21]
+  ## not.sel[12]: id=[unit23] pri=684129345 sec=1 [line 23]
+  ## not.sel[13]: id=[unit24] pri=607152452 sec=1 [line 24]
+
+## primary sum improves 8361120240->8541444765(remain: 180379760->55235)
 
 ## remove:
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit24] pri=709027875 sec=1 [line 24]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
 ## add:
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-## primary sum improves 8535937808->8541497521 (remain: 5562192->2479)
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## global optimum improves 8541444765->8541498107(margin: 55235->1893)
 
 # best combination, so far:
-#selection: 13 elements, total=8541497521, margin=2479 (0.00% of 8541500000)
-570619793,1,unit02
-492204853,1,unit05
-627329105,1,unit06
-720659926,1,unit07
-649770468,1,unit08
-710185464,1,unit09
-676751639,1,unit12
-685227972,1,unit13
-467516301,1,unit16
-830732728,1,unit19
-484576723,1,unit20
-500590923,1,unit21
-1125331626,1,unit26
+#selection: 11 elements, total=8541498107, margin=1893 (0.00% of 8541500000)
+474258246,1,unit02
+470612842,1,unit04
+830732728,1,unit07
+500590923,1,unit09
+985151810,1,unit14
+1344295804,1,unit15
+597736947,1,unit16
+907516388,1,unit20
+1246183781,1,unit21
+59087012,1,unit22
+1125331626,1,unit25
 
-#not selected: 13 elements
-  ## not.sel[0]: id=[unit01] pri=459509303 sec=1 [line 1]
-  ## not.sel[1]: id=[unit03] pri=762784911 sec=1 [line 3]
-  ## not.sel[2]: id=[unit04] pri=181390317 sec=1 [line 4]
-  ## not.sel[3]: id=[unit10] pri=456345033 sec=1 [line 10]
-  ## not.sel[4]: id=[unit11] pri=529097143 sec=1 [line 11]
-  ## not.sel[5]: id=[unit14] pri=509445950 sec=1 [line 14]
-  ## not.sel[6]: id=[unit15] pri=510178105 sec=1 [line 15]
-  ## not.sel[7]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[8]: id=[unit18] pri=473710930 sec=1 [line 18]
-  ## not.sel[9]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[10]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[11]: id=[unit24] pri=709027875 sec=1 [line 24]
-  ## not.sel[12]: id=[unit25] pri=59087012 sec=1 [line 25]
+#not selected: 14 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[2]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[3]: id=[unit06] pri=1153793216 sec=1 [line 6]
+  ## not.sel[4]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[5]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[6]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[7]: id=[unit12] pri=704390005 sec=1 [line 12]
+  ## not.sel[8]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[9]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[10]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[11]: id=[unit19] pri=709027875 sec=1 [line 19]
+  ## not.sel[12]: id=[unit23] pri=684129345 sec=1 [line 23]
+  ## not.sel[13]: id=[unit24] pri=607152452 sec=1 [line 24]
 
-## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8540164799 (remain: 5562192->1335201)
+## primary sum improves 8361120240->8541498107(remain: 180379760->1893)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8540419265 (remain: 5562192->1080735)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8538318228(remain: 180379760->3181772)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-## primary sum improves 8535937808->8541091381 (remain: 5562192->408619)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8538638131(remain: 180379760->2861869)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
 ## add:
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-## primary sum improves 8535937808->8541239354 (remain: 5562192->260646)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8538808040(remain: 180379760->2691960)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
 ## add:
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8541349130 (remain: 5562192->150870)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8540340268(remain: 180379760->1159732)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541373352 (remain: 5562192->126648)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+## primary sum improves 8361120240->8541061688(remain: 180379760->438312)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit09] pri=710185464 sec=1 [line 9]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541491424 (remain: 5562192->8576)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8541274453(remain: 180379760->225547)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit24] pri=709027875 sec=1 [line 24]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
 ## add:
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541491743 (remain: 5562192->8257)
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8541367730(remain: 180379760->132270)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8539251153 (remain: 5562192->2248847)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541404593(remain: 180379760->95407)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
 ## add:
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8539982448 (remain: 5562192->1517552)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541447236(remain: 180379760->52764)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
 ## add:
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541331533 (remain: 5562192->168467)
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541458376(remain: 180379760->41624)
+## (swap is only local optimum)
 
-## 2+6 swap: no improvement
+## remove:
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+## add:
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541464585(remain: 180379760->35415)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8532929005(remain: 180379760->8570995)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8538468904(remain: 180379760->3031096)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8540192433(remain: 180379760->1307567)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541405867(remain: 180379760->94133)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+## add:
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541447590(remain: 180379760->52410)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+## add:
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8541479365(remain: 180379760->20635)
+## (swap is only local optimum)
+
 ## 2+7 swap: no improvement
+## 2+8 swap: no improvement
 ## 3+1 swap: no improvement
 ## 3+2 swap: no improvement
-## 3+3 swap: no improvement
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-## primary sum improves 8535937808->8540008297 (remain: 5562192->1491703)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+## primary sum improves 8361120240->8365218306(remain: 180379760->176281694)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-## primary sum improves 8535937808->8541471747 (remain: 5562192->28253)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+## primary sum improves 8361120240->8457608871(remain: 180379760->83891129)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-## primary sum improves 8535937808->8541476544 (remain: 5562192->23456)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+## primary sum improves 8361120240->8486070461(remain: 180379760->55429539)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit06] pri=627329105 sec=1 [line 6]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-## primary sum improves 8535937808->8541483968 (remain: 5562192->16032)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+## primary sum improves 8361120240->8504545424(remain: 180379760->36954576)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-## primary sum improves 8535937808->8539854663 (remain: 5562192->1645337)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+## primary sum improves 8361120240->8539857879(remain: 180379760->1642121)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8541197667 (remain: 5562192->302333)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8541331383(remain: 180379760->168617)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-## primary sum improves 8535937808->8541470453 (remain: 5562192->29547)
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+## primary sum improves 8361120240->8541441998(remain: 180379760->58002)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit09] pri=710185464 sec=1 [line 9]
-##  - id=[unit08] pri=649770468 sec=1 [line 8]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-## primary sum improves 8535937808->8541498422 (remain: 5562192->1578)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+## primary sum improves 8361120240->8429493394(remain: 180379760->112006606)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+## primary sum improves 8361120240->8457954984(remain: 180379760->83545016)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+## primary sum improves 8361120240->8491573271(remain: 180379760->49926729)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+## primary sum improves 8361120240->8511742402(remain: 180379760->29757598)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8539230612(remain: 180379760->2269388)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+## primary sum improves 8361120240->8539339295(remain: 180379760->2160705)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8539706889(remain: 180379760->1793111)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+## primary sum improves 8361120240->8541264591(remain: 180379760->235409)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+## primary sum improves 8361120240->8541412125(remain: 180379760->87875)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+## primary sum improves 8361120240->8541479596(remain: 180379760->20404)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## global optimum improves 8541498107->8541499128(margin: 1893->872)
 
 # best combination, so far:
-#selection: 14 elements, total=8541498422, margin=1578 (0.00% of 8541500000)
-459509303,1,unit01
-570619793,1,unit02
-762784911,1,unit03
-492204853,1,unit05
-627329105,1,unit06
-720659926,1,unit07
-529097143,1,unit11
-676751639,1,unit12
-685227972,1,unit13
-509445950,1,unit14
-467516301,1,unit16
-830732728,1,unit19
-500590923,1,unit21
-709027875,1,unit24
+#selection: 10 elements, total=8541499128, margin=872 (0.00% of 8541500000)
+470612842,1,unit04
+629877384,1,unit05
+1153793216,1,unit06
+497303081,1,unit11
+985151810,1,unit14
+1344295804,1,unit15
+597736947,1,unit16
+709027875,1,unit19
+907516388,1,unit20
+1246183781,1,unit21
 
-#not selected: 12 elements
-  ## not.sel[0]: id=[unit04] pri=181390317 sec=1 [line 4]
-  ## not.sel[1]: id=[unit08] pri=649770468 sec=1 [line 8]
-  ## not.sel[2]: id=[unit09] pri=710185464 sec=1 [line 9]
-  ## not.sel[3]: id=[unit10] pri=456345033 sec=1 [line 10]
-  ## not.sel[4]: id=[unit15] pri=510178105 sec=1 [line 15]
-  ## not.sel[5]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[6]: id=[unit18] pri=473710930 sec=1 [line 18]
-  ## not.sel[7]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[8]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[9]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[10]: id=[unit25] pri=59087012 sec=1 [line 25]
-  ## not.sel[11]: id=[unit26] pri=1125331626 sec=1 [line 26]
+#not selected: 15 elements
+  ## not.sel[0]: id=[unit01] pri=467516301 sec=1 [line 1]
+  ## not.sel[1]: id=[unit02] pri=474258246 sec=1 [line 2]
+  ## not.sel[2]: id=[unit03] pri=473710930 sec=1 [line 3]
+  ## not.sel[3]: id=[unit07] pri=830732728 sec=1 [line 7]
+  ## not.sel[4]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[5]: id=[unit09] pri=500590923 sec=1 [line 9]
+  ## not.sel[6]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[7]: id=[unit12] pri=704390005 sec=1 [line 12]
+  ## not.sel[8]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[9]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[10]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[11]: id=[unit22] pri=59087012 sec=1 [line 22]
+  ## not.sel[12]: id=[unit23] pri=684129345 sec=1 [line 23]
+  ## not.sel[13]: id=[unit24] pri=607152452 sec=1 [line 24]
+  ## not.sel[14]: id=[unit25] pri=1125331626 sec=1 [line 25]
 
-## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8539995834 (remain: 5562192->1504166)
+## primary sum improves 8361120240->8541499128(remain: 180379760->872)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541039199 (remain: 5562192->460801)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8505563893(remain: 180379760->35936107)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541385365 (remain: 5562192->114635)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8537026929(remain: 180379760->4473071)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit09] pri=710185464 sec=1 [line 9]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541393377 (remain: 5562192->106623)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8540634674(remain: 180379760->865326)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541399497 (remain: 5562192->100503)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8540714934(remain: 180379760->785066)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit08] pri=649770468 sec=1 [line 8]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541408372 (remain: 5562192->91628)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8541379667(remain: 180379760->120333)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit08] pri=649770468 sec=1 [line 8]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541471905 (remain: 5562192->28095)
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+## primary sum improves 8361120240->8541401234(remain: 180379760->98766)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541495141 (remain: 5562192->4859)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541462379(remain: 180379760->37621)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
-##  - id=[unit08] pri=649770468 sec=1 [line 8]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541496150 (remain: 5562192->3850)
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541469630(remain: 180379760->30370)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
-##  - id=[unit06] pri=627329105 sec=1 [line 6]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541497800 (remain: 5562192->2200)
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541480687(remain: 180379760->19313)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8540054619 (remain: 5562192->1445381)
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541490892(remain: 180379760->9108)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8540785914 (remain: 5562192->714086)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+## primary sum improves 8361120240->8369186085(remain: 180379760->172313915)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541381222 (remain: 5562192->118778)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+## primary sum improves 8361120240->8509365901(remain: 180379760->32134099)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit24] pri=709027875 sec=1 [line 24]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541442033 (remain: 5562192->57967)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8531840808(remain: 180379760->9659192)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
 ## add:
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541462906 (remain: 5562192->37094)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+## primary sum improves 8361120240->8540306282(remain: 180379760->1193718)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit09] pri=710185464 sec=1 [line 9]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
 ## add:
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-##  + id=[unit25] pri=59087012 sec=1 [line 25]
-## primary sum improves 8535937808->8541468775 (remain: 5562192->31225)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+## primary sum improves 8361120240->8541209254(remain: 180379760->290746)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541376463(remain: 180379760->123537)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541462209(remain: 180379760->37791)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541498996(remain: 180379760->1004)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8483802913(remain: 180379760->57697087)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8515313222(remain: 180379760->26186778)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8540034313(remain: 180379760->1465687)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8540648595(remain: 180379760->851405)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8540968498(remain: 180379760->531502)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8541043031(remain: 180379760->456969)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8541255796(remain: 180379760->244204)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8541352825(remain: 180379760->147175)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541442773(remain: 180379760->57227)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541484541(remain: 180379760->15459)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541490168(remain: 180379760->9832)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541495389(remain: 180379760->4611)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+## add:
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541498323(remain: 180379760->1677)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541099912(remain: 180379760->400088)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541141404(remain: 180379760->358596)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541498966(remain: 180379760->1034)
+## (swap is only local optimum)
 
 ## 4+1 swap: no improvement
 ## 4+2 swap: no improvement
 ## 4+3 swap: no improvement
-## 4+4 swap: no improvement
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-## primary sum improves 8535937808->8536932549 (remain: 5562192->4567451)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+## primary sum improves 8361120240->8402670001(remain: 180379760->138829999)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit08] pri=649770468 sec=1 [line 8]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-## primary sum improves 8535937808->8540868885 (remain: 5562192->631115)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+## primary sum improves 8361120240->8480305423(remain: 180379760->61194577)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit06] pri=627329105 sec=1 [line 6]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-## primary sum improves 8535937808->8541373362 (remain: 5562192->126638)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+## primary sum improves 8361120240->8365139019(remain: 180379760->176360981)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit09] pri=710185464 sec=1 [line 9]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-## primary sum improves 8535937808->8541479086 (remain: 5562192->20914)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+## primary sum improves 8361120240->8486843872(remain: 180379760->54656128)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-## primary sum improves 8535937808->8541485206 (remain: 5562192->14794)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+## primary sum improves 8361120240->8540829088(remain: 180379760->670912)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
-##  - id=[unit09] pri=710185464 sec=1 [line 9]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-## primary sum improves 8535937808->8541491532 (remain: 5562192->8468)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+## primary sum improves 8361120240->8540886464(remain: 180379760->613536)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-## primary sum improves 8535937808->8541497652 (remain: 5562192->2348)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8541465379(remain: 180379760->34621)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8539599367 (remain: 5562192->1900633)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+## primary sum improves 8361120240->8541478653(remain: 180379760->21347)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-## primary sum improves 8535937808->8539772434 (remain: 5562192->1727566)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+## primary sum improves 8361120240->8450278889(remain: 180379760->91221111)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit02] pri=570619793 sec=1 [line 2]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-## primary sum improves 8535937808->8541498380 (remain: 5562192->1620)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+## primary sum improves 8361120240->8527914311(remain: 180379760->13585689)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit13] pri=685227972 sec=1 [line 13]
-##  - id=[unit12] pri=676751639 sec=1 [line 12]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-## primary sum improves 8535937808->8541499277 (remain: 5562192->723)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8540805605(remain: 180379760->694395)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8541438185(remain: 180379760->61815)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+## primary sum improves 8361120240->8541469398(remain: 180379760->30602)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+## primary sum improves 8361120240->8541472992(remain: 180379760->27008)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8541496887(remain: 180379760->3113)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## global optimum improves 8541499128->8541499368(margin: 872->632)
 
 # best combination, so far:
-#selection: 14 elements, total=8541499277, margin=723 (0.00% of 8541500000)
-570619793,1,unit02
-762784911,1,unit03
-492204853,1,unit05
-627329105,1,unit06
-720659926,1,unit07
-649770468,1,unit08
-710185464,1,unit09
-509445950,1,unit14
-510178105,1,unit15
-474258246,1,unit17
-473710930,1,unit18
-830732728,1,unit19
-500590923,1,unit21
-709027875,1,unit24
+#selection: 11 elements, total=8541499368, margin=632 (0.00% of 8541500000)
+467516301,1,unit01
+474258246,1,unit02
+473710930,1,unit03
+830732728,1,unit07
+500590923,1,unit09
+704390005,1,unit12
+985151810,1,unit14
+1344295804,1,unit15
+907516388,1,unit20
+1246183781,1,unit21
+607152452,1,unit24
 
-#not selected: 12 elements
-  ## not.sel[0]: id=[unit01] pri=459509303 sec=1 [line 1]
-  ## not.sel[1]: id=[unit04] pri=181390317 sec=1 [line 4]
-  ## not.sel[2]: id=[unit10] pri=456345033 sec=1 [line 10]
-  ## not.sel[3]: id=[unit11] pri=529097143 sec=1 [line 11]
-  ## not.sel[4]: id=[unit12] pri=676751639 sec=1 [line 12]
-  ## not.sel[5]: id=[unit13] pri=685227972 sec=1 [line 13]
-  ## not.sel[6]: id=[unit16] pri=467516301 sec=1 [line 16]
-  ## not.sel[7]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[8]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[9]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[10]: id=[unit25] pri=59087012 sec=1 [line 25]
-  ## not.sel[11]: id=[unit26] pri=1125331626 sec=1 [line 26]
+#not selected: 14 elements
+  ## not.sel[0]: id=[unit04] pri=470612842 sec=1 [line 4]
+  ## not.sel[1]: id=[unit05] pri=629877384 sec=1 [line 5]
+  ## not.sel[2]: id=[unit06] pri=1153793216 sec=1 [line 6]
+  ## not.sel[3]: id=[unit08] pri=484576723 sec=1 [line 8]
+  ## not.sel[4]: id=[unit10] pri=489213650 sec=1 [line 10]
+  ## not.sel[5]: id=[unit11] pri=497303081 sec=1 [line 11]
+  ## not.sel[6]: id=[unit13] pri=332818306 sec=1 [line 13]
+  ## not.sel[7]: id=[unit16] pri=597736947 sec=1 [line 16]
+  ## not.sel[8]: id=[unit17] pri=275022593 sec=1 [line 17]
+  ## not.sel[9]: id=[unit18] pri=368646748 sec=1 [line 18]
+  ## not.sel[10]: id=[unit19] pri=709027875 sec=1 [line 19]
+  ## not.sel[11]: id=[unit22] pri=59087012 sec=1 [line 22]
+  ## not.sel[12]: id=[unit23] pri=684129345 sec=1 [line 23]
+  ## not.sel[13]: id=[unit25] pri=1125331626 sec=1 [line 25]
 
-## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
-## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8537785727 (remain: 5562192->3714273)
+## primary sum improves 8361120240->8541499368(remain: 180379760->632)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8538677674 (remain: 5562192->2822326)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8540645876(remain: 180379760->854124)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-## primary sum improves 8535937808->8541076348 (remain: 5562192->423652)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8541320430(remain: 180379760->179570)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit07] pri=720659926 sec=1 [line 7]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit21] pri=500590923 sec=1 [line 21]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-## primary sum improves 8535937808->8541394347 (remain: 5562192->105653)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8541446637(remain: 180379760->53363)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit03] pri=762784911 sec=1 [line 3]
-##  - id=[unit09] pri=710185464 sec=1 [line 9]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit22] pri=489213650 sec=1 [line 22]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8541497361 (remain: 5562192->2639)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8541455548(remain: 180379760->44452)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit24] pri=709027875 sec=1 [line 24]
-##  - id=[unit13] pri=685227972 sec=1 [line 13]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit23] pri=497303081 sec=1 [line 23]
-##  + id=[unit20] pri=484576723 sec=1 [line 20]
-##  + id=[unit17] pri=474258246 sec=1 [line 17]
-##  + id=[unit18] pri=473710930 sec=1 [line 18]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-## primary sum improves 8535937808->8541499028 (remain: 5562192->972)
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541494052(remain: 180379760->5948)
+## (swap is only local optimum)
 
 ## remove:
-##  - id=[unit26] pri=1125331626 sec=1 [line 26]
-##  - id=[unit19] pri=830732728 sec=1 [line 19]
-##  - id=[unit24] pri=709027875 sec=1 [line 24]
-##  - id=[unit16] pri=467516301 sec=1 [line 16]
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
 ## add:
-##  + id=[unit11] pri=529097143 sec=1 [line 11]
-##  + id=[unit15] pri=510178105 sec=1 [line 15]
-##  + id=[unit14] pri=509445950 sec=1 [line 14]
-##  + id=[unit05] pri=492204853 sec=1 [line 5]
-##  + id=[unit01] pri=459509303 sec=1 [line 1]
-##  + id=[unit10] pri=456345033 sec=1 [line 10]
-##  + id=[unit04] pri=181390317 sec=1 [line 4]
-## primary sum improves 8535937808->8541499982 (remain: 5562192->18)
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541494159(remain: 180379760->5841)
+## (swap is only local optimum)
 
-# best combination, so far:
-#selection: 15 elements, total=8541499982, margin=18 (0.00% of 8541500000)
-459509303,1,unit01
-570619793,1,unit02
-762784911,1,unit03
-181390317,1,unit04
-492204853,1,unit05
-627329105,1,unit06
-720659926,1,unit07
-649770468,1,unit08
-710185464,1,unit09
-456345033,1,unit10
-529097143,1,unit11
-676751639,1,unit12
-685227972,1,unit13
-509445950,1,unit14
-510178105,1,unit15
+## remove:
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541497967(remain: 180379760->2033)
+## (swap is only local optimum)
 
-#not selected: 11 elements
-  ## not.sel[0]: id=[unit16] pri=467516301 sec=1 [line 16]
-  ## not.sel[1]: id=[unit17] pri=474258246 sec=1 [line 17]
-  ## not.sel[2]: id=[unit18] pri=473710930 sec=1 [line 18]
-  ## not.sel[3]: id=[unit19] pri=830732728 sec=1 [line 19]
-  ## not.sel[4]: id=[unit20] pri=484576723 sec=1 [line 20]
-  ## not.sel[5]: id=[unit21] pri=500590923 sec=1 [line 21]
-  ## not.sel[6]: id=[unit22] pri=489213650 sec=1 [line 22]
-  ## not.sel[7]: id=[unit23] pri=497303081 sec=1 [line 23]
-  ## not.sel[8]: id=[unit24] pri=709027875 sec=1 [line 24]
-  ## not.sel[9]: id=[unit25] pri=59087012 sec=1 [line 25]
-  ## not.sel[10]: id=[unit26] pri=1125331626 sec=1 [line 26]
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+## primary sum improves 8361120240->8419724838(remain: 180379760->121775162)
+## (swap is only local optimum)
 
-...
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+## primary sum improves 8361120240->8496508498(remain: 180379760->44991502)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8497646449(remain: 180379760->43853551)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+## primary sum improves 8361120240->8505053127(remain: 180379760->36446873)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8537812454(remain: 180379760->3687546)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8539161539(remain: 180379760->2338461)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8539936146(remain: 180379760->1563854)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8540921163(remain: 180379760->578837)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541105905(remain: 180379760->394095)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541150053(remain: 180379760->349947)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541333196(remain: 180379760->166804)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541407821(remain: 180379760->92179)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541443811(remain: 180379760->56189)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541493567(remain: 180379760->6433)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541497436(remain: 180379760->2564)
+## (swap is only local optimum)
+
+## 5+1 swap: no improvement
+## 5+2 swap: no improvement
+## 5+3 swap: no improvement
+## 5+4 swap: no improvement
+## 5+5 swap: no improvement
+## remove:
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+## primary sum improves 8361120240->8424840077(remain: 180379760->116659923)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+## primary sum improves 8361120240->8453301667(remain: 180379760->88198333)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8461537308(remain: 180379760->79962692)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+## primary sum improves 8361120240->8493047617(remain: 180379760->48452383)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+## primary sum improves 8361120240->8392973177(remain: 180379760->148526823)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+## primary sum improves 8361120240->8408580082(remain: 180379760->132919918)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+## primary sum improves 8361120240->8485363742(remain: 180379760->56136258)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+## primary sum improves 8361120240->8513825332(remain: 180379760->27674668)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8539153976(remain: 180379760->2346024)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+## primary sum improves 8361120240->8540844924(remain: 180379760->655076)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+## primary sum improves 8361120240->8541052008(remain: 180379760->447992)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+## primary sum improves 8361120240->8541380509(remain: 180379760->119491)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8541455633(remain: 180379760->44367)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8541481215(remain: 180379760->18785)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+## primary sum improves 8361120240->8541494489(remain: 180379760->5511)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541497996(remain: 180379760->2004)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+## primary sum improves 8361120240->8437421486(remain: 180379760->104078514)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+## primary sum improves 8361120240->8540525531(remain: 180379760->974469)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541394320(remain: 180379760->105680)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+## primary sum improves 8361120240->8541450737(remain: 180379760->49263)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8541480467(remain: 180379760->19533)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit15] pri=1344295804 sec=1 [line 15]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit01] pri=467516301 sec=1 [line 1]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541487906(remain: 180379760->12094)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit02] pri=474258246 sec=1 [line 2]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit13] pri=332818306 sec=1 [line 13]
+## primary sum improves 8361120240->8541491779(remain: 180379760->8221)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+##  + id=[unit08] pri=484576723 sec=1 [line 8]
+##  + id=[unit03] pri=473710930 sec=1 [line 3]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+## primary sum improves 8361120240->8541495763(remain: 180379760->4237)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit21] pri=1246183781 sec=1 [line 21]
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit04] pri=470612842 sec=1 [line 4]
+##  + id=[unit18] pri=368646748 sec=1 [line 18]
+##  + id=[unit17] pri=275022593 sec=1 [line 17]
+## primary sum improves 8361120240->8541499270(remain: 180379760->730)
+## (swap is only local optimum)
+
+## 6+1 swap: no improvement
+## 6+2 swap: no improvement
+## 6+3 swap: no improvement
+## 6+4 swap: no improvement
+## 6+5 swap: no improvement
+## 6+6 swap: no improvement
+## 6+7 swap: no improvement
+## remove:
+##  - id=[unit06] pri=1153793216 sec=1 [line 6]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+## primary sum improves 8361120240->8426204998(remain: 180379760->115295002)
+## (swap is only local optimum)
+
+## remove:
+##  - id=[unit25] pri=1125331626 sec=1 [line 25]
+##  - id=[unit14] pri=985151810 sec=1 [line 14]
+##  - id=[unit20] pri=907516388 sec=1 [line 20]
+##  - id=[unit07] pri=830732728 sec=1 [line 7]
+##  - id=[unit19] pri=709027875 sec=1 [line 19]
+##  - id=[unit22] pri=59087012 sec=1 [line 22]
+## add:
+##  + id=[unit12] pri=704390005 sec=1 [line 12]
+##  + id=[unit23] pri=684129345 sec=1 [line 23]
+##  + id=[unit05] pri=629877384 sec=1 [line 5]
+##  + id=[unit24] pri=607152452 sec=1 [line 24]
+##  + id=[unit16] pri=597736947 sec=1 [line 16]
+##  + id=[unit09] pri=500590923 sec=1 [line 9]
+##  + id=[unit11] pri=497303081 sec=1 [line 11]
+##  + id=[unit10] pri=489213650 sec=1 [line 10]
+## primary sum improves 8361120240->8454666588(remain: 180379760->86833412)
+## (swap is only local optimum)
+
+## 7+1 swap: no improvement
+## 7+2 swap: no improvement
+## 7+3 swap: no improvement
+## 7+4 swap: no improvement
+## 7+5 swap: no improvement
+## 7+6 swap: no improvement
+## 7+7 swap: no improvement
+## 7+8 swap: no improvement
+## 8+1 swap: no improvement
+## 8+2 swap: no improvement
+## 8+3 swap: no improvement
+## 8+4 swap: no improvement
+## 8+5 swap: no improvement
+## 8+6 swap: no improvement
+## 8+7 swap: no improvement
+## 8+8 swap: no improvement
+
+final packing proposal (8+8 tuples):
+#selection: 11 elements, total=8541499368, margin=632 (0.00% of 8541500000)
+467516301,1,unit01
+474258246,1,unit02
+473710930,1,unit03
+830732728,1,unit07
+500590923,1,unit09
+704390005,1,unit12
+985151810,1,unit14
+1344295804,1,unit15
+907516388,1,unit20
+1246183781,1,unit21
+607152452,1,unit24
+
+non-selected items:
+#selection: 14 elements, total=7877177348
+470612842,1,unit04
+629877384,1,unit05
+1153793216,1,unit06
+484576723,1,unit08
+489213650,1,unit10
+497303081,1,unit11
+332818306,1,unit13
+597736947,1,unit16
+275022593,1,unit17
+368646748,1,unit18
+709027875,1,unit19
+59087012,1,unit22
+684129345,1,unit23
+1125331626,1,unit25
 
