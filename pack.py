@@ -95,6 +95,19 @@ tFORMATS = [ 'csv', 'plain', ]
 
 
 ##--------------------------------------
+## 'struct' storing the best solution we have seen so far
+## passed around as reference through swap cycle
+##
+## negative or None sum stands for 'not yet initialized'
+##
+vSOLUTION = {
+	'sum':        -1,
+	'selection':  [],
+	'nselection': [],
+}
+
+
+##--------------------------------------
 def terminate(msg):
 	sys.stderr.write(msg +'\n')
 	sys.exit(-1)
@@ -472,8 +485,8 @@ def add_and_remove(sel, nsel, add_idxs, rm_idxs, curr=0, prev=0, log=True):
 ##            updated primary sum, respectively, if a selection improves
 ##            the current selection
 ##
-## 'all_best', when not None, is the global optimum so far
-## log any state which exceeds that
+## 'all_best', when not None, is the global optimum so far, in a 'vSOLUTION'
+## styled struct (which is passed by reference)
 ##
 ## since combinations are evaluated in cross-product, cache any sum(...)
 ## evaluated over non/selected tuples. quality change is difference
@@ -483,6 +496,7 @@ def add_and_remove(sel, nsel, add_idxs, rm_idxs, curr=0, prev=0, log=True):
 ## still remains under element-count limit
 ##
 def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None):
+
 	if (scount < 1) or (nscount < 1):
 		raise ValueError("invalid selection-swap size")
 
@@ -538,6 +552,7 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None):
 			itertools.combinations(nsidx, nscount)):
 
 		skey, nskey = tuple2idxstring(st), "n:" +tuple2idxstring(nst)
+		new_best    = None
 
 		assert(skey in sums)              ## MUST have been saved above
 		assert(nskey in sums)
@@ -556,6 +571,7 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None):
 
 		if (sum1updated > MAX1):
 			continue      ## swap increases primary sum above limit
+
 		if MAX2 and (sum2updated > MAX2):
 			continue    ## swap increases secondary sum above limit
 	
@@ -574,32 +590,52 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None):
 		print("## add:")
 		for nsi in nst:
 			print('##  + ' +elem2str(nsel[nsi]))
-		print("## primary sum improves {}->{} "
-		      .format(sum1, best_sum1), end='')
 
-		print("(remain: {}->{})".format(MAX1-sum1, MAX1-best_sum1))
-		print(flush=True)
+		nbcomment = ''
+		if (all_best != None):
+			prevbest = all_best[ 'sum' ]
+			if (best_sum1 > prevbest):
+				new_best = best_sum1
+
+				debugmsg(f"## global optimum improves "   +
+				         f"{all_best['sum']}->{new_best}" +
+				         f"(margin: { MAX1 -prevbest }->" +
+				         f"{ MAX1 -new_best })")
+			else:
+				nbcomment = ' (swap is only local optimum)'
 
 				## if this is the global optimum, log it
 				## redundant, but it ensures the best choice
-				## is somewhere visible in log
+				## is somewhere visible in log even during
+				## iterations
 				##
-				## work on temp non/select-array copies,
-				## to prevent updating original array
+				## new_best SHOULD be non-None only if all_best
+				## is a struct ref, not None
+				## please do not comment on this redundancy
 				##
-		if (all_best != None) and (best_sum1 > all_best):
+		if (new_best != None) and all_best:
 			sbest, nsbest = add_and_remove(sel, nsel, swap_add,
 			                               swap_del, log=False)
 
 			report(sbest, nsbest, msg='# best combination, so far:')
-			all_best = best_sum1
+			all_best[ 'sum'        ] = new_best
+			all_best[ 'selection'  ] = sbest
+			all_best[ 'nselection' ] = nsbest
+
+		print(f"## primary sum improves {sum1}->" +
+		      f"{best_sum1}", end='')
+
+		print("(remain: {}->{})".format(MAX1 - sum1, MAX1 - best_sum1))
+		if nbcomment != '':
+			print('##' +nbcomment)
+		print(flush=True)
 
 
 			## pathological case: terminate: no overhead at all
 		if (MAX1 == best_sum1):
 			break
 
-	return swap_add, swap_del, best_sum1, all_best
+	return swap_add, swap_del, best_sum1
 
 
 ##--------------------------------------
@@ -627,22 +663,23 @@ def over_pct_threshold(selected):
 ##         0     if no improvement, but we MAY improve when called with
 ##               the same input (such as: timing out in annealing due to
 ##               resource constraints)
+## ...in first parameter; updates and passes back all_best if non-None
 ##
 ## 'sel' and 'nsel' are internal-format arrays, of current selected
 ## and non-selected entries, respectively
 ##
 def klfm_swap(sel, nsel, max_tuple_n, all_best=None):
 	if not sel or not nsel:
-		return None
+		return None, None, None
 
-	sum1 = sum(e[0] for e in sel)                         ## start position
+	sum1 = sum(e[0] for e in sel)                            ## start total
 
-		## find the best swap possibility from 1..N, 1..N-element
-		## combinations from non/selected sets
+			## find best swap possibility from 1..N, 1..N-element
+			## combinations from non/selected sets
 
-		## all_best is global optimum
-		## best     is best for current swap
-		##
+			## all_best is global optimum
+			## best     is for current round of swaps
+			##
 	best, add, rm = None, None, None
 
 	for scount, nscount in itertools.product(range(1, max_tuple_n +1),
@@ -651,8 +688,8 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None):
 		if MAX_ELEMS and ((len(sel) -scount +nscount) > MAX_ELEMS):
 			continue                 ## stay below elem-count limit
 
-		s1, s2, nsum, all_best = klfm_swap_one(sel, nsel, scount,
-		                                       nscount, all_best)
+		s1, s2, nsum = klfm_swap_one(sel, nsel, scount,
+		                             nscount, all_best)
 
 		if (not s1) or (not s2) or (not nsum):
 			print('## {}+{} swap: no improvement'
@@ -662,6 +699,10 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None):
 		if best and (nsum <= best):
 			continue           ## not better than prev. improvement
 
+		if all_best and (nsum <= all_best[ 'sum' ]):
+				## TODO: log improvement but not global
+			continue
+
 		best, add, rm = nsum, s1, s2
 
 			## pathological case: terminate: no overhead at all
@@ -669,9 +710,12 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None):
 			break
 
 	if not best:
-		return None                            ## no improvement
+		return None, None, None                       ## no improvement
 
 	sel, nsel = add_and_remove(sel, nsel, add, rm)
+
+	if all_best != None:
+		return all_best -sum1, all_best
 
 	return best -sum1, all_best
 
@@ -696,7 +740,7 @@ if __name__ == '__main__':
 
 	if not 'MAX1' in os.environ:
 		terminate("need MAX1 [optimization-target] definition")
-	##
+
 	MAX1 = str2num(os.getenv('MAX1'))
 	if (MAX1 == None) or (MAX1 <= 0):
 		terminate(f"invalid MAX1 definition [{MAX1}]")
@@ -718,6 +762,7 @@ if __name__ == '__main__':
 		terminate(f"PCT value out of range [{PCT}]")
 	elif (PCT == 0):
 		PCT = None
+
 	if PCT != None:
 		PCT = int((float(MAX1) * (100 - PCT)) / 100.0)
 
@@ -725,6 +770,7 @@ if __name__ == '__main__':
 	if (MAX_ELEMS == None) and ('MAX_ELEMS' in os.environ):
 		terminate("invalid MAX_ELEMS definition [{}]"
 		          .format(os.getenv('MAX_ELEMS')))
+
 	elif MAX_ELEMS and (MAX_ELEMS < 0):
 		terminate("MAX_ELEMS def out of range [{}]".format(MAX_ELEMS))
 
@@ -738,19 +784,24 @@ if __name__ == '__main__':
 
 	report(sel, nsel, msg='best-fit decreasing raw output:')
 
-	impr, all_best, round = True, sum(e[0] for e in sel), 0
+	impr, round = True, 0
+	vSOLUTION[ 'sum'        ] = 0
+	vSOLUTION[ 'selection'  ] = []
+	vSOLUTION[ 'nselection' ] = []
 
 	while impr:
 		if over_pct_threshold(sel):
 			break
 
-		impr, all_best = klfm_swap(sel, nsel, MAX_TUPLE_N, all_best)
-		round = round+1
+		plus, minus, impr = klfm_swap(sel, nsel, MAX_TUPLE_N, vSOLUTION)
+		round += 1
 
 		if impr and (impr > 0):
 			report(sel, nsel, msg=f'KLFM improvement, r {round}')
 			if over_pct_threshold(sel):
 				break
+
+	sel, nsel = vSOLUTION[ 'selection' ], vSOLUTION[ 'nselection' ]
 
 	print()
 	report(sel, None, msg=f'final packing proposal ({MAX_TUPLE_N}' +
