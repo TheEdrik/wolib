@@ -435,11 +435,11 @@ if __name__ == '__main__':
 	for b in range(4):                              ## construct test batch
 		o = list(order_random(s2freq))
 		dump_order(o, f'ORDER.RAW[{b}]')
-		orders.append(o)
+		orders.append(order2merge(o))
 
 		dump_order(o, f'ORDER[{b}]')
 
-		batch = order2batch(batch, o)
+		batch = order2merge(order2batch(batch, o))
 
 		dump_order(batch, f'BATCH.RAW[{b}]')
 
@@ -449,7 +449,7 @@ if __name__ == '__main__':
 	bcost  = order2cost(batch, deltas, msg='BATCH')
 	print('ROUTE.BATCH='+ (','.join((f'{ r[0] }(+{ r[1] })')
 				       for r in bcost[1])))
-	print('')
+	print('##')
 
 	ocosts = []
 	for o in orders:
@@ -457,7 +457,7 @@ if __name__ == '__main__':
 		print(f'ROUTE[{ len(ocosts) -1 }]='   +
 		      (','.join((f'{ r[0] }(+{ r[1] })')
 				for r in ocosts[-1][1])))
-		print('')
+		print('##')
 
 	for b in enumerate(o[0] for o in ocosts):
 		print(f"COST.ORDER[{ b[0] }]={ b[1] }")
@@ -467,4 +467,45 @@ if __name__ == '__main__':
 	print(f"COST.NOBATCH={ nonb }")
 	print(f"COST.BATCH={ bcost[0] }")
 	print(f"COST.BATCH.DELTA={ bcost[0] -nonb }")
+
+		## map batch instructions back to orders
+		## show batch-processing order and how it must be order-placed
+		##
+	for sku in enumerate(s[0] for s in bcost[1]):
+		stock = list(b  for b in batch  if (b[0] == sku[1]))
+		if stock == []:
+			ValueError(f'SKU {sku} not found in batch')
+		if len(stock) >1:
+			ValueError('batch has not been deduplicated')
+
+		s, count = sku[1], stock[0][1]
+		if (count < 1):
+			ValueError(f'SKU {s} in batch lacks required.count')
+		print(f'BATCH[{ sku[0] }]={ s } x{ count }')
+
+			## distribute to orders
+		distr = []
+
+		for o in enumerate(orders):
+			need = list(n  for n in o[1]  if (n[0] == s))
+			if need == []:
+				continue        ## batch does not need this SKU
+			if len(need) >1:
+				ValueError(f'order {o[0]} has not been ' +
+				           'deduplicated')
+			need = need[0]          ## [SKU (redundant), needed#]
+			if (count < need[1]):
+				ValueError(f"SKU {s}'s are under-ordered")
+
+			distr.append([o[0], need[1]])
+			count -= need[1]
+					## do not early-terminate
+					## ensure no remaining order
+					## asks for >0 SKUs
+
+		if count > 0:
+			ValueError(f"not all SKU {s}'s requested are "
+			            "accounted for")
+		print(f'BATCH[{ sku[0] }][{ s }]='
+		      +(",".join(f'ORD.{ord} x{n}'  for ord, n in distr)))
 
