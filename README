@@ -1,4 +1,5 @@
 Warehouse optimization routines
 
-pack  -- bin-packing heuristics skeleton
+pack       -- bin-packing heuristics skeleton
+batchpack  -- evaluate routing strategies with elevator algorithm
 
