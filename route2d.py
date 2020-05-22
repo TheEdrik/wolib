@@ -61,7 +61,7 @@ def dumppath(p):
 
 
 ##--------------------------------------
-## returns 2x floats normalized to [0 .. 2^N]
+## returns 2x floats normalized to [0 .. 2^N], plus curve-distance(x,y)
 ##
 ## TODO: check square table during reading
 ##
@@ -71,6 +71,79 @@ def xy2tablexy(x, y, table):
 	xi, yi = x * len(table), y * len(table)
 
 	return xi, yi, table[ round(xi) ][ round(yi) ]
+
+
+##--------------------------------------
+def xy2dist(xy1, xy2):
+	return math.sqrt((xy1[0] - xy2[0])**2 + (xy1[1] - xy2[1])**2)
+
+
+##--------------------------------------
+## any array-of-tuples input with (x, y...) start is acceptable
+## route is not closed: excludes loop-completing edge
+##
+def route2dist(xys):
+	return sum(xy2dist(xys[i-1], xys[i])  for i in range(1, len(xys)))
+
+
+##--------------------------------------
+## tolerates, silently ignoring negative indexes
+##
+def idx2bitmask(arr):
+	return sum((1 << v)  for v in arr  if (v >= 0))
+
+
+##--------------------------------------
+## find the swap reducing total distance the most
+##
+## returns 2x index    elements to swap
+##         None, None  no improvement
+##
+## 'swaps' stores [index1, index2, bitmask(all affected indexes)]
+## we can hypothetically swap all length-reducaing candidates which do not
+## overlap (therefore the bitmasks)
+##
+def swap1(xys):
+	best1, best2, dist = None, None, route2dist(xys)
+	swaps, dist0 = [], dist
+
+	for i in range(len(xys) -1):
+		for j in range(i, len(xys)):
+			xys[i], xys[j] = xys[j], xys[i]
+			d = route2dist(xys)
+
+			if (d < dist):
+				print(f"# {i},{j} {dist:.6f}->{d:.6f}")
+				sys.stdout.flush()
+
+				best1, best2, dist = i, j, d
+				swaps.append([i, j])
+				swaps[-1].append(idx2bitmask([i-1, i, i+1,
+				                              j-1, j, j+1]))
+			xys[i], xys[j] = xys[j], xys[i]
+
+		## swaps[-1] is the current-best pair
+		## check if any preceding swap pairs might be simultaneously
+		## applied (their bitmasks do not overlap)
+		##
+		## need not be optimal here: leaving any un-swapped here will
+		## still get considered in the next iteration.  therefore,
+		## simply scanning backwards and collating all bitmasks
+		## ('swapbm') without further filtering, is sufficient
+
+	swapbm = swaps[-1][2]
+	for x, y, bm in swaps[:-1]:
+		if (swapbm & bm):
+			continue
+		swapbm |= bm
+		print(f"## SWAP? +{x} {y}")
+
+	assert(dist <= dist0)
+			## ...in case we messed up loop+replacement above
+
+	print(f'## DIST= {dist0}->{dist}')
+
+	return best1, best2
 
 
 ##----------------------------------------------------------------------------
@@ -85,13 +158,34 @@ if __name__ == '__main__':
 	                  xy2tablexy(x, y, xy2path.tTABLE)[2],]
 	           for x,y in xys)
 
-	print("# initial=")
+	print("# INITIAL=")
 	for p in xys:
 		print(f'# {p[2]},{p[3]}')
 	print()
 
-	print("sorted=")
-	for p in sorted(xys, key=operator.itemgetter(4)):
+			## initial plan: assign on curve
+	xys = list(sorted(xys, key=operator.itemgetter(4)))
+
+	round, dist0 = 0, route2dist(xys)
+	dist = dist0
+
+	print(f"# SORTED.ROUND={round}")
+	print(f"# DIST={ 100.0* dist / dist0 :.02f}%")
+	##
+	for p in xys:
 		print(f'{p[2]},{p[3]}')
 	print()
+
+	while True:
+		round += 1
+		i, j = swap1(xys)
+		if i == None:
+			break
+		xys[i], xys[j] = xys[j], xys[i]
+		for p in xys:
+			print(f'{p[2]},{p[3]}')
+		print(f"##SWAP.ROUND={round}")
+		print(f"##SWAP {i},{j}")
+		print()
+		sys.stdout.flush()
 
