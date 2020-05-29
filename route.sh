@@ -18,16 +18,16 @@ N=$( pars --count $@ )
 echo $N total frames incl. starting one
 
 ##--------------------------------------
-## +10% margin on plot
+## +2% margin around plot
 ##
-echo "#PLOT set xrange [0:$(( ( $RANGEMAX *110 + 99 ) / 100 ))]"
-echo "#PLOT set yrange [0:$(( ( $RANGEMAX *110 + 99 ) / 100 ))]"
+echo "#PLOT set xrange [0:$(( ( $RANGEMAX *102 + 99 ) / 100 ))]"
+echo "#PLOT set yrange [0:$(( ( $RANGEMAX *102 + 99 ) / 100 ))]"
 
 echo "#PLOT # bright red points+lines"
 echo "#PLOT set style line 1 lc rgb '#d00000' lw 2 ps 1 pt 7"
 
 echo "#PLOT # faint grey for grid"
-echo "#PLOT set style line 2 lc rgb '#808080' lw 1 ps 1 pt 0"
+echo "#PLOT set style line 2 lc rgb '#d0d0d0' lw 1 ps 1 pt 0"
 
 
 ##--------------------------------------
