@@ -94,17 +94,18 @@ def idx2bitmask(arr):
 
 
 ##--------------------------------------
-## find the swap reducing total distance the most
+## find swaps which may be performed simultaneously and reduce total
+## route length the most
 ##
-## returns 2x index    elements to swap
-##         None, None  no improvement
+## returns list of index pairs to swap
+##         None  no improvement
 ##
 ## 'swaps' stores [index1, index2, bitmask(all affected indexes)]
 ## we can hypothetically swap all length-reducaing candidates which do not
 ## overlap (therefore the bitmasks)
 ##
 def swap1(xys):
-	best1, best2, dist = None, None, route2dist(xys)
+	dist = route2dist(xys)
 	swaps, dist0 = [], dist
 
 	for i in range(len(xys) -1):
@@ -116,10 +117,12 @@ def swap1(xys):
 				print(f"# {i},{j} {dist:.6f}->{d:.6f}")
 				sys.stdout.flush()
 
-				best1, best2, dist = i, j, d
-				swaps.append([i, j])
-				swaps[-1].append(idx2bitmask([i-1, i, i+1,
-				                              j-1, j, j+1]))
+				swaps.append([i, j,
+				              idx2bitmask([i-1, i, i+1,
+				                           j-1, j, j+1]),
+				              dist -d])
+				dist = d
+
 			xys[i], xys[j] = xys[j], xys[i]
 
 		## swaps[-1] is the current-best pair
@@ -131,19 +134,26 @@ def swap1(xys):
 		## simply scanning backwards and collating all bitmasks
 		## ('swapbm') without further filtering, is sufficient
 
-	swapbm = swaps[-1][2]
-	for x, y, bm in swaps[:-1]:
+	if swaps == []:
+		return None
+
+	pairs, swapbm = [ [swaps[-1][0], swaps[-1][1]], ], swaps[-1][2]
+	for x, y, bm, diff in swaps[:-1]:
 		if (swapbm & bm):
 			continue
-		swapbm |= bm
-		print(f"## SWAP? +{x} {y}")
 
-	assert(dist <= dist0)
+		swapbm |= bm
+		pairs.append([x, y])
+		print(f"## SWAP+ {x} {y}")
+
+	if (dist > dist0):
+		raise InternalError("Swaps increasing overall cost")
 			## ...in case we messed up loop+replacement above
 
+		## TODO: need to re-eval after set of swaps
 	print(f'## DIST= {dist0}->{dist}')
 
-	return best1, best2
+	return pairs
 
 
 ##----------------------------------------------------------------------------
@@ -170,6 +180,7 @@ if __name__ == '__main__':
 	dist = dist0
 
 	print(f"# SORTED.ROUND={round}")
+	print(f"# DIST0={ dist }")
 	print(f"# DIST={ 100.0* dist / dist0 :.02f}%")
 	##
 	for p in xys:
@@ -178,14 +189,18 @@ if __name__ == '__main__':
 
 	while True:
 		round += 1
-		i, j = swap1(xys)
-		if i == None:
+		swaps = swap1(xys)
+		if swaps == None:
 			break
-		xys[i], xys[j] = xys[j], xys[i]
+
+		i, j = swaps[0][0], swaps[0][1]
+
+		print(f"##SWAP.ROUND={round}")
+		for i, j in swaps:
+			print(f"##SWAP {i},{j}")
+			xys[i], xys[j] = xys[j], xys[i]
 		for p in xys:
 			print(f'{p[2]},{p[3]}')
-		print(f"##SWAP.ROUND={round}")
-		print(f"##SWAP {i},{j}")
 		print()
 		sys.stdout.flush()
 
