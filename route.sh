@@ -4,16 +4,24 @@
 
 PATHFILE=path256x256.txt
 PATHFILE=path64x64x4.txt
+PATHFILE=path64x64.txt
+
+RANGEMAX=64
+PIXELS=1024
+DIR=r
+
+##--------------------------------------
+[ ! -d $DIR ] && mkdir $DIR
 
 ##--------------------------------------
 N=$( pars --count $@ )
 echo $N total frames incl. starting one
 
 ##--------------------------------------
-## assume 256x256 grid
+## +10% margin on plot
 ##
-echo "#PLOT set xrange [0:280]"
-echo "#PLOT set yrange [0:280]"
+echo "#PLOT set xrange [0:$(( ( $RANGEMAX *110 + 99 ) / 100 ))]"
+echo "#PLOT set yrange [0:$(( ( $RANGEMAX *110 + 99 ) / 100 ))]"
 
 echo "#PLOT # bright red points+lines"
 echo "#PLOT set style line 1 lc rgb '#d00000' lw 2 ps 1 pt 7"
@@ -23,7 +31,7 @@ echo "#PLOT set style line 2 lc rgb '#808080' lw 1 ps 1 pt 0"
 
 
 ##--------------------------------------
-echo "#PLOT set terminal png size 800,800"
+echo "#PLOT set terminal png size $PIXELS,$PIXELS"
 echo "#PLOT set output 'r/000000.png'"
 
 pars --cut 1 $@ | grep -v = | sed 'sQ^# *QQ;sQ,Q Qg' > r/000000
@@ -47,7 +55,7 @@ for i in $( enum 2 $N ) ; do
 	dist=${dist##*DIST=}
 ##	dist=$( printf "%.1f" $dist )
 
-	echo "#PLOT set terminal png size 800,800"
+	echo "#PLOT set terminal png size $PIXELS,$PIXELS"
 	echo "#PLOT set output 'r/${ID}.png'"
 
 		## TODO: show pct change
