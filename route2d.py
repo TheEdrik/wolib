@@ -74,13 +74,6 @@ def xy2tablexy(x, y, table):
 
 
 ##--------------------------------------
-## filter list to unique, valid indexes, preserving order
-##
-def idxs2table(maxn, iarr):
-	return list(i  for i in iarr  if ((i >= 0) and (i <= maxn)))
-
-
-##--------------------------------------
 def xy2dist(xy1, xy2):
 	return math.sqrt((xy1[0] - xy2[0]) **2 + (xy1[1] - xy2[1]) **2)
 
@@ -148,30 +141,36 @@ def swap1(xys, dists=None, dist=None):
 
 	for i in range(1, len(xys)-3):
 		for j in range(i+1, len(xys)-2):
-			ii = idxs2table(len(xys)-1, [i-1, i, i+1])
-			ji = idxs2table(len(xys)-1, [j-1, j, j+1])
-
-			print(f"## {i},{j} {ii},{ji}")
-
-			rem =  xy2dist(xys[ i   ], xys[ i+1 ])
-			rem += xy2dist(xys[ j-1 ], xys[ j   ])
-			if (i):
-				rem += xy2dist(xys[ i-1 ], xys[ i   ])
-			if (j < len(xys)-1):
-				rem += xy2dist(xys[ j   ], xys[ j+1 ])
-
-			add =  xy2dist(xys[ j   ], xys[ i+1 ])
-			add += xy2dist(xys[ j-1 ], xys[ i   ])
-			if (i):
-				add += xy2dist(xys[ i-1 ], xys[ j   ])
-			if (j < len(xys)-1):
-				add += xy2dist(xys[ i   ], xys[ j+1 ])
-
-			if (add -rem < best):
+			if (j > i+1):
 				if False:
-					print(f'# {i}: {xys[i  ][0]},{xys[i  ][1]}')
-					print(f'#   +1 {xys[i+1][0]},{xys[i+1][1]}')
-					print(f'# {j}: {xys[j][0]},{xys[j][1]}')
+					print(f"## i=..{i}.. {xys[i-1][:2]},", end='')
+					print(f" {xys[i  ][:2]}, {xys[i+1][:2]}")
+					print(f"## j=..{j}.. {xys[j-1][:2]},", end='')
+					print(f" {xys[j  ][:2]}, {xys[j+1][:2]}")
+
+				rem =  xy2dist(xys[ i   ], xys[ i+1 ])
+				rem += xy2dist(xys[ j-1 ], xys[ j   ])
+				if (i):
+					rem += xy2dist(xys[ i-1 ], xys[ i   ])
+				if (j < len(xys)-1):
+					rem += xy2dist(xys[ j   ], xys[ j+1 ])
+
+				add =  xy2dist(xys[ j   ], xys[ i+1 ])
+				add += xy2dist(xys[ j-1 ], xys[ i   ])
+				if (i):
+					add += xy2dist(xys[ i-1 ], xys[ j   ])
+				if (j < len(xys)-1):
+					add += xy2dist(xys[ i   ], xys[ j+1 ])
+#				print(f'# {i}x{j} +{add:.04f} -{rem:.04f} ' +
+#				      f'bal={add-rem:.06f}')
+
+			else:   ## [i-1] -> [i] -> [i+1] -> [i+2], simplified:
+				rem =  xy2dist(xys[ i-1 ], xys[ i   ])
+				rem += xy2dist(xys[ i+1 ], xys[ i+2 ])
+				add =  xy2dist(xys[ i-1 ], xys[ i+1 ])
+				add += xy2dist(xys[ i   ], xys[ i+2 ])
+
+			if (add -rem < 0):
 				print(f'# {i}x{j} +{add:.04f} -{rem:.04f} ' +
 				      f'bal={add-rem:.06f}')
 				sys.stdout.flush()
@@ -182,7 +181,6 @@ def swap1(xys, dists=None, dist=None):
 				              idx2bitmask([i-1, i, i+1,
 				                           j-1, j, j+1]),
 				              add])
-				best = add
 
 		## swaps[-1] is the current-best pair
 		## check if any preceding swap pairs might be simultaneously
@@ -225,6 +223,8 @@ def swap1(xys, dists=None, dist=None):
 ## overlap (therefore the bitmasks)
 ##
 def reorder1(xys, dist=None):
+	return None
+
 	if dist == None:
 		dist = route2total(xys)
 	res, dist0 = [], dist
@@ -318,6 +318,9 @@ if __name__ == '__main__':
 		swaps = swap1(xys, None)
 
 		if swaps != None:
+			route0 = route2total(xys)
+			best   = route0
+
 			i, j = swaps[0][0], swaps[0][1]
 
 			print(f"##SWAP1.ROUND={round}")
@@ -325,10 +328,21 @@ if __name__ == '__main__':
 				print(f"##SWAP {i},{j}")
 				xys[i], xys[j] = xys[j], xys[i]
 				imprd += 1
+
+				curr = route2total(xys)
+				if (curr > best):
+					raise ValueError("non-decreasing swap")
+				best = curr
 			for p in xys:
 				print(f'{p[2]},{p[3]}')
 			print()
 			sys.stdout.flush()
+
+			curr = route2total(xys)
+			print(f'## TOTAL={ curr }')
+			if (curr > route0):
+				raise ValueError("non-decreasing swap")
+
 
 		swaps = reorder1(xys)
 		if swaps != None:
@@ -346,7 +360,4 @@ if __name__ == '__main__':
 
 		if imprd == 0:
 			break
-
-		if round > 10:
-			break                 ## XXX
 
