@@ -74,6 +74,13 @@ def xy2tablexy(x, y, table):
 
 
 ##--------------------------------------
+## filter list to unique, valid indexes, preserving order
+##
+def idxs2table(maxn, iarr):
+	return list(i  for i in iarr  if ((i >= 0) and (i <= maxn)))
+
+
+##--------------------------------------
 def xy2dist(xy1, xy2):
 	return math.sqrt((xy1[0] - xy2[0]) **2 + (xy1[1] - xy2[1]) **2)
 
@@ -103,7 +110,7 @@ def idx2bitmask(arr):
 
 
 ##----------------------------------------------------------------------------
-## incremental swap costs:
+## incremental swap costs, exchanging [i] and [j]:
 ##   ---[i-1]-------[i]-------[i+1]---
 ##           \     /   \     /
 ##             \ /       \ /         
@@ -139,8 +146,13 @@ def swap1(xys, dists=None, dist=None):
 
 	swaps, best, dist0 = [], 0.0, dist
 
-	for i in range(len(xys) -1):
-		for j in range(i+1, len(xys)):
+	for i in range(1, len(xys)-3):
+		for j in range(i+1, len(xys)-2):
+			ii = idxs2table(len(xys)-1, [i-1, i, i+1])
+			ji = idxs2table(len(xys)-1, [j-1, j, j+1])
+
+			print(f"## {i},{j} {ii},{ji}")
+
 			rem =  xy2dist(xys[ i   ], xys[ i+1 ])
 			rem += xy2dist(xys[ j-1 ], xys[ j   ])
 			if (i):
@@ -151,11 +163,15 @@ def swap1(xys, dists=None, dist=None):
 			add =  xy2dist(xys[ j   ], xys[ i+1 ])
 			add += xy2dist(xys[ j-1 ], xys[ i   ])
 			if (i):
-				rem += xy2dist(xys[ i-1 ], xys[ j   ])
+				add += xy2dist(xys[ i-1 ], xys[ j   ])
 			if (j < len(xys)-1):
-				rem += xy2dist(xys[ i   ], xys[ j+1 ])
+				add += xy2dist(xys[ i   ], xys[ j+1 ])
 
 			if (add -rem < best):
+				if False:
+					print(f'# {i}: {xys[i  ][0]},{xys[i  ][1]}')
+					print(f'#   +1 {xys[i+1][0]},{xys[i+1][1]}')
+					print(f'# {j}: {xys[j][0]},{xys[j][1]}')
 				print(f'# {i}x{j} +{add:.04f} -{rem:.04f} ' +
 				      f'bal={add-rem:.06f}')
 				sys.stdout.flush()
@@ -330,4 +346,7 @@ if __name__ == '__main__':
 
 		if imprd == 0:
 			break
+
+		if round > 10:
+			break                 ## XXX
 
