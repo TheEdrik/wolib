@@ -130,57 +130,48 @@ def idx2bitmask(arr):
 ## we can hypothetically swap all length-reducaing candidates which do not
 ## overlap (therefore the bitmasks)
 ##
-def swap1(xys, dists=None, dist=None):
-	if dist == None:
-		dist = route2total(xys)
-
-	if dists == None:
-		dists = list(route2dists(xys))
-
-	swaps, best, dist0 = [], 0.0, dist
+def swap1(xys):
+	swaps = []
 
 	for i in range(1, len(xys)-3):
-		for j in range(i+1, len(xys)-2):
-			if (j > i+1):
-				if False:
-					print(f"## i=..{i}.. {xys[i-1][:2]},", end='')
-					print(f" {xys[i  ][:2]}, {xys[i+1][:2]}")
-					print(f"## j=..{j}.. {xys[j-1][:2]},", end='')
-					print(f" {xys[j  ][:2]}, {xys[j+1][:2]}")
+			## [i-1] -> [i] -> [i+1] -> [i+2]  swap, simplified:
 
-				rem =  xy2dist(xys[ i   ], xys[ i+1 ])
-				rem += xy2dist(xys[ j-1 ], xys[ j   ])
-				if (i):
-					rem += xy2dist(xys[ i-1 ], xys[ i   ])
-				if (j < len(xys)-1):
-					rem += xy2dist(xys[ j   ], xys[ j+1 ])
+		rem =  xy2dist(xys[ i-1 ], xys[ i   ])
+		rem += xy2dist(xys[ i+1 ], xys[ i+2 ])
+		add =  xy2dist(xys[ i-1 ], xys[ i+1 ])
+		add += xy2dist(xys[ i   ], xys[ i+2 ])
 
-				add =  xy2dist(xys[ j   ], xys[ i+1 ])
-				add += xy2dist(xys[ j-1 ], xys[ i   ])
-				if (i):
-					add += xy2dist(xys[ i-1 ], xys[ j   ])
-				if (j < len(xys)-1):
-					add += xy2dist(xys[ i   ], xys[ j+1 ])
-#				print(f'# {i}x{j} +{add:.04f} -{rem:.04f} ' +
-#				      f'bal={add-rem:.06f}')
+		if (add -rem < 0):
+			print(f'# {i}x({i}+1) +{add:.04f} -{rem:.04f} ' +
+			      f'bal={add-rem:.06f}')
+			sys.stdout.flush()
+			swaps.append([i, i+1,
+			              idx2bitmask([i-1, i,   i+1,
+			                             i, i+1, i+2]),
+			              add])
 
-			else:   ## [i-1] -> [i] -> [i+1] -> [i+2], simplified:
-				rem =  xy2dist(xys[ i-1 ], xys[ i   ])
-				rem += xy2dist(xys[ i+1 ], xys[ i+2 ])
-				add =  xy2dist(xys[ i-1 ], xys[ i+1 ])
-				add += xy2dist(xys[ i   ], xys[ i+2 ])
+		for j in range(i+2, len(xys)-2):
+			rem += xy2dist(xys[ i-1 ], xys[ i   ])
+			rem =  xy2dist(xys[ i   ], xys[ i+1 ])
+			rem += xy2dist(xys[ j-1 ], xys[ j   ])
+			rem += xy2dist(xys[ j   ], xys[ j+1 ])
 
-			if (add -rem < 0):
-				print(f'# {i}x{j} +{add:.04f} -{rem:.04f} ' +
-				      f'bal={add-rem:.06f}')
-				sys.stdout.flush()
+			add =  xy2dist(xys[ i-1 ], xys[ j   ])
+			add += xy2dist(xys[ j   ], xys[ i+1 ])
+			add += xy2dist(xys[ j-1 ], xys[ i   ])
+			add += xy2dist(xys[ i   ], xys[ j+1 ])
 
-				add -= rem
+			if (add -rem >= 0.0):
+				continue
 
-				swaps.append([i, j,
-				              idx2bitmask([i-1, i, i+1,
-				                           j-1, j, j+1]),
-				              add])
+			print(f'# {i}x{j} +{add:.04f} -{rem:.04f} ' +
+			      f'bal={add-rem:.06f}')
+			sys.stdout.flush()
+
+			swaps.append([i, j,
+			              idx2bitmask([i-1, i, i+1,
+			                           j-1, j, j+1]),
+			              add -rem, ])
 
 		## swaps[-1] is the current-best pair
 		## check if any preceding swap pairs might be simultaneously
@@ -194,7 +185,7 @@ def swap1(xys, dists=None, dist=None):
 	if swaps == []:
 		return None
 
-	swaps  = list(sorted(swaps, key=operator.itemgetter(2)))
+	swaps  = list(sorted(swaps, key=operator.itemgetter(3)))
 	pairs, swapbm = [], 0
 
 		## pick up pairs in decreasing-improvement order
@@ -213,72 +204,58 @@ def swap1(xys, dists=None, dist=None):
 
 ##--------------------------------------
 ## find reorders which improve total path lengths: moving [i] to
-## to after [j] and before [j+1]
+## to after [j] and before [j+1]:
+##     [i-1] -> [i] -> [i+1] ... [j] ->        [j+1]   becomes
+##     [i-1]        -> [i+1] ... [j] -> [i] -> [i+1]
+##
+## j >= i+2; j == i+1 has been covered by pairwise swaps
 ##
 ## returns list of index pairs to reorder, [i, j] tuples
 ##         None  no improvement found during any of the swaps
 ##
-## 'swaps' stores [index1, index2, bitmask(all affected indexes)]
+## 'reord' stores [index1, index2, bitmask(all affected indexes)]
 ## we can hypothetically swap all length-reducaing candidates which do not
 ## overlap (therefore the bitmasks)
 ##
-def reorder1(xys, dist=None):
-	return None
+def reorder1(xys):
+	reord = []
 
-	if dist == None:
-		dist = route2total(xys)
-	res, dist0 = [], dist
+	for i in range(1, len(xys)-3):
+		for j in range(i+2, len(xys)-2):
+			rem =  xy2dist(xys[ i-1 ], xys[ i   ])
+			rem += xy2dist(xys[ i   ], xys[ i+1 ])
+			rem += xy2dist(xys[ j   ], xys[ j+1 ])
+				##
+			add =  xy2dist(xys[ i-1 ], xys[ i+1 ])
+			add += xy2dist(xys[ j   ], xys[ i   ])
+			add += xy2dist(xys[ i   ], xys[ j+1 ])
 
-	xl = xys[:]
+			if (add -rem) >= 0.0:
+				continue
 
-	for i in range(len(xl) -1):
-		for j in range(i, len(xl)):
-			continue
-			xys[i], xys[j] = xys[j], xys[i]
-			d = route2total(xl)
+			print(f'# {i}->{j}+1 +{add:.04f} -{rem:.04f} ' +
+			      f'bal={add-rem:.06f}')
+			sys.stdout.flush()
 
-			if (d < dist):
-				print(f"# {i},{j} {dist:.6f}->{d:.6f}")
-				sys.stdout.flush()
-
-				res.append([i, j,
-				            idx2bitmask([i-1, i, i+1,
-				                         j-1, j, j+1]),
-				            dist -d])
-				dist = d
-
-			xys[i], xys[j] = xys[j], xys[i]
-
-		## res[-1] is the current-best pair
-		## check if any preceding swap pairs might be simultaneously
-		## applied (their bitmasks do not overlap)
-		##
-		## need not be optimal here: leaving any un-swapped here will
-		## still get considered in the next iteration.  therefore,
-		## simply scanning backwards and collating all bitmasks
-		## ('swapbm') without further filtering, is sufficient
-
-	if res == []:
+			reord.append([i, j,
+			             idx2bitmask([i-1, i, i+1,
+			                           j-1, j, j+1]),
+			             add -rem, ])
+	if reord == []:
 		return None
-	return None
 
-	pairs, swapbm = [ [res[-1][0], res[-1][1]], ], res[-1][2]
-	for x, y, bm, diff in res[:-1]:
-		if (swapbm & bm):
-			continue
+	reord  = list(sorted(reord, key=operator.itemgetter(3)))
+	pairs, rbm = [], 0
 
-		swapbm |= bm
-		pairs.append([x, y])
-		print(f"## SWAP+ {x} {y}")
+	for r in reord:
+		print(f"## REORD {r[0], r[1], r[3]}")
 
-	if (dist > dist0):
-		raise InternalError("Swaps increasing overall cost")
-			## ...in case we messed up loop+replacement above
+		## unlike swaps, reordering changes indexes of
+		## subsequent reorders
+		##
+		## TODO: we pick and return only the best move
 
-		## TODO: need to re-eval after set of swaps
-	print(f'## DIST= {dist0}->{dist}')
-
-	return pairs
+	return [ [ reord[0][0], reord[0][1], ], ]
 
 
 ##----------------------------------------------------------------------------
@@ -315,13 +292,11 @@ if __name__ == '__main__':
 	while True:
 		imprd, round = 0, round +1
 
-		swaps = swap1(xys, None)
+		swaps = swap1(xys)
 
 		if swaps != None:
 			route0 = route2total(xys)
 			best   = route0
-
-			i, j = swaps[0][0], swaps[0][1]
 
 			print(f"##SWAP1.ROUND={round}")
 			for i, j in swaps:
@@ -339,24 +314,35 @@ if __name__ == '__main__':
 			sys.stdout.flush()
 
 			curr = route2total(xys)
-			print(f'## TOTAL={ curr }')
+			print(f'## TOTAL.S={ curr }')
 			if (curr > route0):
 				raise ValueError("non-decreasing swap")
 
 
-		swaps = reorder1(xys)
-		if swaps != None:
-			i, j = swaps[0][0], swaps[0][1]
+		reord = reorder1(xys)
+		if reord != None:
+			route0 = route2total(xys)
+			best   = route0
 
-			print(f"##SWAP1.ROUND={round}")
-			for i, j in swaps:
-				print(f"##SWAP {i},{j}")
-				xys[i], xys[j] = xys[j], xys[i]
+			for i, j in reord:
+				print(f"##REORDER {i}->{j}+1")
+				if (j == i+1):
+					raise InternalError("in-place reorder?")
 				imprd += 1
-			for p in xys:
-				print(f'{p[2]},{p[3]}')
-			print()
-			sys.stdout.flush()
+#				print(f"## XXX {i},{j+1}")
+#				for k in range(0, j+2):
+#					print(f"##   {k} { xys[k] }")
+				xys.insert(j, xys.pop(i))
+#				print(f"## XXX2 {i},{j+1}")
+#				for k in range(0, j+2):
+#					print(f"##   {k} { xys[k] }")
+				sys.stdout.flush()
+
+				curr = route2total(xys)
+				print(f'## TOTAL.R={ curr }')
+				if (curr > route0):
+					raise ValueError("non-decreasing " +
+					                 "reorder")
 
 		if imprd == 0:
 			break
