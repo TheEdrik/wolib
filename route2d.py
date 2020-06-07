@@ -315,7 +315,7 @@ if __name__ == '__main__':
 			sys.stdout.flush()
 
 			curr = route2total(xys)
-			print(f'## TOTAL.S={ curr }')
+			print(f'## TOTAL.S.{round}={ curr }')
 			if (curr > route0):
 				raise ValueError("non-decreasing swap")
 
@@ -365,9 +365,12 @@ if __name__ == '__main__':
 			xys = list(x  for x in xys  if (x != None))
 
 			curr = route2total(xys)
-			print(f'## TOTAL.S={ curr }')
+			print(f'## TOTAL.M.{round}={ curr }')
 			if (curr > route0):
 				raise ValueError("non-decreasing swap")
+
+					## TODO: cross-check cost decrease
+					## after each movement?
 
 		if imprd == 0:
 			break
