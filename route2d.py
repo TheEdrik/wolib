@@ -217,11 +217,14 @@ def swap1(xys):
 ## we can hypothetically swap all length-reducaing candidates which do not
 ## overlap (therefore the bitmasks)
 ##
-def reorder1(xys):
+def move1(xys):
 	reord = []
 
 	for i in range(1, len(xys)-3):
-		for j in range(i+2, len(xys)-2):
+		for j in range(1, len(xys)-3):
+			if (i == j) or (i+1 == j) or (i == j+1):
+				continue
+
 			rem =  xy2dist(xys[ i-1 ], xys[ i   ])
 			rem += xy2dist(xys[ i   ], xys[ i+1 ])
 			rem += xy2dist(xys[ j   ], xys[ j+1 ])
@@ -238,24 +241,22 @@ def reorder1(xys):
 			sys.stdout.flush()
 
 			reord.append([i, j,
-			             idx2bitmask([i-1, i, i+1,
-			                           j-1, j, j+1]),
+			             idx2bitmask([i-1, i, i+1, j, j+1]),
 			             add -rem, ])
 	if reord == []:
 		return None
 
 	reord  = list(sorted(reord, key=operator.itemgetter(3)))
-	pairs, rbm = [], 0
+	moves, movebm = [], 0
 
 	for r in reord:
-		print(f"## REORD {r[0], r[1], r[3]}")
-
-		## unlike swaps, reordering changes indexes of
-		## subsequent reorders
-		##
-		## TODO: we pick and return only the best move
-
-	return [ [ reord[0][0], reord[0][1], ], ]
+		i, j, bm = r[0], r[1], r[2]
+		if (movebm & bm):
+			continue
+		movebm |= bm
+		moves.append([i, j])
+		print(f"## MOVE {i}->{j}+1")
+	return moves
 
 
 ##----------------------------------------------------------------------------
@@ -319,30 +320,54 @@ if __name__ == '__main__':
 				raise ValueError("non-decreasing swap")
 
 
-		reord = reorder1(xys)
+			## unlike swaps, which preserve indexes, movement
+			## needs to adapt as it shifts indexes: f.ex.,
+			## moving (2 -> 5+1) removes element [2], so
+			## a subsequent (3 -> 10+1) move would need to
+			## remove [2] instead of [3] after the preceding
+			## move
+			##
+			## 1) remove elements into temp array; replace
+			##    them with placeholders.  mark if placeholders
+			##    are touched again as they SHOULD NOT be
+			##    (moves are non-overlapping)
+			## 2) add elements in decreasing-index order
+			## 3) discard placeholders
+
+		reord = move1(xys)
 		if reord != None:
 			route0 = route2total(xys)
-			best   = route0
+			moved  = []    ## stores [target index, [...element...],
+			               ##          orig.index]
+			               ## orig. index is redundant, just for log
 
+					## removal may proceed in arbitrary
+					## order: entries only marked deleted
+					## (set to None)
 			for i, j in reord:
-				print(f"##REORDER {i}->{j}+1")
 				if (j == i+1):
-					raise InternalError("in-place reorder?")
-				imprd += 1
-#				print(f"## XXX {i},{j+1}")
-#				for k in range(0, j+2):
-#					print(f"##   {k} { xys[k] }")
-				xys.insert(j, xys.pop(i))
-#				print(f"## XXX2 {i},{j+1}")
-#				for k in range(0, j+2):
-#					print(f"##   {k} { xys[k] }")
-				sys.stdout.flush()
+					raise ValueError("in-place reorder?")
+				if (xys[i] == None):
+					raise ValueError("overlapping moves? "+
+					                 f"(element {i})")
+				moved.append([j, xys[i], i])
+				xys[i] = None                ## mark as removed
 
-				curr = route2total(xys)
-				print(f'## TOTAL.R={ curr }')
-				if (curr > route0):
-					raise ValueError("non-decreasing " +
-					                 "reorder")
+					## add back moved entries, decreasing
+					## index order
+
+			for m in sorted(moved, key=operator.itemgetter(0),
+			                reverse=True):
+				xys.insert(m[0]+1, m[1])
+				imprd += 1
+
+					## purge marked-as-deleted entries
+			xys = list(x  for x in xys  if (x != None))
+
+			curr = route2total(xys)
+			print(f'## TOTAL.S={ curr }')
+			if (curr > route0):
+				raise ValueError("non-decreasing swap")
 
 		if imprd == 0:
 			break
