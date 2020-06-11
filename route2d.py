@@ -317,6 +317,32 @@ def permute1(xys, n=4, startidx=0):
 
 
 ##----------------------------------------------------------------------------
+## non-None 'cost0' serves as upper bound, causing exception if over
+##
+def report1(xys, round, stageID, stage, cost0=None, logxy=False, brkline=False):
+	if logxy:
+		for p in xys:
+			print(f'{p[2]},{p[3]}')
+
+	cost = route2total(xys)
+
+	if stageID != '':
+		stageID = f'.{ stageID }'
+
+	print(f'## TOTAL{stageID}.{round}={ cost }')
+	if brkline:
+		print()
+
+	sys.stdout.flush()
+
+	if (cost0 != None) and (cost > cost0):
+		raise ValueError(f"non-decreasing {stage}")
+
+	return cost
+
+
+
+##----------------------------------------------------------------------------
 if __name__ == '__main__':
 	sys.argv.pop(0)
 	if [] == sys.argv:
@@ -366,16 +392,8 @@ if __name__ == '__main__':
 					print(f'## TOTAL.S??.{round}={ curr }')
 					raise ValueError("non-decreasing swap")
 				best = curr
-			for p in xys:
-				print(f'{p[2]},{p[3]}')
-			print()
-			sys.stdout.flush()
 
-			curr = route2total(xys)
-			print(f'## TOTAL.S.{round}={ curr }')
-			sys.stdout.flush()
-			if (curr > route0):
-				raise ValueError("non-decreasing swap")
+			report1(xys, round, 'S', 'swap', route0)
 
 
 			## unlike swaps, which preserve indexes, movement
@@ -425,13 +443,13 @@ if __name__ == '__main__':
 			curr = route2total(xys)
 			if (curr > route0):
 				print(f'## TOTAL.M??.{round}={ curr }')
-				raise ValueError("non-decreasing swap")
+				raise ValueError("non-decreasing move")
 					##
 					## TODO: cross-check cost decrease
 					## after each movement?
 
-			print(f'## TOTAL.M.{round}={ curr }')
-			sys.stdout.flush()
+			report1(xys, round, 'M', 'move', cost0=route0)
+
 
 		perms = permute1(xys, n=8)             ## TODO: hardwired count
 		if perms != None:
@@ -453,15 +471,10 @@ if __name__ == '__main__':
 					raise ValueError("non-decreasing " +
 					                 "permutation")
 
-			for p in xys:
-				print(f'{p[2]},{p[3]}')
-			curr = route2total(xys)
-			print(f'## TOTAL.P.{round}={ curr }')
-			sys.stdout.flush()
+			report1(xys, round, 'P', 'permutation', cost0=route0)
 			print()
 
-			if (curr > route0):
-				raise ValueError("non-decreasing permutation")
+		report1(xys, round, '', '', logxy=True, brkline=True)
 
 		if imprd == 0:
 			break
