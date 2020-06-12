@@ -11,6 +11,8 @@ import xy2path                     ## X+Y -> 1D fractal distance mapping; table
 	## changes below threshold are written off as negligible
 vEPS = 1E-9
 
+vFLOATD = 6     ## float digits in sums
+
 
 ##--------------------------------------
 ## returns array of <x, y> pairs
@@ -263,6 +265,13 @@ def move1(xys):
 
 
 ##--------------------------------------
+def permute_elems(elem_count, max=False):
+	if max:
+		return 7
+	return 5
+
+
+##--------------------------------------
 ## evaluate all permutations of N points for the shortest path through them
 ##
 ## returns [original start index, [...reordered indexes (n of them)...] ]
@@ -281,7 +290,6 @@ def permute1(xys, n=4, startidx=0):
 			    route2total(pxy)                  + \
 			    xy2dist(xys[ p[-1] ], xys[ si+n+1 ])
 
-##			print(f'## + p={p} {xys[p[-1]][:2]}..{xys[si+n+1][:2]}')
 			if (c >= cost -vEPS):
 				continue
 			cost, best = c, list(p)
@@ -289,9 +297,6 @@ def permute1(xys, n=4, startidx=0):
 		if best == []:
 			continue
 
-		print(f'## COST0={ cost0 }')
-		print(f"## COST- { best } c={ cost0 } " +
-		      f"delta={ cost - cost0 }")
 		perms.append([si, best, idx2bitmask(range(si, si+n+2)),
 		              cost -cost0, ])
 
@@ -309,11 +314,44 @@ def permute1(xys, n=4, startidx=0):
 		i, plan, bm = p[0], p[1], p[2]
 		if (bm & permsbm):
 			continue
+
 		permsbm |= bm
 		res.append([i, plan])
+
 		print(f"## PERM {i}->{ list(plan) } diff={ p[3] }")
 
 	return res
+
+
+##--------------------------------------
+## returns number of improvements
+##
+def permute1_process(xys, round, perms, route0):
+	imprd = 0
+
+	if perms == None:
+		return imprd
+
+	route0, n = route2total(xys), len(perms[0][1])
+	best      = route0
+
+	print(f"##PERMUTE.ROUND={round}")
+
+	for i, j in perms:
+		print(f"##PERM {i},(" +
+		      f"{ ','.join(str(v) for v in j) }[{n}])")
+
+		xys[ i+1:i+1+n ] = list(xys[v] for v in j)
+		imprd += 1
+
+		curr = route2total(xys)
+		if (curr > route0):
+			print(f'## TOTAL.P??.{round}={ curr :.{vFLOATD}f}')
+			raise ValueError("non-decreasing " +
+			                 "permutation")
+
+	report1(xys, round, 'P', 'permutation', cost0=route0)
+	return imprd
 
 
 ##----------------------------------------------------------------------------
@@ -329,7 +367,7 @@ def report1(xys, round, stageID, stage, cost0=None, logxy=False, brkline=False):
 	if stageID != '':
 		stageID = f'.{ stageID }'
 
-	print(f'## TOTAL{stageID}.{round}={ cost }')
+	print(f'## TOTAL{stageID}.{round}={ cost :.6f}')
 	if brkline:
 		print()
 
@@ -366,7 +404,7 @@ if __name__ == '__main__':
 	dist = dist0
 
 	print(f"# SORTED.ROUND={round}")
-	print(f"# TOTAL.0={ dist }")
+	print(f"# TOTAL.0={ dist :.6f}")
 	print(f"# DIST={ 100.0* dist / dist0 :.02f}%")
 	##
 	for p in xys:
@@ -389,7 +427,7 @@ if __name__ == '__main__':
 
 				curr = route2total(xys)
 				if (curr > best):
-					print(f'## TOTAL.S??.{round}={ curr }')
+					print(f'## TOTAL.S??.{round}={curr:.6f}')
 					raise ValueError("non-decreasing swap")
 				best = curr
 
@@ -442,7 +480,7 @@ if __name__ == '__main__':
 
 			curr = route2total(xys)
 			if (curr > route0):
-				print(f'## TOTAL.M??.{round}={ curr }')
+				print(f'## TOTAL.M??.{round}={ curr :.6f}')
 				raise ValueError("non-decreasing move")
 					##
 					## TODO: cross-check cost decrease
@@ -450,32 +488,32 @@ if __name__ == '__main__':
 
 			report1(xys, round, 'M', 'move', cost0=route0)
 
-
-		perms = permute1(xys, n=8)             ## TODO: hardwired count
+		perms = permute1(xys, n=permute_elems(len(xys)))
 		if perms != None:
-			route0, n = route2total(xys), len(perms[0][1])
-			best      = route0
-
-			print(f"##PERMUTE.ROUND={round}")
-				## [i+1][n] := ...j...
-				##
-			for i, j in perms:
-				print(f"##PERM {i},(" +
-				      f"{ ','.join(str(v) for v in j) }[{n}])")
-				xys[ i+1:i+1+n ] = list(xys[v] for v in j)
-				imprd += 1
-
-				curr = route2total(xys)
-				if (curr > route0):
-					print(f'## TOTAL.P??.{round}={ curr }')
-					raise ValueError("non-decreasing " +
-					                 "permutation")
-
-			report1(xys, round, 'P', 'permutation', cost0=route0)
-			print()
+			imprd += permute1_process(xys, round, perms, route0)
 
 		report1(xys, round, '', '', logxy=True, brkline=True)
 
 		if imprd == 0:
 			break
+
+		## TODO: uncross
+		## crossing paths may not be detected by permutations
+		## when they are far enough (counted along the 1D curve)
+
+
+		## last try:
+		## for 'sufficiently many' points still faster than 
+		##
+		## diags only: just look at stats (if uncommented)
+		##
+		## permutations may easily enumerated incrementally
+		## please do not point this out to us
+		##
+	if False and (len(xys) > 2000):                   ## limit is arbitrary
+		for n in range(permute_elems(len(xys))+1,
+		               permute_elems(len(xys), max=True) +1):
+			perms = permute1(xys, n)
+			print(f"## n={n}, {perms}")
+			sys.stdout.flush()
 
