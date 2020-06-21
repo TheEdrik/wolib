@@ -111,9 +111,9 @@ def idx2bitmask(arr):
 ## incremental swap costs, exchanging [i] and [j]:
 ##   ---[i-1]-------[i]-------[i+1]---
 ##           \     /   \     /
-##             \ /       \ /         
-##              =         =         
-##             / \       / \ 
+##             \ /       \ /
+##              =         =
+##             / \       / \
 ##           /     \   /     \
 ##   ---[j-1]-------[j]-------[j+1]---
 ##                      d(X, Y) == distance(X .. Y)
@@ -265,6 +265,166 @@ def move1(xys):
 
 
 ##--------------------------------------
+## returns min(x), max(x), min(y), max(y)
+##
+def boundary_minmax(pt1, pt2, y=False):
+	if y:
+		return min(pt1[0], pt2[0]), max(pt1[0], pt2[0])
+
+	return min(pt1[1], pt2[1]), max(pt1[1], pt2[1])
+
+
+##--------------------------------------
+## expect tests to mainly fail, with many points, so interleaved
+## compute-check sequences are reasonable
+##
+def are_crossed_edges(s1, e1, s2, e2):
+
+				## bounding boxes do not overlap -> not crossed
+
+	minx1, maxx1 = boundary_minmax(s1, e1)
+	minx2, maxx2 = boundary_minmax(s2, e2)
+
+	if (maxx1 < minx2) or (minx1 > maxx2):
+		return False
+
+	miny1, maxy1 = boundary_minmax(s1, e1, y=True)
+	miny2, maxy2 = boundary_minmax(s2, e2, y=True)
+
+	if (maxy1 < miny2) or (miny1 > maxy2):
+		return False
+
+			## rebase to [i] as origin
+			## check sign of [j,j+1] vs. [i,i+1] diagonal
+			##
+			## Fig.2
+			##
+			## TODO: proper elem-to-2D macros
+
+			## cross product with j[1] and j+1[2]
+
+	i2x, j1x, j2x = list((r - s1[0])  for r  in (e1[0], s2[0], e2[0]))
+	i2y, j1y, j2y = list((r - s1[1])  for r  in (e1[1], s2[1], e2[1]))
+
+	cp1 = i2x * j1y - i2y * j1x
+	cp2 = i2x * j2y - i2y * j2x
+
+	print(f"##1 {s1[0:2]} {e1[0:2]}")
+	print(f"##2 {s2[0:2]} {e2[0:2]}")
+	print(f"##x {cp1} {cp2}")
+
+			## note: python lacks a sign() function
+			## TODO: NaNs SHOULD be compared properly
+
+	if (((cp1 >= 0) and (cp2 >= 0)) or
+	    ((cp1 <= 0) and (cp2 <= 0))):
+		return False                       ## segments do not intersect
+
+	return True
+
+
+##--------------------------------------
+## swap	crossing edges to their non-crossing equivalents, if shorter
+## (generally, crossed edges are longer)
+##
+## from:                          to:
+##   --> 1      +- 3 <-- ...         --> 1 -----> 3 --> ...
+##         \
+##          -->-
+##               \
+##   <-- 4 -+      2 --> ...         <-- 4 <----- 2 <-- ...
+##
+## local permutations find uncrossing swaps, but only if they fit
+## within the permutation window.  in the example above, if there are more
+## than a few points betwen 2..3, they will not be permutation-detected
+##
+## since uncrossing reverses the 2..3 path order, it is more intrusive
+## than simpler operations (although the paths are only reversed,
+## not otherwise changed)
+##
+## TODO: numerical stability
+##
+def uncross1(xys):
+	crosses = []
+
+	for i in range(1, len(xys)-3):
+		for j in range(i+2, len(xys)-3):
+			if not are_crossed_edges(xys[i], xys[i+1],
+			                         xys[j], xys[j+1]):
+				continue
+
+			print(f"## CROSS? {i}x{j}")
+
+				## (1..2) -> (1..3)
+				## (3..4) -> (2..4)
+
+			rem =  xy2dist(xys[ i   ], xys[ i+1 ])
+			rem += xy2dist(xys[ j   ], xys[ j+1 ])
+			add =  xy2dist(xys[ i   ], xys[ j   ])
+			add += xy2dist(xys[ i+1 ], xys[ j+1 ])
+
+			if (add >= rem):
+				continue
+			print(f"## CROSS  {i}x{j}")
+
+			crosses.append([i, j, add-rem])
+
+	return None  if (crosses == []) else  crosses
+
+
+##--------------------------------------
+## returns number of improvements
+##
+def uncross1_process(xys, round, ucrs):
+	imprd = 0
+
+	if ucrs == None:
+		return imprd
+
+	route0 = route2total(xys)
+
+	crs  = list(sorted(ucrs, key=operator.itemgetter(2)))
+
+		## sections interfere
+		## take only the best improvement in each round
+		##
+		## TODO: trivial to extend to non-overlapping ranges
+
+	for p in crs:
+		## ---> 1    +- 3 <-- ...   ==>   --> 1 -----> 3 --> ...
+		## <-- 4 -+     2 --> ...   ==>   <-- 4 <----- 2 <-- ...
+		##
+			##       [i]  [i+1]       ...        [j  ]  [j+1]
+			##       [i]  [j  ]  ...reversed...  [i+1]  [j+1]
+			## ^^^^^^^^^                                ^^^^^^^^^
+			## no change                                no change
+		i, j = p[0], p[1]
+		i, j = min(i, j), max(i, j)
+
+		if j-i < 2:
+			continue     ## should have been filtered @ enumeration
+
+		xys[ i+1 : j+1 ] = list(xys[j : i : -1])
+
+		curr = route2total(xys)
+		if (curr > route0):
+			print(f'## TOTAL.U??.{round}={ curr :.{vFLOATD}f}')
+			raise ValueError("non-decreasing uncrossing")
+
+		## TODO: generic 'is this a non-trivial improvement?' check
+		## route0 = curr
+		##
+		## before that, MUST check that multiple uncrossings
+		## do not interfere
+
+		imprd += 1
+		break
+
+	report1(xys, round, 'U', 'uncross', cost0=route0)
+	return imprd
+
+
+##--------------------------------------
 def permute_elems(elem_count, max=False):
 	if max:
 		return 7
@@ -278,8 +438,9 @@ def permute_elems(elem_count, max=False):
 ##         ...array of these tuples...
 ##         None  no improvement found during any of the swaps
 ##
-def permute1(xys, n=4, startidx=0):
+def permute1(xys, n=4):
 	perms = []
+
 	for si in range(0, len(xys) -n -1):
 		cost0, best = route2total(xys[ si+1 : si+n+1 ]), []
 		cost = cost0
@@ -326,7 +487,7 @@ def permute1(xys, n=4, startidx=0):
 ##--------------------------------------
 ## returns number of improvements
 ##
-def permute1_process(xys, round, perms, route0):
+def permute1_process(xys, round, perms):
 	imprd = 0
 
 	if perms == None:
@@ -349,6 +510,9 @@ def permute1_process(xys, round, perms, route0):
 			print(f'## TOTAL.P??.{round}={ curr :.{vFLOATD}f}')
 			raise ValueError("non-decreasing " +
 			                 "permutation")
+
+		## TODO: generic 'is this an improvement?' check
+		## route0 = curr
 
 	report1(xys, round, 'P', 'permutation', cost0=route0)
 	return imprd
@@ -377,7 +541,6 @@ def report1(xys, round, stageID, stage, cost0=None, logxy=False, brkline=False):
 		raise ValueError(f"non-decreasing {stage}")
 
 	return cost
-
 
 
 ##----------------------------------------------------------------------------
@@ -448,6 +611,8 @@ if __name__ == '__main__':
 			## 2) add elements in decreasing-index order
 			## 3) discard placeholders
 
+			## TODO: factor out move1_process()
+
 		reord = move1(xys)
 		if reord != None:
 			route0 = route2total(xys)
@@ -490,7 +655,11 @@ if __name__ == '__main__':
 
 		perms = permute1(xys, n=permute_elems(len(xys)))
 		if perms != None:
-			imprd += permute1_process(xys, round, perms, route0)
+			imprd += permute1_process(xys, round, perms)
+
+		uncrs = uncross1(xys)
+		if uncrs != None:
+			imprd += uncross1_process(xys, round, uncrs)
 
 		report1(xys, round, '', '', logxy=True, brkline=True)
 
@@ -503,7 +672,7 @@ if __name__ == '__main__':
 
 
 		## last try:
-		## for 'sufficiently many' points still faster than 
+		## for 'sufficiently many' points still faster than N^2
 		##
 		## diags only: just look at stats (if uncommented)
 		##
