@@ -73,7 +73,7 @@
 
 
 ##=====  nothing user-serviceable below  =====================================
-import csv, re, sys, os, operator, functools, itertools
+import csv, re, sys, os, operator, functools, itertools, time
 
 ## keep these global; needs dict if working on context-local limits
 ##
@@ -495,7 +495,7 @@ def add_and_remove(sel, nsel, add_idxs, rm_idxs, curr=0, prev=0, log=True):
 ## caller MUST verify that adding (scount -nscount) to the selection
 ## still remains under element-count limit
 ##
-def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None):
+def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None):
 
 	if (scount < 1) or (nscount < 1):
 		raise ValueError("invalid selection-swap size")
@@ -591,7 +591,7 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None):
 		for nsi in nst:
 			print('##  + ' +elem2str(nsel[nsi]))
 
-		nbcomment = ''
+		nbcomment, nbmark = '', ''
 		if (all_best != None):
 			prevbest = all_best[ 'sum' ]
 			if (best_sum1 > prevbest):
@@ -603,6 +603,7 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None):
 				         f"{ MAX1 -new_best })")
 			else:
 				nbcomment = ' (swap is only local optimum)'
+				nbmark    = 'L'
 
 				## if this is the global optimum, log it
 				## redundant, but it ensures the best choice
@@ -622,10 +623,15 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None):
 			all_best[ 'selection'  ] = sbest
 			all_best[ 'nselection' ] = nsbest
 
-		print(f"## primary sum improves {sum1}->" +
-		      f"{best_sum1}", end='')
+		tdiff = ''
+		if start != None:
+			tnow  = time.perf_counter()
+			tdiff = f" time(IMPR)={(tnow - start) *1E6:.1f}us "
 
-		print("(remain: {}->{})".format(MAX1 - sum1, MAX1 - best_sum1))
+		print(f"## primary sum improves {sum1}->" +
+		      f"{best_sum1}{tdiff}", end='')
+
+		print(f"(remain: { MAX1-sum1 }->{ MAX1-best_sum1 }){nbmark}")
 		if nbcomment != '':
 			print('##' +nbcomment)
 		print(flush=True)
@@ -668,7 +674,7 @@ def over_pct_threshold(selected):
 ## 'sel' and 'nsel' are internal-format arrays, of current selected
 ## and non-selected entries, respectively
 ##
-def klfm_swap(sel, nsel, max_tuple_n, all_best=None):
+def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None):
 	if not sel or not nsel:
 		return None, None, None
 
@@ -688,8 +694,8 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None):
 		if MAX_ELEMS and ((len(sel) -scount +nscount) > MAX_ELEMS):
 			continue                 ## stay below elem-count limit
 
-		s1, s2, nsum = klfm_swap_one(sel, nsel, scount,
-		                             nscount, all_best)
+		s1, s2, nsum = klfm_swap_one(sel, nsel, scount, nscount,
+		                             all_best, start=start)
 
 		if (not s1) or (not s2) or (not nsum):
 			print('## {}+{} swap: no improvement'
@@ -779,8 +785,14 @@ if __name__ == '__main__':
 		usage()
 	tbl = table_read(sys.argv[0], 2  if FIELD2  else 1)
 
+	tstart = time.perf_counter()
+
 	report_env()
 	sel, nsel = best_fit_decreasing(tbl, MAX_ELEMS)
+
+	tend   = time.perf_counter()
+	print(f"## time(BFD)={ (tend - tstart) *1E6 :.2f}us")
+	tstrt  = tend
 
 	report(sel, nsel, msg='best-fit decreasing raw output:')
 
@@ -794,7 +806,8 @@ if __name__ == '__main__':
 		if over_pct_threshold(sel):
 			break
 
-		plus, minus, impr = klfm_swap(sel, nsel, MAX_TUPLE_N, vSOLUTION)
+		plus, minus, impr = klfm_swap(sel, nsel, MAX_TUPLE_N,
+		                              vSOLUTION, start=tstart)
 		round += 1
 
 		if impr and (impr > 0):
