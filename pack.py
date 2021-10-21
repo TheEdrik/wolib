@@ -33,6 +33,10 @@
 ##   DEBUG=...    diagnostics level if >0
 ##   TUPLE_N=...  limit the size of element-tuples when attempting to swap
 ##                not-yet-selected and selected elements (see below)
+##   TARGET=...host:port...
+##            log current-best results as they evolve to socket
+##            excluding any other incremental etc. logged data
+##            writing results is opportunistic, ignoring sending errors
 
 
 ##----------------------------------------------------------------------------
@@ -74,6 +78,7 @@
 
 ##=====  nothing user-serviceable below  =====================================
 import csv, re, sys, os, operator, functools, itertools, time
+import socket               ## best-result reporting
 
 ## keep these global; needs dict if working on context-local limits
 ##
@@ -92,6 +97,10 @@ MAX_TUPLE_N = 4      ## try bundling 1..<this many> entries as single swap unit
                      ## we do not currently build combinations incrementally
 
 tFORMATS = [ 'csv', 'plain', ]
+
+TARGET = None        ## set to [ host, port ] if env specifies it
+
+CRLF   = b'\n\r'     ## telnet official separator
 
 
 ##--------------------------------------
@@ -175,6 +184,32 @@ def env2num(key, default=None, expect_float=False):
 def sgn(v1, v2):
 	"sign of v1-v2"
 	return (v2 < v1) - (v1 < v2)
+
+
+##--------------------------------------
+## report selection to socket
+## ignore errors: writing results to remote host is opportunistic
+## invoked only if host/port have been supplied (see 'TARGET')
+##
+## 'lines' is array
+##
+def socketwrite(host, port, sel):
+	"opportunistic write to host/socket"
+
+	if host and port and sel:
+		hdr = selection2hdr(sel, prefix='#', remain=True)
+		sl  = selection2lines(ordered(sel))
+
+		try:
+			s = socket.socket()
+			s.connect((host, port))
+
+			s.send(hdr.encode('utf-8') + CRLF)
+
+			s.send(CRLF.join(s.encode('utf-8') for s in sl))
+			s.send(CRLF +CRLF)
+		except:
+			pass      ## ...should we log?
 
 
 ##--------------------------------------
@@ -270,6 +305,31 @@ def elem2str(elem, format='plain'):
 
 
 ##--------------------------------------
+def selection2sum(sel):
+	return arr2sums(sel)[0]
+
+
+##--------------------------------------
+def selection2hdr(sel, prefix='', remain=False):
+	total = selection2sum(sel)
+	r = prefix + f"selection: {len(sel)} elements, total={ total }"
+
+	if remain and (total <= MAX1):
+		r += f' margin={ MAX1 - total }/{ MAX1 }'
+
+	return r
+
+
+
+##--------------------------------------
+def selection2lines(sel, format='plain'):
+	"primary,secondary,...element... format [array] of selection"
+
+	return list(f'{s[1][0]},{s[1][1]},{s[1][2]}'
+		for s in list(enumerate(sel)))
+
+
+##--------------------------------------
 ## 'sel' and 'nsel' are internal-format arrays, of current selected
 ## and non-selected entries, respectively
 ##
@@ -285,7 +345,7 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 
 	stotal, prefix = 0, ''
 	if sel:
-		stotal = arr2sums(sel)[0]
+		stotal = selection2sum(sel)
 
 		if chk_oversize and (stotal > MAX1):
 			print("OVERSIZED selection: {} elements, total={}"
@@ -300,8 +360,7 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 	if (format == 'csv'):
 		prefix = '#'
 
-	print(f"{prefix}selection: {len(sel)} elements, total={stotal}",
-	      end='')
+	print(selection2hdr(sel), end='')
 	if remain:
 		print(", margin={} ({:.2f}% of {})"
 		      .format(MAX1 - stotal, ratio(stotal), MAX1), end='')
@@ -315,6 +374,7 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 			else:
 				print(f'{s[1][0]},{s[1][1]},' +
 				      f'{elem2str(s[1], format)}')
+## TODO: shared function -> selection2lines()
 		print()
 
 	if nsel:
@@ -623,6 +683,9 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None):
 			all_best[ 'selection'  ] = sbest
 			all_best[ 'nselection' ] = nsbest
 
+			if TARGET:
+				socketwrite(TARGET[0], TARGET[1], sbest)
+
 		tdiff = ''
 		if start != None:
 			tnow  = time.perf_counter()
@@ -637,7 +700,7 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None):
 		print(flush=True)
 
 
-			## pathological case: terminate: no overhead at all
+			## possible case: early-terminate: exact match
 		if (MAX1 == best_sum1):
 			break
 
@@ -734,6 +797,23 @@ if __name__ == '__main__':
 		elif os.getenv('FIELD') != '1':
 			terminate('unsupported FIELD value [{}]'
 			          .format(os.getenv('FIELD')))
+
+	if 'TARGET' in os.environ:
+		t = os.getenv('TARGET')
+				## TODO: prepackaged env2num()-like macro
+		if ':' in t:
+			t = t.split(':')
+			try:
+				t[1] = int(t[1])
+			except:
+				t = []
+		else:
+			t = [ 'fail below' ]
+		if len(t) < 2:
+			terminate('missing or invalid TARGET host/port')
+		elif len(t) > 2:
+			terminate('malformed TARGET host/port specification')
+		TARGET = t
 
 	n = env2num('TUPLE_N')
 	if (n != None):
