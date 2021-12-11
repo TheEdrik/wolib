@@ -101,6 +101,7 @@ tFORMATS = [ 'csv', 'plain', ]
 TARGET = None        ## set to [ host, port ] if env specifies it
 
 CRLF   = b'\n\r'     ## telnet official separator
+COMM   = b'#'        ## prefix for commented log results
 
 
 ##--------------------------------------
@@ -187,27 +188,43 @@ def sgn(v1, v2):
 
 
 ##--------------------------------------
+def socket_open(host, port):
+	try:
+		s = socket.socket()
+		s.connect((host, port))
+	except:
+		s = None
+
+			## TODO: error reporting
+
+	return s
+
+
+##--------------------------------------
 ## report selection to socket
 ## ignore errors: writing results to remote host is opportunistic
 ## invoked only if host/port have been supplied (see 'TARGET')
 ##
-## 'lines' is array
+## entries of 'prefix' are lines to output commented before input
 ##
-def socketwrite(host, port, sel):
+def socketwrite(sock, sel, prefix=[]):
 	"opportunistic write to host/socket"
 
-	if host and port and sel:
+	if sock and sel:
 		hdr = selection2hdr(sel, prefix='#', remain=True)
 		sl  = selection2lines(ordered(sel))
 
 		try:
-			s = socket.socket()
-			s.connect((host, port))
+			if prefix:
+				pfx =  COMM
+				pfx += (CRLF +COMM).join(l.encode('utf-8')
+				                        for l in prefix)
+				sock.send(pfx +CRLF)
 
-			s.send(hdr.encode('utf-8') + CRLF)
+			sock.send(hdr.encode('utf-8') + CRLF)
 
-			s.send(CRLF.join(s.encode('utf-8') for s in sl))
-			s.send(CRLF +CRLF)
+			sock.send(CRLF.join(s.encode('utf-8') for s in sl))
+			sock.send(CRLF +CRLF)
 		except:
 			pass      ## ...should we log?
 
@@ -548,6 +565,9 @@ def add_and_remove(sel, nsel, add_idxs, rm_idxs, curr=0, prev=0, log=True):
 ## 'all_best', when not None, is the global optimum so far, in a 'vSOLUTION'
 ## styled struct (which is passed by reference)
 ##
+## 'sock', when not None, is an open socket where updates are to be
+## written.  These writes are opportunistic, ignoring any exceptions.
+##
 ## since combinations are evaluated in cross-product, cache any sum(...)
 ## evaluated over non/selected tuples. quality change is difference
 ## of added/removed tuples (all cached)
@@ -555,7 +575,8 @@ def add_and_remove(sel, nsel, add_idxs, rm_idxs, curr=0, prev=0, log=True):
 ## caller MUST verify that adding (scount -nscount) to the selection
 ## still remains under element-count limit
 ##
-def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None):
+def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None,
+                  sock=None):
 
 	if (scount < 1) or (nscount < 1):
 		raise ValueError("invalid selection-swap size")
@@ -683,8 +704,8 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None):
 			all_best[ 'selection'  ] = sbest
 			all_best[ 'nselection' ] = nsbest
 
-			if TARGET:
-				socketwrite(TARGET[0], TARGET[1], sbest)
+			if sock:
+				socketwrite(sock, sbest)
 
 		tdiff = ''
 		if start != None:
@@ -737,7 +758,7 @@ def over_pct_threshold(selected):
 ## 'sel' and 'nsel' are internal-format arrays, of current selected
 ## and non-selected entries, respectively
 ##
-def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None):
+def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 	if not sel or not nsel:
 		return None, None, None
 
@@ -758,7 +779,7 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None):
 			continue                 ## stay below elem-count limit
 
 		s1, s2, nsum = klfm_swap_one(sel, nsel, scount, nscount,
-		                             all_best, start=start)
+		                             all_best, start=start, sock=sock)
 
 		if (not s1) or (not s2) or (not nsum):
 			print('## {}+{} swap: no improvement'
@@ -798,6 +819,7 @@ if __name__ == '__main__':
 			terminate('unsupported FIELD value [{}]'
 			          .format(os.getenv('FIELD')))
 
+	sock = None
 	if 'TARGET' in os.environ:
 		t = os.getenv('TARGET')
 				## TODO: prepackaged env2num()-like macro
@@ -813,7 +835,12 @@ if __name__ == '__main__':
 			terminate('missing or invalid TARGET host/port')
 		elif len(t) > 2:
 			terminate('malformed TARGET host/port specification')
-		TARGET = t
+
+				## TODO: proper report
+
+		sock = socket_open(t[0], t[1])
+## TODO: wrap with proper exceptions to wrapper
+
 
 	n = env2num('TUPLE_N')
 	if (n != None):
@@ -875,6 +902,8 @@ if __name__ == '__main__':
 	tstrt  = tend
 
 	report(sel, nsel, msg='best-fit decreasing raw output:')
+	if sock:
+		socketwrite(sock, sel, ['BFD.plan'])
 
 	impr, round = True, 0
 	vSOLUTION[ 'sum'        ] = arr2sums(sel)[0]
@@ -887,7 +916,7 @@ if __name__ == '__main__':
 			break
 
 		plus, minus, impr = klfm_swap(sel, nsel, MAX_TUPLE_N,
-		                              vSOLUTION, start=tstart)
+		                         vSOLUTION, start=tstart, sock=sock)
 		round += 1
 
 		if impr and (impr > 0):
