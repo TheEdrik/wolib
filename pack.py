@@ -77,7 +77,7 @@
 
 
 ##=====  nothing user-serviceable below  =====================================
-import csv, re, sys, os, operator, functools, itertools, time
+import csv, re, sys, os, operator, functools, itertools, time, json
 import socket               ## best-result reporting
 
 ## keep these global; needs dict if working on context-local limits
@@ -89,6 +89,7 @@ import socket               ## best-result reporting
 ##              MUST supply MAX2 in that case
 ## TUPLE_N      override max-tuples limit
 ## MAX_ELEMS    >0 if there is an upper limit on number of entries selected
+## FORMAT       'json' for REST APIs; default is 'csv'
 ##
 MAX1, MAX2, FIELD2, DEBUG, MAX_ELEMS = None, None, False, 0, 0
 TUPLE_N, PCT = 0, None
@@ -96,7 +97,7 @@ TUPLE_N, PCT = 0, None
 MAX_TUPLE_N = 4      ## try bundling 1..<this many> entries as single swap unit
                      ## we do not currently build combinations incrementally
 
-tFORMATS = [ 'csv', 'plain', ]
+tFORMATS = [ 'csv', 'plain', 'json', ]
 
 TARGET = None        ## set to [ host, port ] if env specifies it
 
@@ -207,24 +208,44 @@ def socket_open(host, port):
 ##
 ## entries of 'prefix' are lines to output commented before input
 ##
-def socketwrite(sock, sel, prefix=[]):
+def socketwrite(sock, sel, fmt='csv', prefix=[]):
 	"opportunistic write to host/socket"
 
 	if sock and sel:
 		hdr = selection2hdr(sel, prefix='#', remain=True)
-		sl  = selection2lines(ordered(sel))
+		sl  = selection2lines(ordered(sel), format=fmt)
+		slc = None            ## 'compact' (preformatted) list
+		sep = CRLF
+		pfx = None
+
+		if prefix:
+			pfx =  COMM
+			pfx += (sep +COMM).join(l.encode('utf-8')
+			                        for l in prefix)
+
+		if fmt == 'json':
+			slc = {'selection' : sl}
+			slc[ 'total' ] = selection2sum(sel)
+			slc[ 'slack' ] = MAX1 - slc[ 'total' ]
+			sl  = [ json.dumps(slc, separators=(',', ':')), ]
+			hdr, pfx = None, None
+			sep = b''
 
 		try:
-			if prefix:
-				pfx =  COMM
-				pfx += (CRLF +COMM).join(l.encode('utf-8')
-				                        for l in prefix)
-				sock.send(pfx +CRLF)
+			if pfx:
+				sock.send(pfx +sep)
 
-			sock.send(hdr.encode('utf-8') + CRLF)
+			if hdr != None:
+				sock.send(hdr.encode('utf-8') + sep)
 
-			sock.send(CRLF.join(s.encode('utf-8') for s in sl))
-			sock.send(CRLF +CRLF)
+			sock.send(sep.join(s.encode('utf-8') for s in sl))
+
+			if sep == CRLF:
+				sock.send(CRLF +CRLF)
+
+			elif fmt == 'json':
+				sock.send(CRLF)
+
 		except:
 			pass      ## ...should we log?
 
@@ -342,8 +363,16 @@ def selection2hdr(sel, prefix='', remain=False):
 def selection2lines(sel, format='plain'):
 	"primary,secondary,...element... format [array] of selection"
 
-	return list(f'{s[1][0]},{s[1][1]},{s[1][2]}'
-		for s in list(enumerate(sel)))
+	if format == 'json':
+		res = ([ s[1][0], s[1][1], s[1][2] ]
+			for s in list( enumerate(sel) ))
+
+	else:
+		res = (f'{s[1][0]},{s[1][1]},{s[1][2]}'
+			for s in list( enumerate(sel) ))
+
+	return list(res)
+
 
 
 ##--------------------------------------
@@ -367,6 +396,7 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 		if chk_oversize and (stotal > MAX1):
 			print("OVERSIZED selection: {} elements, total={}"
 			      .format(len(sel), stotal))
+
 			for s in enumerate(ordered(sel)):
 				print('OS.elem[{}]: '.format(s[0])
 				                     +elem2str(s[1]))
@@ -705,7 +735,7 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None,
 			all_best[ 'nselection' ] = nsbest
 
 			if sock:
-				socketwrite(sock, sbest)
+				socketwrite(sock, sbest, fmt=fmt)
 
 		tdiff = ''
 		if start != None:
@@ -819,7 +849,7 @@ if __name__ == '__main__':
 			terminate('unsupported FIELD value [{}]'
 			          .format(os.getenv('FIELD')))
 
-	sock = None
+	sock, fmt = None, 'csv'
 	if 'TARGET' in os.environ:
 		t = os.getenv('TARGET')
 				## TODO: prepackaged env2num()-like macro
@@ -879,6 +909,11 @@ if __name__ == '__main__':
 	if PCT != None:
 		PCT = int((float(MAX1) * (100 - PCT)) / 100.0)
 
+	if ('FORMAT' in os.environ):
+		fmt = os.environ[ 'FORMAT' ]
+		if not fmt in tFORMATS:
+			terminate(f"unknown format ({fmt})")
+
 	MAX_ELEMS = env2num('MAX_ELEMS', 0)      ## optional; default 0 is fine
 	if (MAX_ELEMS == None) and ('MAX_ELEMS' in os.environ):
 		terminate("invalid MAX_ELEMS definition [{}]"
@@ -903,7 +938,7 @@ if __name__ == '__main__':
 
 	report(sel, nsel, msg='best-fit decreasing raw output:')
 	if sock:
-		socketwrite(sock, sel, ['BFD.plan'])
+		socketwrite(sock, sel, fmt=fmt, prefix=['BFD.plan'])
 
 	impr, round = True, 0
 	vSOLUTION[ 'sum'        ] = arr2sums(sel)[0]
