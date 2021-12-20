@@ -1,0 +1,5 @@
+- immediate removal of 0-sized entries
+- mismatched array/int types (calling report after early termination)
+- terminate with exception from inner loop upon hitting 0-slack exact solution
+
+
