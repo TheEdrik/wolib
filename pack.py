@@ -37,6 +37,10 @@
 ##            log current-best results as they evolve to socket
 ##            excluding any other incremental etc. logged data
 ##            writing results is opportunistic, ignoring sending errors
+##
+## diagnostics+test
+##   RNTIME   randomize time for each delivery
+##            if value > 2 characters, it is used as seed
 
 
 ##----------------------------------------------------------------------------
@@ -78,7 +82,8 @@
 
 ##=====  nothing user-serviceable below  =====================================
 import csv, re, sys, os, operator, functools, itertools, time, json
-import socket               ## best-result reporting
+import socket               ## best-result reporting; ignores all write errors
+import random               ## devel only
 
 ## keep these global; needs dict if working on context-local limits
 ##
@@ -444,9 +449,12 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ## field '2' swaps primary/secondary columns (compared to file original)
 ## first two columns MUST be all-numeric; checks for at least three columns
 ##
+## format 'extended' requires input extended with coordinates
+## and field for arrival times
+##
 ## TODO: rest of exception handling
 ##
-def table_read(fname, field=1):
+def table_read(fname, field=1, fmt='base'):
 	csvf = open(fname, newline='')
 	rd   = list(csv.reader(csvf, delimiter=',', quotechar='\\'))
 
@@ -840,6 +848,145 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 	return best -sum1, all_best
 
 
+
+##=====  development only  ===================================================
+## weighted set of delivery-window width, single-order windows
+tHRS1 = [
+#	6,
+#	4, 4, 4, 4,
+#	3, 3,
+	2, 2, 2, 2, 2, 2, 2,
+	1, 1,
+]
+##
+## delivery-windows width, 2x orders per day
+tHRS2 = [
+	2,
+	1, 1, 1,
+]
+
+vHR_MAX = 11     ## max(schedule delivery), hours HH00
+vHR_MIN =  8     ## min(schedule delivery), hours HH00
+
+
+##--------------------------------------
+def duration2start(t):
+	## uniform-random selection for 't' (hour) delivery time
+	## result is [HH, MM], aligned to 15 minutes
+	##
+	if (t > vHR_MAX -vHR_MIN):
+		raise ValueError("delivery window too wide")
+
+			## 0800 to 2000, quantized to 15 minutes
+
+	if (t == vHR_MAX -vHR_MIN):
+		return [ vHR_MIN, 0, ]
+
+	u = (vHR_MAX -vHR_MIN -t) * 4
+				## width(available window), in 15-minute units
+
+	v = u
+	u = random.randint(0, u)                                 ## actual unit
+
+	return [ vHR_MIN + (u // 4), 15 * (u % 4), ]
+
+
+##--------------------------------------
+## turn 3-field table into 6-field one, adding delivery coordinates
+## and randomized time windows
+##
+## selecting all-day, 1x6, 1x4, 2x1 or 2x2 hour delivery windows
+##
+## windows are aligned at 15-minute units starting not before 0800,
+## ending not after 2000; all-day marked as [0000..2400]
+##
+## not checking for redundant windows, so 2x2 may end up overlapping
+## completely, or partially to form a single 1x3 window
+##
+def delivery_times():
+	"list of [start[H],start[M],end[H],end[M]] tuples as delivery times"
+	res = []
+
+	if random.randint(0, 1000) < 3:                             ## full day
+		res = [0, 2400]
+
+	elif random.randint(0, 100) < 50:                ## 1 in 20: two windows
+		t   = random.choice(tHRS2)
+		s   = duration2start(t)
+		res = [ [s[0], s[1]], [s[0] +t, s[1]], ]
+
+	else:
+		t1 = random.choice(tHRS2)
+		t2 = random.choice(tHRS2)
+
+				## TODO: collapse to minimal, sorted window/s
+		s1 = duration2start(t1)
+		s2 = duration2start(t2)
+				##
+		res = [
+			[s1[0], s1[1]], [s1[0] +t1, s1[1]],
+			[s2[0], s2[1]], [s2[0] +t2, s2[1]],
+		]
+
+	return res
+
+
+##--------------------------------------
+## TODO: split out perturbation code, then replace with list operation
+##
+def times2print(t):
+	"human-readable form of start+end time tuple"
+
+	res = []
+	for i in range(len(t) // 2):
+					## pair of (H, M) tuples
+		s, e = t[i+i], t[i+i+1]
+
+					## any perturbation etc.
+					## would be added here
+
+		res.append(f'{s[0]:02}{s[1]:02}-{e[0]:02}{e[1]:02}')
+
+	return "+".join(res)
+
+
+##--------------------------------------
+## call only with RNTIME set
+##
+def table_partial2full(t):
+	if 'RNTIME' in os.environ:
+		seed = os.environ[ 'RNTIME' ]
+		if len(seed) >= 2:
+			random.seed( seed.encode('utf-8') )
+
+	deliveries = list(delivery_times() for _ in t)
+
+			## 1-based indexes may have skipped empty lines etc.
+			## len(t) may not be sufficient
+			##
+	res = max(v[-1]  for v in t)                     ## max. index, 1-based
+	res = list([]  for _ in range(res +1))
+			##
+			## special case: [0] * 2  is [0, 0]
+			##               []  * 2  is []; needs range+list
+
+			## in: [primary, secondary, item, index]
+			## [9267620, 1, 'from-russia-with-love83.mkv', 3] 
+			##
+	for v, d in zip(t, deliveries):
+		idx = v[ -1 ]
+		pd  = times2print(d)
+		res[ idx ].extend([ v[0], v[1], pd, v[2], ])
+
+	for r in (r  for r in res  if (r != [])):
+		print(','.join(str(v) for v in r))
+
+	return 0
+
+
+##=====  /development only  ==================================================
+
+
 ##--------------------------------------
 if __name__ == '__main__':
 	if 'FIELD' in os.environ:
@@ -925,7 +1072,10 @@ if __name__ == '__main__':
 	sys.argv.pop(0)
 	if [] == sys.argv:
 		usage()
-	tbl = table_read(sys.argv[0], 2  if FIELD2  else 1)
+	tbl = table_read(sys.argv[0], 2  if FIELD2  else 1, fmt='base')
+
+	if 'RNTIME' in os.environ:
+		sys.exit( table_partial2full(tbl) )
 
 	tstart = time.perf_counter()
 
