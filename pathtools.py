@@ -67,3 +67,78 @@ def is_inside(x, y, border):
 
 	return (crosses & 1)
 
+
+##---------------------------------------------
+## turn input into k bytes of uniform-random (PRF) output, returned as bytes
+## bytecount(output) == bytecount(maxn)
+##
+## DOES NOT MOD-REDUCE etc. output to be modn-based
+##
+## output is leading bytes of:
+##    hash(...input...)
+##    hash(...input... || x00000000)
+##    hash(...input... || x00000001)
+##    ...
+##    hash(...input... ||  BE32(N) )
+## ...if output needs N+2 blocks of 512-bit output (with hash=SHA512)
+##
+def seed2prf(seed, bits):
+	if (bits < 1):
+		raise ValueError("invalid PRF-output size")
+
+	blks = (bits +512 -1) //512
+					## excluding initial, unpadded block
+
+	r = hashlib.sha512(seed).digest()
+
+	for i in range(blks-1):
+		post = i.to_bytes(32 // 8, byteorder='big')
+		r += hashlib.sha512( seed +post ).digest()
+
+	return r[ : (bits +7) //8 ]
+
+
+##--------------------------------------
+## generate points within normalized polygon
+##
+def points_inside_polygon(border, n=1000):
+	deterministic = True
+	seed0 = -1 
+	pts   = []
+
+	brd, prevx, prevy = [], border[0][0], border[0][1]
+			##
+	for x,y in border[1:]:
+		brd.append([
+			prevx, prevy, x, y,
+			min(x, prevx),
+			max(x, prevx),
+			min(y, prevy),
+			max(y, prevy),
+		])
+		prevx, prevy = x, y
+	border = brd
+
+	while (len(pts) < n):
+		seed0 += 1
+
+		if deterministic:
+			seedx = (seed0 +i+i  ).to_bytes(64//8, byteorder='big')
+			seedy = (seed0 +i+i+1).to_bytes(64//8, byteorder='big')
+
+			x = int.from_bytes(seed2prf(seedx, 64), 'big')
+			y = int.from_bytes(seed2prf(seedy, 64), 'big')
+		else:
+			x, y = random.randint(0, 1<<64), random.random(0, 1<<64)
+
+		x /= (1 << 64)
+		y /= (1 << 64)
+
+		if not is_inside(x, y, border):
+			continue
+
+##		print(f'{x:.06}\t{y:.06}')
+		pts.append([x, y])
+
+	return pts
+

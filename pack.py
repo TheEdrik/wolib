@@ -39,8 +39,11 @@
 ##            writing results is opportunistic, ignoring sending errors
 ##
 ## diagnostics+test
-##   RNTIME   randomize time for each delivery
-##            if value > 2 characters, it is used as seed
+##   RNTIME    randomize time for each delivery
+##             if value > 2 characters, it is used as seed
+##   RNCOORDS  add randomized, normalized, boundary-delimited random
+##             delivery points.  Value of 'RNCOORDS' is boundary file:
+##      X Y    ## coordinate pairs, one per line
 
 
 ##----------------------------------------------------------------------------
@@ -84,6 +87,8 @@
 import csv, re, sys, os, operator, functools, itertools, time, json
 import socket               ## best-result reporting; ignores all write errors
 import random               ## devel only
+import pathtools
+
 
 ## keep these global; needs dict if working on context-local limits
 ##
@@ -960,6 +965,42 @@ def table_partial2full(t):
 			random.seed( seed.encode('utf-8') )
 
 	deliveries = list(delivery_times() for _ in t)
+	coords = []
+
+	if 'RNCOORDS' in os.environ:
+		border = (t.decode().split() for t in
+		         open(os.environ['RNCOORDS'], 'rb').read().split(b'\n'))
+			##
+		border = list([float(t[0]), float(t[1])]
+		              for t in border  if (len(t) == 2))
+			##
+			## X+Y segments, preserving order
+
+		brd, prevx, prevy = [], border[0][0], border[0][1]
+		for x,y in border[1:]:
+			brd.append([
+				prevx, prevy, x, y,
+				min(x, prevx),
+				max(x, prevx),
+				min(y, prevy),
+				max(y, prevy),
+			])
+			prevx, prevy = x, y
+		border = brd
+
+
+			## generate delivery points, within polygon
+		while len(coords) < len(t):
+			x = random.randint(0, 1<<64)
+			y = random.randint(0, 1<<64)
+			x /= (1 << 64)
+			y /= (1 << 64)
+
+			if not pathtools.is_inside(x, y, border):
+				continue
+
+			coords.append([x, y])
+
 
 			## 1-based indexes may have skipped empty lines etc.
 			## len(t) may not be sufficient
