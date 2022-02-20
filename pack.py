@@ -46,6 +46,8 @@
 ##            log current-best results as they evolve to socket
 ##            excluding any other incremental etc. logged data
 ##            writing results is opportunistic, ignoring sending errors
+##   BASE=X,Y[:X,Y...]
+##            list of start/refill locations
 ##
 ## diagnostics+test
 ##   RNTIME    randomize time for each delivery
@@ -356,6 +358,28 @@ def times2vec(tstr, base=800, twindow=15):
 
 
 ##--------------------------------------
+## turn "X,Y[:X,Y..." base-list string into array of coordinate pairs
+## returns None if input is invalid
+##
+def str2bases(str):
+	b = []
+
+	for xys in str.split(':'):
+		x = xys.split(",")
+		if len(x) != 2:
+			terminate(f"not base coordinates ({xys})")
+
+		try:
+			x, y = float(x[0]), float(x[1])
+		except ValueError:
+			terminate(f"invalid base/coordinate ({xys})")
+
+		b.append([ x, y, ])
+
+	return b
+
+
+##--------------------------------------
 ## fetch to list first, since may be called with generators,
 ## and successful return draws arr twice
 ##
@@ -579,6 +603,11 @@ def table_read(fname, field=1, fmt='base'):
 
 		if (itype == 'extended'):
 			t = times2vec(f[4])
+		
+		aux.append({
+			'time':     f[4],
+			'time2vec': t,
+		})
 
 	res = sorted(res, key=functools.cmp_to_key(table_cmp))
 
@@ -1133,6 +1162,7 @@ def table_partial2full(t, border=None):
 
 ##--------------------------------------
 if __name__ == '__main__':
+##---  TODO: factor out: parameter-read code
 	if 'FIELD' in os.environ:
 		if os.getenv('FIELD') == '2':
 			FIELD2 = True
@@ -1212,6 +1242,14 @@ if __name__ == '__main__':
 
 	elif MAX_ELEMS and (MAX_ELEMS < 0):
 		terminate("MAX_ELEMS def out of range [{}]".format(MAX_ELEMS))
+
+	bases = None
+	if ('BASE' in os.environ):
+		bases = str2bases(os.environ[ 'BASE' ])
+		if not bases:
+			terminate("invalid list of bases (" +
+			          f"{ os.environ[ 'BASE' ] })")
+##---  /parameter-read code
 
 	sys.argv.pop(0)
 	if [] == sys.argv:
