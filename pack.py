@@ -13,9 +13,18 @@
 ## outputs list of not-selected entries if env contains 'NONSEL'
 
 
-## input format
+## input format, basic:
 ##   <primary value>  <secondary value>  <identifier>
 ##   - no restrictions on repeated primary/secondary/identifier fields
+##
+## input format, extended:
+##   <primary value>  <secondary value>  <X> <Y>  <delivery.times> <identifier>
+##   - delivery position X, Y are in arbitrary, but consistent, coord.system
+##   - delivery times are HHMM-HHMM start-end tuples, separated with '+'
+##     if multi-valued
+##     - example: 0915-1015+1100-1130
+##     - values need not be sorted or disjunct; start/end sort MUST be proper
+##     - TODO: using fixed 15-minute windows currently
 ##
 ## internal format
 ##   <primary value>  <secondary value>  <identifier>  <line number>
@@ -282,6 +291,71 @@ def table_cmp(n, m):
 
 
 ##--------------------------------------
+## maps HHMM-HHMM[+...] strings to bitvector, with each bit corresponding
+## to 'twindow' minutes
+##
+## vector sets x80 for bit corresponding to 'base..base+twindow', x40
+##    for base+twindow..base+twindow*2 etc.
+##
+## 0915-1015+1100-1130  ->  0000'0111'1000'1100  ->  07'8c
+##
+## 'twindow' is in minutes
+##
+## TODO: centralized validate-range etc. checking; these are trivial
+## operations in epoch. etc base, HHMM is what complicates things
+##
+def times2vec(tstr, base=800, twindow=15):
+	vec = 0
+
+	if tstr == '':
+		return vec
+
+	units_per_hour = 60 // twindow
+	hour2bitmask   = (1 << units_per_hour) -1
+	bh             = int(base) // 100            ## base hour
+
+	for w in tstr.split('+'):
+		ends = w.split('-')
+		if len(ends) != 2:
+			raise ValueError(f"invalid time range ({w})")
+
+		s, e = ends
+		if (len(s) < 4) or (len(e) < 4):
+			raise ValueError(f"malformed time range ({w})")
+
+		if s > e:
+			raise ValueError(f"inconsistent time range ({w})")
+		if s == e:
+			continue
+
+		sh, sm = int(s[:-2]), int(s[-2:])
+		eh, em = int(e[:-2]), int(e[-2:])
+
+		if (sh < bh):
+			raise ValueError(f"delivery in the past ({w})")
+
+		if (sm > 59) or (em > 59):
+			raise ValueError(f"times out of range ({w})")
+
+				## rebase everything to base-hour
+		sh -= bh
+		eh -= bh
+
+				## units, round to full interval
+
+		su, eu = sm // twindow, (em +twindow -1) // twindow
+
+				## absolute units
+
+		su += sh * units_per_hour
+		eu += eh * units_per_hour
+
+		vec |= (1 << eu) - (1 << su)
+
+	return vec
+
+
+##--------------------------------------
 ## fetch to list first, since may be called with generators,
 ## and successful return draws arr twice
 ##
@@ -449,26 +523,39 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ## decreasing-primary (then decreasing-secondary) order
 ##
 ## skips elements which would not fit if (global) MAX1 and/or MAX2
-## are already set
+## are already set; raises exception on clearly invalid data
 ##
 ## field '2' swaps primary/secondary columns (compared to file original)
 ## first two columns MUST be all-numeric; checks for at least three columns
 ##
-## format 'extended' requires input extended with coordinates
-## and field for arrival times
+## autodetects basic/extended input
+## format 'extended' forces input extended with coordinates
+## and field for arrival times.
 ##
 ## TODO: rest of exception handling
 ##
 def table_read(fname, field=1, fmt='base'):
-	csvf = open(fname, newline='')
-	rd   = list(csv.reader(csvf, delimiter=',', quotechar='\\'))
+	itype = 'base'
+	csvf  = open(fname, newline='')
+	rd    = list(csv.reader(csvf, delimiter=',', quotechar='\\'))
 
-	res, linenr = [], 0
-	for f in rd:
+	expd_fields = 3
+
+	if (len(rd[0]) < 3) or (len(rd[0]) > 6):
+		raise ValueError("pack-job format not recognized")
+
+	if (len(rd[0]) == 6):
+		itype = 'extended'
+		expd_fields = 6
+
+	res, aux = [], []
+
+	for fi, f in enumerate(rd):
 		if len(f) < 3:
 			raise ValueError("missing primary/secondary+value " +
-			                 "columns (line XXX)")
-		linenr += 1
+			                 f"columns (line { fi+1 })")
+		if len(f) != expd_fields:
+			raise ValueError("unexpected structure (line { fi+1 })")
 
 		fd1, fd2 = str2num(f[0]), str2num(f[1])
 		if (fd1 == None) or (fd2 == None):
@@ -478,18 +565,24 @@ def table_read(fname, field=1, fmt='base'):
 			fd1, fd2 = fd2, fd1
 
 		if MAX1 and (fd1 > MAX1):
+## TODO: log out-of-band-deliveries
 			continue                   ## primary alone > MAX1
 
 		if (MAX2 != None) and (fd2 > MAX2):
+## TODO: log out-of-band-deliveries
 			continue                   ## secondary alone > MAX2
 
-		res.append([fd1, fd2, f[2], linenr])
+				## [-1] is element to store, in all
+				## current forms
+				##
+		res.append([fd1, fd2, f[-1], fi+1])
 
-		## ...log original, filtered state pre-ordering
+		if (itype == 'extended'):
+			t = times2vec(f[4])
+
 	res = sorted(res, key=functools.cmp_to_key(table_cmp))
 
-		## ...log original, pre-ordered state
-	return res
+	return res, aux
 
 
 ##--------------------------------------
@@ -1123,7 +1216,7 @@ if __name__ == '__main__':
 	sys.argv.pop(0)
 	if [] == sys.argv:
 		usage()
-	tbl = table_read(sys.argv[0], 2  if FIELD2  else 1, fmt='base')
+	tbl, aux = table_read(sys.argv[0], 2  if FIELD2  else 1, fmt='base')
 
 	if 'RNTIME' in os.environ:
 		sys.exit( table_partial2full(tbl) )
