@@ -300,27 +300,7 @@ def table_cmp(n, m):
 ## modifies aux in-place, adding entries
 ##
 def aux2plus(aux):
-	if not aux:
-		return
-
-	idxs = list(sorted(a['index']  for a in aux))
-
-				## LS, MS one bit of each bitvector
-
-	for a in aux:
-		lsbit =  a[ 'time2vec' ]
-		lsbit ^= (lsbit & (lsbit -1))
-				##
-				## 0111'0100  ->  -1
-				## 0111'0011  ->  &
-				## 0111'0000  ->  ^
-				## 0000'0100
-
-		a[ 'lsbit' ] = lsbit
-
-#TODO: MS bit
-
-	return aux
+	pass
 
 
 ##--------------------------------------
@@ -338,10 +318,10 @@ def aux2plus(aux):
 ## operations in epoch. etc base, HHMM is what complicates things
 ##
 def times2vec(tstr, base=800, twindow=15):
-	vec = 0
+	vec, minv, maxv = 0, 0, 0
 
 	if tstr == '':
-		return vec
+		return vec, 0, 0
 
 	units_per_hour = 60 // twindow
 	hour2bitmask   = (1 << units_per_hour) -1
@@ -383,9 +363,12 @@ def times2vec(tstr, base=800, twindow=15):
 		su += sh * units_per_hour
 		eu += eh * units_per_hour
 
+		minv = min(su, minv)  if (minv > 0)  else  su
+		maxv = max(eu, maxv)
+
 		vec |= (1 << eu) - (1 << su)
 
-	return vec
+	return vec, 1 << minv, 1 << (maxv -1)
 
 
 ##--------------------------------------
@@ -587,7 +570,7 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ## [
 ##   {
 ##     'time':     '0845-0945+1015-1115',
-##     'time2vec': 0x1e78},
+##     'time2vec': 0x1e78,
 ##                  --        0001'1110'0111'1000
 ##                  --             ^ ^  ^  ^  ^ ^
 ##                  --             | |  |  |  | |
@@ -599,6 +582,11 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##                  --                     +-------  0900-0915
 ##                  --
 ##                  -- default universal base time is 0800
+##
+##     'min_time': 0x8,
+##     'max_time': 0x1000,
+##                  -- LS, MS bit in bitmask
+##                  -- used for fast 'X must happen before Y' comparisons
 ##   }
 ## ]
 ##
@@ -648,11 +636,13 @@ def table_read(fname, field=1, fmt='base'):
 		res.append([fd1, fd2, f[-1], fi+1])
 
 		if (itype == 'extended'):
-			t = times2vec(f[4])
+			t, mint, maxt = times2vec(f[4])
 			aux.append({
 				'time':     f[4],
 				'time2vec': t,
 				'index':    fi,
+				'min_time': mint,
+				'max_time': maxt,
 			})
 
 	res = sorted(res, key=functools.cmp_to_key(table_cmp))
