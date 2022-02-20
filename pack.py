@@ -913,7 +913,7 @@ def delivery_times():
 	res = []
 
 	if random.randint(0, 1000) < 3:                             ## full day
-		res = [0, 2400]
+		res = [ [0, 2400] ]
 
 	elif random.randint(0, 100) < 50:                ## 1 in 20: two windows
 		t   = random.choice(tHRS2)
@@ -937,6 +937,11 @@ def delivery_times():
 
 
 ##--------------------------------------
+def xy2print(x, y):
+	return f'{x:.08f}', f'{y:.08f}'
+
+
+##--------------------------------------
 ## TODO: split out perturbation code, then replace with list operation
 ##
 def times2print(t):
@@ -957,8 +962,12 @@ def times2print(t):
 
 ##--------------------------------------
 ## call only with RNTIME set
+## adds random, in-polygon points if 'RNCOORDS' is set
 ##
-def table_partial2full(t):
+## TODO: centralized polygon reading, pass through 'border',
+##       do not read RNCOORDS directly
+##
+def table_partial2full(t, border=None):
 	if 'RNTIME' in os.environ:
 		seed = os.environ[ 'RNTIME' ]
 		if len(seed) >= 2:
@@ -1014,10 +1023,11 @@ def table_partial2full(t):
 			## in: [primary, secondary, item, index]
 			## [9267620, 1, 'from-russia-with-love83.mkv', 3] 
 			##
-	for v, d in zip(t, deliveries):
+	for v, d, xy in zip(t, deliveries, coords):
 		idx = v[ -1 ]
 		pd  = times2print(d)
-		res[ idx ].extend([ v[0], v[1], pd, v[2], ])
+		xy  = xy2print(xy[0], xy[1])
+		res[ idx ].extend([ v[0], v[1], xy[0], xy[1], pd, v[2], ])
 
 	for r in (r  for r in res  if (r != [])):
 		print(','.join(str(v) for v in r))
