@@ -291,6 +291,37 @@ def table_cmp(n, m):
 
 	return linenr
 
+##--------------------------------------
+## given an 'aux' collection of time/time2vec/index dictionaries,
+## add any total-collection data:
+##   - 'predecessors': [ indexes which always predate this index ]
+##   - 'successors':   [ indexes which always appear after this index ]
+##
+## modifies aux in-place, adding entries
+##
+def aux2plus(aux):
+	if not aux:
+		return
+
+	idxs = list(sorted(a['index']  for a in aux))
+
+				## LS, MS one bit of each bitvector
+
+	for a in aux:
+		lsbit =  a[ 'time2vec' ]
+		lsbit ^= (lsbit & (lsbit -1))
+				##
+				## 0111'0100  ->  -1
+				## 0111'0011  ->  &
+				## 0111'0000  ->  ^
+				## 0000'0100
+
+		a[ 'lsbit' ] = lsbit
+
+#TODO: MS bit
+
+	return aux
+
 
 ##--------------------------------------
 ## maps HHMM-HHMM[+...] strings to bitvector, with each bit corresponding
@@ -552,9 +583,24 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ## field '2' swaps primary/secondary columns (compared to file original)
 ## first two columns MUST be all-numeric; checks for at least three columns
 ##
-## autodetects basic/extended input
-## format 'extended' forces input extended with coordinates
-## and field for arrival times.
+## autodetects basic/extended input; returns auxiliary data as:
+## [
+##   {
+##     'time':     '0845-0945+1015-1115',
+##     'time2vec': 0x1e78},
+##                  --        0001'1110'0111'1000
+##                  --             ^ ^  ^  ^  ^ ^
+##                  --             | |  |  |  | |
+##                  -- 1015-1030 --+ |  |  |  | |
+##                  --    ...        |  |  |  | +--  0800-0815
+##                  -- 0945-1000 ----+  |  |  |         ...
+##                  --    ...           |  |  +----  0830-0845
+##                  -- 0915-0930 -------+  |            ...
+##                  --                     +-------  0900-0915
+##                  --
+##                  -- default universal base time is 0800
+##   }
+## ]
 ##
 ## TODO: rest of exception handling
 ##
@@ -579,7 +625,7 @@ def table_read(fname, field=1, fmt='base'):
 			raise ValueError("missing primary/secondary+value " +
 			                 f"columns (line { fi+1 })")
 		if len(f) != expd_fields:
-			raise ValueError("unexpected structure (line { fi+1 })")
+			raise ValueError(f"unexpected structure (line {fi+1})")
 
 		fd1, fd2 = str2num(f[0]), str2num(f[1])
 		if (fd1 == None) or (fd2 == None):
@@ -603,13 +649,15 @@ def table_read(fname, field=1, fmt='base'):
 
 		if (itype == 'extended'):
 			t = times2vec(f[4])
-		
-		aux.append({
-			'time':     f[4],
-			'time2vec': t,
-		})
+			aux.append({
+				'time':     f[4],
+				'time2vec': t,
+				'index':    fi,
+			})
 
 	res = sorted(res, key=functools.cmp_to_key(table_cmp))
+
+	aux2plus(aux)
 
 	return res, aux
 
@@ -975,13 +1023,44 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 	return best -sum1, all_best
 
 
+##=====  pack-and-route  =====================================================
+## passed parsed coordinate+time-equipped delivery plan, and base list
+## enumerate possible base-start times and reachable schedules
+##
+## 'aux' and 'bases' must have been initialized, not empty
+##
+## iterator: keeps returning improving schedules
+##
+## creates new plan with [] (default)
+## perturbs existing one if passed non-[]
+##
+def pack_and_route(deliveries, aux, bases, plan=[]):
+	sched = []
+
+	if len(deliveries) != len(aux):
+		raise ValueError("inconsistent delivery+aux data")
+	if not aux:
+		raise ValueError("aux.data is uninitialized")
+
+			## time vector: all scheduled delivery windows
+
+	alltime_v = 0
+	for d in aux:
+		alltime_v |= d[ 'time2vec' ]
+## TODO: all-OR (standard aggregator function)
+
+	yield([ 'pack-and-route schedule placeholder' ])
+
+
+##=====  /pack-and-route  ====================================================
+
 
 ##=====  development only  ===================================================
 ## weighted set of delivery-window width, single-order windows
 tHRS1 = [
-#	6,
-#	4, 4, 4, 4,
-#	3, 3,
+	6,
+	4, 4, 4, 4,
+	3, 3,
 	2, 2, 2, 2, 2, 2, 2,
 	1, 1,
 ]
@@ -992,7 +1071,7 @@ tHRS2 = [
 	1, 1, 1,
 ]
 
-vHR_MAX = 11     ## max(schedule delivery), hours HH00
+vHR_MAX = 18     ## max(schedule delivery), hours HH00
 vHR_MIN =  8     ## min(schedule delivery), hours HH00
 
 
@@ -1258,6 +1337,11 @@ if __name__ == '__main__':
 
 	if 'RNTIME' in os.environ:
 		sys.exit( table_partial2full(tbl) )
+
+	if bases and aux:
+		for sched in pack_and_route(tbl, aux, bases):
+			print('TODO: schedule placeholder', sched)
+		sys.exit(0)
 
 	tstart = time.perf_counter()
 
