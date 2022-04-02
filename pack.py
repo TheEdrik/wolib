@@ -107,7 +107,7 @@
 ##=====  nothing user-serviceable below  =====================================
 import csv, re, sys, os, operator, functools, itertools, time, json, copy
 import socket               ## best-result reporting; ignores all write errors
-import random               ## devel only
+import math, random
 import pathtools
 
 
@@ -617,6 +617,8 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##     'MAX_TIME_ALL': ... max-time ...
 ##     'x': ...coordinate... (None if unknown)
 ##     'y': ...coordinate...
+##     'seen': '1240',          -- if set and non-empty, delivery time
+##     'svec': x40000,          -- time vector form of 'seen', if non-empty
 ##   }
 ## ]
 ##
@@ -755,7 +757,7 @@ def best_fit_decreasing(tbl, max_elems=0):
 
 ##--------------------------------------
 ## unambiguous string representation of index tuples
-## (used to cache sums of )
+## (used to cache sums of lengths etc., skipping floats)
 ##
 def tuple2idxstring(tuple):
 	"itertools....-returned tuple to dict-index-ready string form"
@@ -1094,27 +1096,40 @@ def del_timesort(d):
 
 ##--------------------------------------
 ## returns [ src.index ][ dest.index ] list of XY distances ('idx' True)
-## returns 
+## sets string-indexed values to 'xys' if non-None
 ##
-def distances(dels, idx=True):
+## x0, x1, ... are string variables; xs/xd are source/dest numeric values
+##
+def distances(dels, wgt=1.0, xys=None, idx=True):
 	if idx:
 		arr = [0] * len(dels)
 		arr = list(arr for r in range(len(arr)))
 
 		for src in range(len(dels)):
+			x0, y0 = float(dels[src]['x']), float(dels[src]['y']) 
+			xs, ys = float(x0), float(y0)
 
-			xs, ys = dels[src]['x'], dels[src]['y']
 			for dst in range(len(dels)):
 				if src == dst:
 					continue
 
-				xd, yd = dels[dst]['x'], dels[dst]['y']
-				print('xxx', src, dst, xs, xd)
+				x1 = float(dels[dst]['x'])
+				y1 = float(dels[dst]['y'])
+				xd, yd = float(x1), float(y1)
 
-				arr[ dst ][ src ] = 1
-				arr[ src ][ dst ] = 2
-		return []
-	return []
+				d = (xd - xs) ** 2 + (yd - ys) ** 2
+				d = math.sqrt(d)
+				d *= wgt
+
+				arr[ dst ][ src ] = d
+				arr[ src ][ dst ] = d
+
+				if xys:
+					si = tuple2idxstring(x0, y0)
+					di = tuple2idxstring(x1, y1)
+					xys[ si ][ di ] = d
+					xys[ di ][ si ] = d
+	return arr
 
 
 ##--------------------------------------
@@ -1148,6 +1163,58 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 
 
 ##--------------------------------------
+## vehicle positions
+##
+## 'V.ID': {
+##    'time_max': ...earliest arrival...
+##    'time_min': ...latest departure...
+##    'x': X coordinate,
+##    'y': Y coordinate,
+## }
+
+
+##--------------------------------------
+## map vehicle refill time strings to time vectors
+##
+## example:
+##     { 'V0': {                  ## refill windows for V0:
+##          '1600-1700',
+##          '1200-1300+1400-1500',
+##       },
+##     }
+## ->
+##     { 'V0': {
+##          'times':   [ '1200-1300+1400-1500', '1600-1700', ],
+##          'timevec': [ 0xf0f0000, 0xf00000000, ],
+##       },
+##     }
+##
+def vehiclerefills(vrefill):
+	refills = {}
+
+	for v in vrefill:
+		if not v in refills:
+			refills[v] = {
+				'times':   [],
+				'timevec': [],
+			}
+		addtimes, vectimes = [], []
+
+		for t in sorted(vrefill[v]):
+			tvec = times2vec(t)[0]
+			try:
+				addtimes.append(t)
+				vectimes.append(tvec)
+			except:
+				raise ValueError(f"bad refill window '{t}'")
+
+		refills[v][ 'times'   ].extend(addtimes)
+		refills[v][ 'timevec' ].extend(vectimes)
+
+	return refills
+
+
+##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
 ##
@@ -1160,7 +1227,8 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ## perturbs existing one if passed non-[]
 ##
 def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
-	sched, refills = [], {}
+	sched, vpos = [], {}
+				## vpos is vehicle positions, if already known
 
 	if len(deliveries) != len(aux):
 		raise ValueError("inconsistent delivery+aux data")
@@ -1172,26 +1240,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 	for d in aux:
 		alltime_v |= d[ 'time2vec' ]
 
-			## map
-	for v in vrefill:
-		if not v in refills:
-			refills[v] = {
-				'times':   [],
-				'timevec': [],
-			}
-		addtimes, vectimes = [], []
-
-		for t in vrefill[v]:
-			tvec = times2vec(t)[0]
-			try:
-				addtimes.append(t)
-				vectimes.append(tvec)
-			except:
-				raise ValueError(f"bad refill window '{t}'")
-
-		refills[v][ 'times'   ].extend(addtimes)
-		refills[v][ 'timevec' ].extend(vectimes)
-	print('xxx', refills)
+	refills = vehiclerefills(vrefill)
 
 
 			## ideally, this should be from table or query
@@ -1210,11 +1259,6 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 		print(f"## T={ d['time'] }  [t.vec=x{ d['time2vec'] :0x}]")
 		print("##  TW=" +timevec2utilstr(d['time2vec'], maxu, sep='',
 		                               unitcols=1))
-#		print(f'x{ del_timesort(d) :0x}')
-#		print(f"  t=x{ d[ 'time2vec' ] :0x} [{ pathtools.bitcount(d['time2vec']) }] "+
-#		      f" 1={ pathtools.popcount( d[ 'time2vec' ])}")
-#		print(f"  n=x{ d[ 'min_time' ] :0x}")
-#		print(f"  x=x{ d[ 'max_time' ] :0x}")
 		print('')
 
 	yield([ 'pack-and-route schedule placeholder' ])
