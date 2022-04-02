@@ -125,6 +125,8 @@ TARGET = None        ## set to [ host, port ] if env specifies it
 CRLF   = b'\n\r'     ## telnet official separator
 COMM   = b'#'        ## prefix for commented log results
 
+vTIME_UNDEF = 9E9    ## value for time vector meaning 'undefined' (=too high)
+
 
 ##--------------------------------------
 ## 'struct' storing the best solution we have seen so far
@@ -324,7 +326,8 @@ def aux2plus(aux):
 ## operations in epoch. etc base, HHMM is what complicates things
 ##
 def times2vec(tstr, base=800, twindow=15):
-	vec, minv, maxv = 0, 0, 0
+	vec, minv, maxv = 0, vTIME_UNDEF, 0
+				## minv is 'arbitrary large enough value'
 
 	if tstr == '':
 		return vec, 0, 0
@@ -369,10 +372,13 @@ def times2vec(tstr, base=800, twindow=15):
 		su += sh * units_per_hour
 		eu += eh * units_per_hour
 
-		minv = min(su, minv)  if (minv > 0)  else  su
+		minv = min(su, minv)
 		maxv = max(eu, maxv)
-
+ 
 		vec |= (1 << eu) - (1 << su)
+
+	if minv == vTIME_UNDEF:
+		minv = 0
 
 	return vec, 1 << minv, 1 << (maxv -1)
 
@@ -1042,7 +1048,8 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 ## sort deliveries in order of urgency
 ##   - earliest delivery time
 ##   - secondary: latest delivery time
-##   - third: increasing order of possible delivery slots (15m in example)
+##   - third: 
+##   - fourth: increasing order of nr. of possible delivery slots
 ##
 ## see 'List Auxiliary Data' for input structure
 ##
@@ -1052,21 +1059,35 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 def del_timesort(d):
 	"sort: key function for deliveries"
 
-			## MXB, NRB are bits of max-time, nr-of-slots
-			## fields, respectively
+	print('xxxr', d)
+
+				## MXB, NRB are bits of max-time, nr-of-slots
+				## fields, respectively
+				##
+				## both rounded up to full bytes, so
+				## fields become hex-value visible
 
 	mn, MXB = d[ 'min_time' ], pathtools.bitcount(d[ 'MAX_TIME_ALL' ])
 	nrbits = pathtools.bitcount(d[ 'time2vec' ])
+	print(f'  xxx1 MXB={MXB} ALL=x{d["MAX_TIME_ALL"]:0x}')
+	print(f'  xxx3 x{d[ "time2vec" ]:02x} mn={mn}')
 
 			## max(bits(time2vec)) <= bits(d[ 'MAX_TIME_ALL' ])
-			## how many bytes do these counts fit?
+			## how many bytes are sufficient to represent
+			## nr. of 1 bits?
 	NRB = (MXB +255) // 256
 
-	MXB = (MXB +1) // 8             ## now in bytes
+	MXB = (MXB +7) // 8             ## now in bytes
 
 	MXB, NRB = MXB *8, NRB *8       ## back to bits
+	print(f'  xxx2 MXB={MXB} NRB={NRB}')
+	print(f'    xxx3  MN=x{(mn << (MXB +NRB)):010x}')
+	print(f'    xxx3  MX=x{(d["max_time"] << NRB):010x}')
 
-	return (mn << (MXB +NRB)) | (d[ 'max_time' ] << NRB) | nrbits
+	rv = (mn << (MXB +NRB)) | (d[ 'max_time' ] << NRB) | nrbits
+
+	print(f'    xxx3     x{ rv :010x}')
+	return rv
 
 
 ##--------------------------------------
@@ -1148,7 +1169,8 @@ def pack_and_route(deliveries, aux, bases, plan=[]):
 		print(f"  t=x{ d[ 'time2vec' ] :0x} [{ pathtools.bitcount(d['time2vec']) }]")
 		print(f"  n=x{ d[ 'min_time' ] :0x}")
 		print(f"  x=x{ d[ 'max_time' ] :0x}")
-		print("  " +timevec2utilstr(d['time2vec'], maxu))
+		print("  " +timevec2utilstr(d['time2vec'], maxu, sepr='',
+		                            unitcols=1))
 		print('')
 
 	yield([ 'pack-and-route schedule placeholder' ])
