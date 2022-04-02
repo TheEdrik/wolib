@@ -1182,9 +1182,10 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 		addtimes, vectimes = [], []
 
 		for t in vrefill[v]:
+			tvec = times2vec(t)[0]
 			try:
 				addtimes.append(t)
-				vectimes.append(times2vec(t))
+				vectimes.append(tvec)
 			except:
 				raise ValueError(f"bad refill window '{t}'")
 
