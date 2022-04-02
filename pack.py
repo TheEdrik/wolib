@@ -48,6 +48,16 @@
 ##            writing results is opportunistic, ignoring sending errors
 ##   BASE=X,Y[:X,Y...]
 ##            list of start/refill locations
+##   VREFILL=[V.ID1]=[...time spec...][:V.ID2=[...time spec...]...]
+##            vehicle refills.  Vehicle ID1 must be refilled in given time
+##            window/s; Vehicle ID2 in other windows etc.
+##            Multiple windows MAY repeat for the same vehicle; these imply
+##            different refill windows; example with two distinct refills:
+##              V.ID1=1200-1300,1400-1500  1st shift ends 1200-1300 OR 1400-1500
+##              V.ID1=1600-1730            2nd shift ends 1600-1730
+##            These are different program points, each possibly with multiple
+##            feasible completion windows.
+##            Vehicle IDs MUST be all-numeric.
 ##
 ## diagnostics+test
 ##   RNTIME    randomize time for each delivery
@@ -196,7 +206,7 @@ def str2num(val):
 ## does not raise exceptions
 ##
 def env2num(key, default=None, expect_float=False):
-	n = None
+	n = default
 	if key in os.environ:
 		n = os.getenv(key)
 		n = str2float(n)  if expect_float  else str2num(n)
@@ -666,7 +676,7 @@ def table_read(fname, field=1, fmt='base'):
 					## any conversion etc. would come here
 
 			aux.append({
-				'time':     f[4],
+				'time':     f[4],            ## original string
 				'time2vec': t,
 				'index':    fi,
 				'min_time': mint,
@@ -1088,6 +1098,21 @@ def del_timesort(d):
 ##
 def distances(dels, idx=True):
 	if idx:
+		arr = [0] * len(dels)
+		arr = list(arr for r in range(len(arr)))
+
+		for src in range(len(dels)):
+
+			xs, ys = dels[src]['x'], dels[src]['y']
+			for dst in range(len(dels)):
+				if src == dst:
+					continue
+
+				xd, yd = dels[dst]['x'], dels[dst]['y']
+				print('xxx', src, dst, xs, xd)
+
+				arr[ dst ][ src ] = 1
+				arr[ src ][ dst ] = 2
 		return []
 	return []
 
@@ -1101,7 +1126,7 @@ def distances(dels, idx=True):
 ##
 ## 'unitcols' specifices number of columns per unit
 ##
-def timevec2utilstr(timevec, maxunits, unitcols=3, sepr=' ', sepr2=0):
+def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 	used, transf, empty = '#', '|', '-'
 	used, transf, empty = used *unitcols, transf *unitcols, empty *unitcols
 
@@ -1116,10 +1141,10 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sepr=' ', sepr2=0):
 			arr.append(empty)
 
 			## collate every N columns (TODO)
-	if sepr2:
+	if sep2:
 		pass
 
-	return sepr.join(arr)
+	return sep.join(arr)
 
 
 ##--------------------------------------
@@ -1127,43 +1152,68 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sepr=' ', sepr2=0):
 ## enumerate possible base-start times and reachable schedules
 ##
 ## 'aux' and 'bases' must have been initialized, not empty
-## MODIFIES AUX
+## 'vehicles' is list of initial vehicle positions, 'None' for not-yet-defined
 ##
 ## iterator: keeps returning improving schedules
 ##
 ## creates new plan with [] (default)
 ## perturbs existing one if passed non-[]
 ##
-def pack_and_route(deliveries, aux, bases, plan=[]):
-	sched = []
+def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
+	sched, refills = [], {}
 
 	if len(deliveries) != len(aux):
 		raise ValueError("inconsistent delivery+aux data")
 	if not aux:
 		raise ValueError("aux.data is uninitialized")
 
-			## time vector: all scheduled delivery windows
-
+				## time vector: all scheduled delivery windows
 	alltime_v = 0
 	for d in aux:
 		alltime_v |= d[ 'time2vec' ]
 
+			## map
+	for v in vrefill:
+		if not v in refills:
+			refills[v] = {
+				'times':   [],
+				'timevec': [],
+			}
+		addtimes, vectimes = [], []
+
+		for t in vrefill[v]:
+			try:
+				addtimes.append(t)
+				vectimes.append(times2vec(t))
+			except:
+				raise ValueError(f"bad refill window '{t}'")
+
+		refills[v][ 'times'   ].extend(addtimes)
+		refills[v][ 'timevec' ].extend(vectimes)
+	print('xxx', refills)
+
+
 			## ideally, this should be from table or query
-	dist = distances(deliveries)
+	dist = distances(aux)
 
 			## all entries, replicated from aux, increasing urgency
 			##
 	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
 	for d in dlist:
 		maxu = pathtools.bitcount(d[ 'MAX_TIME_ALL' ])
+		idx  = d[ 'index' ]
 
-		print(f'x{ del_timesort(d) :0x}')
-		print(f"  t=x{ d[ 'time2vec' ] :0x} [{ pathtools.bitcount(d['time2vec']) }] "+
-		      f" 1={ pathtools.popcount( d[ 'time2vec' ])}")
-		print(f"  n=x{ d[ 'min_time' ] :0x}")
-		print(f"  x=x{ d[ 'max_time' ] :0x}")
-		print("  " +timevec2utilstr(d['time2vec'], maxu, sepr='',
-		                            unitcols=1))
+		if d['time2vec'] == 0:
+			continue
+
+		print(f"## T={ d['time'] }  [t.vec=x{ d['time2vec'] :0x}]")
+		print("##  TW=" +timevec2utilstr(d['time2vec'], maxu, sep='',
+		                               unitcols=1))
+#		print(f'x{ del_timesort(d) :0x}')
+#		print(f"  t=x{ d[ 'time2vec' ] :0x} [{ pathtools.bitcount(d['time2vec']) }] "+
+#		      f" 1={ pathtools.popcount( d[ 'time2vec' ])}")
+#		print(f"  n=x{ d[ 'min_time' ] :0x}")
+#		print(f"  x=x{ d[ 'max_time' ] :0x}")
 		print('')
 
 	yield([ 'pack-and-route schedule placeholder' ])
@@ -1445,6 +1495,9 @@ if __name__ == '__main__':
 		if not bases:
 			terminate("invalid list of bases (" +
 			          f"{ os.environ[ 'BASE' ] })")
+
+	vehicles = [None] * env2num('VEHICLES', 1)
+
 ##---  /parameter-read code
 
 	sys.argv.pop(0)
@@ -1456,7 +1509,27 @@ if __name__ == '__main__':
 		sys.exit( table_partial2full(tbl) )
 
 	if bases and aux:
-		for sched in pack_and_route(tbl, aux, bases):
+				## TODO: hardwared vehicle/shift plans
+				## at least one vehicle with multiple windows
+		v = {
+			'V0': {			## refill windows for V0:
+				'1200-1300+1400-1500',
+				'1600-1700',
+			},
+
+			'V1': [
+				'1300-1500',
+				'1700-1830',
+			],
+
+			'V2': [
+				'1230-1430',
+				'1730-1900',
+			],
+		}
+
+		for sched in pack_and_route(tbl, aux, bases, vehicles,
+		                            vrefill=v):
 			print('TODO: schedule placeholder', sched)
 		sys.exit(0)
 
