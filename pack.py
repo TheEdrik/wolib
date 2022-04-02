@@ -1045,7 +1045,7 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 
 
 ##=====  pack-and-route  =====================================================
-## sort deliveries in order of urgency
+## sort deliveries in order of urgency; usable as .sort() key function
 ##   - earliest delivery time
 ##   - secondary: latest delivery time
 ##   - third: 
@@ -1059,8 +1059,6 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 def del_timesort(d):
 	"sort: key function for deliveries"
 
-	print('xxxr', d)
-
 				## MXB, NRB are bits of max-time, nr-of-slots
 				## fields, respectively
 				##
@@ -1068,9 +1066,7 @@ def del_timesort(d):
 				## fields become hex-value visible
 
 	mn, MXB = d[ 'min_time' ], pathtools.bitcount(d[ 'MAX_TIME_ALL' ])
-	nrbits = pathtools.bitcount(d[ 'time2vec' ])
-	print(f'  xxx1 MXB={MXB} ALL=x{d["MAX_TIME_ALL"]:0x}')
-	print(f'  xxx3 x{d[ "time2vec" ]:02x} mn={mn}')
+	nrbits = pathtools.popcount(d[ 'time2vec' ])
 
 			## max(bits(time2vec)) <= bits(d[ 'MAX_TIME_ALL' ])
 			## how many bytes are sufficient to represent
@@ -1080,13 +1076,9 @@ def del_timesort(d):
 	MXB = (MXB +7) // 8             ## now in bytes
 
 	MXB, NRB = MXB *8, NRB *8       ## back to bits
-	print(f'  xxx2 MXB={MXB} NRB={NRB}')
-	print(f'    xxx3  MN=x{(mn << (MXB +NRB)):010x}')
-	print(f'    xxx3  MX=x{(d["max_time"] << NRB):010x}')
 
 	rv = (mn << (MXB +NRB)) | (d[ 'max_time' ] << NRB) | nrbits
 
-	print(f'    xxx3     x{ rv :010x}')
 	return rv
 
 
@@ -1166,7 +1158,8 @@ def pack_and_route(deliveries, aux, bases, plan=[]):
 		maxu = pathtools.bitcount(d[ 'MAX_TIME_ALL' ])
 
 		print(f'x{ del_timesort(d) :0x}')
-		print(f"  t=x{ d[ 'time2vec' ] :0x} [{ pathtools.bitcount(d['time2vec']) }]")
+		print(f"  t=x{ d[ 'time2vec' ] :0x} [{ pathtools.bitcount(d['time2vec']) }] "+
+		      f" 1={ pathtools.popcount( d[ 'time2vec' ])}")
 		print(f"  n=x{ d[ 'min_time' ] :0x}")
 		print(f"  x=x{ d[ 'max_time' ] :0x}")
 		print("  " +timevec2utilstr(d['time2vec'], maxu, sepr='',

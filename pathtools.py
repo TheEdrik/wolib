@@ -154,3 +154,8 @@ def bitcount(w):
 		n += 1
 	return n
 
+
+##--------------------------------------
+def popcount(w):
+	return bin(w).count("1")
+
