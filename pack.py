@@ -599,6 +599,8 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##                  -- (to allow local key function eval, things like that)
 ##     'MIN_TIME_ALL': global min-time for all deliveries
 ##     'MAX_TIME_ALL': ... max-time ...
+##     'x': ...coordinate... (None if unknown)
+##     'y': ...coordinate...
 ##   }
 ## ]
 ##
@@ -654,12 +656,17 @@ def table_read(fname, field=1, fmt='base'):
 				sys.stderr.write("No delivery window:\n" +
 					f"    '{ f }'")
 
+			x, y = f[2], f[3]
+					## any conversion etc. would come here
+
 			aux.append({
 				'time':     f[4],
 				'time2vec': t,
 				'index':    fi,
 				'min_time': mint,
 				'max_time': maxt,
+				'x':        x,
+				'y':        y,
 			})
 				
 
@@ -1063,6 +1070,46 @@ def del_timesort(d):
 
 
 ##--------------------------------------
+## returns [ src.index ][ dest.index ] list of XY distances ('idx' True)
+## returns 
+##
+def distances(dels, idx=True):
+	if idx:
+		return []
+	return []
+
+
+##--------------------------------------
+## visualizes time bitmask
+## returns left-to-right time diagram
+##    ---  unused
+##    ###  used, travel (rounded up)
+##    |||  used, transfer (rounded up)
+##
+## 'unitcols' specifices number of columns per unit
+##
+def timevec2utilstr(timevec, maxunits, unitcols=3, sepr=' ', sepr2=0):
+	used, transf, empty = '#', '|', '-'
+	used, transf, empty = used *unitcols, transf *unitcols, empty *unitcols
+
+	arr = []
+	for t in range(maxunits):
+		if ((1 << t) & timevec):
+			if False:
+				arr.append(transf)
+			else:
+				arr.append(used)
+		else:
+			arr.append(empty)
+
+			## collate every N columns (TODO)
+	if sepr2:
+		pass
+
+	return sepr.join(arr)
+
+
+##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
 ##
@@ -1088,16 +1135,21 @@ def pack_and_route(deliveries, aux, bases, plan=[]):
 	for d in aux:
 		alltime_v |= d[ 'time2vec' ]
 
+			## ideally, this should be from table or query
+	dist = distances(deliveries)
+
 			## all entries, replicated from aux, increasing urgency
 			##
 	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
 	for d in dlist:
+		maxu = pathtools.bitcount(d[ 'MAX_TIME_ALL' ])
+
 		print(f'x{ del_timesort(d) :0x}')
 		print(f"  t=x{ d[ 'time2vec' ] :0x} [{ pathtools.bitcount(d['time2vec']) }]")
 		print(f"  n=x{ d[ 'min_time' ] :0x}")
 		print(f"  x=x{ d[ 'max_time' ] :0x}")
+		print("  " +timevec2utilstr(d['time2vec'], maxu))
 		print('')
-## RRR
 
 	yield([ 'pack-and-route schedule placeholder' ])
 
