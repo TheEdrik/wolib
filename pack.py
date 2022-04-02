@@ -54,7 +54,7 @@
 ##             if value > 2 characters, it is used as seed
 ##   RNCOORDS  add randomized, normalized, boundary-delimited random
 ##             delivery points.  Value of 'RNCOORDS' is boundary file:
-##      X Y    ## coordinate pairs, one per line
+##      X Y    ## coordinate pairs, one per line, in boundary order
 
 
 ##----------------------------------------------------------------------------
@@ -1201,7 +1201,6 @@ def table_partial2full(t, border=None):
 
 			coords.append([x, y])
 
-
 			## 1-based indexes may have skipped empty lines etc.
 			## len(t) may not be sufficient
 			##
@@ -1232,6 +1231,7 @@ def table_partial2full(t, border=None):
 ##--------------------------------------
 if __name__ == '__main__':
 ##---  TODO: factor out: parameter-read code
+
 	if 'FIELD' in os.environ:
 		if os.getenv('FIELD') == '2':
 			FIELD2 = True
