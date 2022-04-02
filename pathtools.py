@@ -142,3 +142,15 @@ def points_inside_polygon(border, n=1000):
 
 	return pts
 
+
+##--------------------------------------
+def bitcount(w):
+	n = 0
+	while (w >= (1 << 32)):
+		w >>= 32
+		n += 32
+	while (w > 0):
+		w >>= 1
+		n += 1
+	return n
+

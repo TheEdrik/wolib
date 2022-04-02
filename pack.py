@@ -95,7 +95,7 @@
 
 
 ##=====  nothing user-serviceable below  =====================================
-import csv, re, sys, os, operator, functools, itertools, time, json
+import csv, re, sys, os, operator, functools, itertools, time, json, copy
 import socket               ## best-result reporting; ignores all write errors
 import random               ## devel only
 import pathtools
@@ -300,7 +300,13 @@ def table_cmp(n, m):
 ## modifies aux in-place, adding entries
 ##
 def aux2plus(aux):
-	pass
+			## deliveries lacking delivery window have min.time=0
+	mn = min(a[ 'min_time' ] for a in aux  if a[ 'min_time' ])
+	mx = max(a[ 'max_time' ] for a in aux)
+
+	for a in aux:
+		a[ 'MIN_TIME_ALL' ] = mn
+		a[ 'MAX_TIME_ALL' ] = mx
 
 
 ##--------------------------------------
@@ -566,9 +572,10 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ## field '2' swaps primary/secondary columns (compared to file original)
 ## first two columns MUST be all-numeric; checks for at least three columns
 ##
-## autodetects basic/extended input; returns auxiliary data as:
+## autodetects basic/extended input; returns List Auxiliary Data as:
 ## [
 ##   {
+##     'index':    ...original index in input...,
 ##     'time':     '0845-0945+1015-1115',
 ##     'time2vec': 0x1e78,
 ##                  --        0001'1110'0111'1000
@@ -587,6 +594,11 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##     'max_time': 0x1000,
 ##                  -- LS, MS bit in bitmask
 ##                  -- used for fast 'X must happen before Y' comparisons
+##
+##                  -- globals replicated to each record
+##                  -- (to allow local key function eval, things like that)
+##     'MIN_TIME_ALL': global min-time for all deliveries
+##     'MAX_TIME_ALL': ... max-time ...
 ##   }
 ## ]
 ##
@@ -637,6 +649,11 @@ def table_read(fname, field=1, fmt='base'):
 
 		if (itype == 'extended'):
 			t, mint, maxt = times2vec(f[4])
+
+			if (mint == 0):
+				sys.stderr.write("No delivery window:\n" +
+					f"    '{ f }'")
+
 			aux.append({
 				'time':     f[4],
 				'time2vec': t,
@@ -644,6 +661,7 @@ def table_read(fname, field=1, fmt='base'):
 				'min_time': mint,
 				'max_time': maxt,
 			})
+				
 
 	res = sorted(res, key=functools.cmp_to_key(table_cmp))
 
@@ -1014,10 +1032,42 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 
 
 ##=====  pack-and-route  =====================================================
+## sort deliveries in order of urgency
+##   - earliest delivery time
+##   - secondary: latest delivery time
+##   - third: increasing order of possible delivery slots (15m in example)
+##
+## see 'List Auxiliary Data' for input structure
+##
+## construct (min.time << N) | (max.time) with sufficient field width
+## for fields not to overlap.
+##
+def del_timesort(d):
+	"sort: key function for deliveries"
+
+			## MXB, NRB are bits of max-time, nr-of-slots
+			## fields, respectively
+
+	mn, MXB = d[ 'min_time' ], pathtools.bitcount(d[ 'MAX_TIME_ALL' ])
+	nrbits = pathtools.bitcount(d[ 'time2vec' ])
+
+			## max(bits(time2vec)) <= bits(d[ 'MAX_TIME_ALL' ])
+			## how many bytes do these counts fit?
+	NRB = (MXB +255) // 256
+
+	MXB = (MXB +1) // 8             ## now in bytes
+
+	MXB, NRB = MXB *8, NRB *8       ## back to bits
+
+	return (mn << (MXB +NRB)) | (d[ 'max_time' ] << NRB) | nrbits
+
+
+##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
 ##
 ## 'aux' and 'bases' must have been initialized, not empty
+## MODIFIES AUX
 ##
 ## iterator: keeps returning improving schedules
 ##
@@ -1037,7 +1087,17 @@ def pack_and_route(deliveries, aux, bases, plan=[]):
 	alltime_v = 0
 	for d in aux:
 		alltime_v |= d[ 'time2vec' ]
-## TODO: all-OR (standard aggregator function)
+
+			## all entries, replicated from aux, increasing urgency
+			##
+	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
+	for d in dlist:
+		print(f'x{ del_timesort(d) :0x}')
+		print(f"  t=x{ d[ 'time2vec' ] :0x} [{ pathtools.bitcount(d['time2vec']) }]")
+		print(f"  n=x{ d[ 'min_time' ] :0x}")
+		print(f"  x=x{ d[ 'max_time' ] :0x}")
+		print('')
+## RRR
 
 	yield([ 'pack-and-route schedule placeholder' ])
 
