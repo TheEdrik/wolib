@@ -136,6 +136,9 @@ CRLF   = b'\n\r'     ## telnet official separator
 COMM   = b'#'        ## prefix for commented log results
 
 vTIME_UNDEF = 9E9    ## value for time vector meaning 'undefined' (=too high)
+vTIME_DELIVER_MIN = 15    ## how many minutes to budget for one delivery
+vAVG_MIN_PER_KM   =  2    ## fallback for average-speed calculation
+## TODO: needs map scale
 
 
 ##--------------------------------------
@@ -759,9 +762,12 @@ def best_fit_decreasing(tbl, max_elems=0):
 ## unambiguous string representation of index tuples
 ## (used to cache sums of lengths etc., skipping floats)
 ##
+## separator not expected to interfere with CSV (excludes ","),
+## un/signed numbers (excludes "-" and "+")
+##
 def tuple2idxstring(tuple):
 	"itertools....-returned tuple to dict-index-ready string form"
-	return "-".join(str(t) for t in tuple)
+	return ":".join(str(t) for t in tuple)
 
 
 ##--------------------------------------
@@ -1095,41 +1101,88 @@ def del_timesort(d):
 
 
 ##--------------------------------------
-## returns [ src.index ][ dest.index ] list of XY distances ('idx' True)
+## TODO: consolidate to a single representation, then remove/inline
+##
+def xy2dist(x, y, x0, y0, wgt=1.0):
+	d = (x - x0) ** 2 + (y - y0) ** 2
+	d = math.sqrt(d)
+
+	return d * wgt
+
+
+##--------------------------------------
+def xy2time(x, y, x0, y0, wgt=1.0, start_minutes=None):
+	d = xy2dist(float(x), float(y), float(x0), float(y0))
+
+			## crude avg. speed
+## TODO: ASSUMES CONSTANT SPEED
+## TODO: NEED MAP SCALE
+
+	return vAVG_MIN_PER_KM * (d * 20)
+
+
+##--------------------------------------
+## returns [ src.index ][ dest.index ] list of XY distances
+## bases are appended after delivery points
+##
 ## sets string-indexed values to 'xys' if non-None
 ##
 ## x0, x1, ... are string variables; xs/xd are source/dest numeric values
 ##
-def distances(dels, wgt=1.0, xys=None, idx=True):
-	if idx:
-		arr = [0] * len(dels)
-		arr = list(arr for r in range(len(arr)))
+def distances(deliveries, bases, wgt=1.0, xys=None, idx=True):
+	points = deliveries[:]
+	for b in bases:
+		points.append({             ## force floats to canonical string
+			'x': str(b[0]),
+			'y': str(b[1]),
+		})
 
-		for src in range(len(dels)):
-			x0, y0 = float(dels[src]['x']), float(dels[src]['y']) 
-			xs, ys = float(x0), float(y0)
+	arr = [0] * len(points)
+	arr = list(arr for r in range(len(arr)))
 
-			for dst in range(len(dels)):
-				if src == dst:
-					continue
+	for si, src in enumerate(points):
+		x0, y0 = float(src['x']), float(src['y']) 
+		xs, ys = float(x0), float(y0)
 
-				x1 = float(dels[dst]['x'])
-				y1 = float(dels[dst]['y'])
-				xd, yd = float(x1), float(y1)
+		for di, dst in enumerate(points):
+			if si == di:
+				continue
 
-				d = (xd - xs) ** 2 + (yd - ys) ** 2
-				d = math.sqrt(d)
-				d *= wgt
+			x1, y1 = float(dst['x']), float(dst['y'])
+			xd, yd = float(x1), float(y1)
 
-				arr[ dst ][ src ] = d
-				arr[ src ][ dst ] = d
+			d = xy2dist(xd, yd, xs, ys, wgt=wgt)
 
-				if xys:
-					si = tuple2idxstring(x0, y0)
-					di = tuple2idxstring(x1, y1)
-					xys[ si ][ di ] = d
-					xys[ di ][ si ] = d
+			arr[ di ][ si ] = d
+			arr[ si ][ di ] = d
+
+			if xys != None:
+					## single index combining X+Y
+				sxy = tuple2idxstring([x0, y0])
+				dxy = tuple2idxstring([x1, y1])
+
+					## TODO: check dict/default value
+					## Python-version compatibility
+					##
+				if not sxy in xys:
+					xys[ sxy ] = {}
+				xys[ sxy ][ dxy ] = d
+					##
+				if not dxy in xys:
+					xys[ dxy ] = {}
+				xys[ dxy ][ sxy ] = d
 	return arr
+
+
+##--------------------------------------
+## earliest unit of time vector
+## 0 if vector is empty
+##
+def timevec2asap(t):
+	if t == 0:
+		return 0
+	return (t ^ (t & (t - 1)))  if (t > 0)  else 0
+			## ... & (t-1) removes LS one bit
 
 
 ##--------------------------------------
@@ -1163,13 +1216,54 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 
 
 ##--------------------------------------
-## vehicle positions
+## Vehicle Positions
 ##
 ## 'V.ID': {
-##    'time_max': ...earliest arrival...
-##    'time_min': ...latest departure...
-##    'x': X coordinate,
-##    'y': Y coordinate,
+##    'time':     nominal departure time, 'HHMM'
+##    'tvec':     nominal earliest departure time, vector
+##  ##  'time_max': ...earliest arrival...    if defined
+##  ##  'time_min': ...latest departure...    if defined
+##    'x':        X coordinate, current
+##    'y':        Y coordinate, current
+##    'idx':      index of current point, if not None
+##
+##    'START.X':    X coordinate, start of deliveries
+##    'START.Y':    Y coordinate...
+##    'START.TIME': ...HHMM...
+## }
+
+
+##--------------------------------------
+## updates 'vehicles', routing vehicle 'v' to (x, y) with nominal arrival 't'
+##
+def vehicle2xy(vehicles, v, x, y, t):
+	"register moving a vehicle (v) to XY at time T"
+	if (not vehicles) or (not v in vehicles):
+		raise ValueError(f"unknown vehicle '{v}'")
+
+	had_prev_xy = ('x' in vehicles[v])
+
+	vehicles[v][ 'time' ] = t
+	vehicles[v][ 'tvec' ] = 0       ## XXX arrival2timewindow
+	vehicles[v][ 'x'    ] = x
+	vehicles[v][ 'y'    ] = y
+
+	if not had_prev_xy:
+		vehicles[v][ 'START.X'    ] = x
+		vehicles[v][ 'START.Y'    ] = y
+		vehicles[v][ 'START.TIME' ] = t         ## XXX
+## 'V.ID': {
+##    'time':     nominal departure time, 'HHMM'
+##    'tvec':     nominal earliest departure time, vector
+##  ##  'time_max': ...earliest arrival...    if defined
+##  ##  'time_min': ...latest departure...    if defined
+##    'x':        X coordinate, current
+##    'y':        Y coordinate, current
+##    'idx':      index of current point, if not None
+##
+##    'START.X':    X coordinate, start of deliveries
+##    'START.Y':    Y coordinate...
+##    'START.TIME': ...HHMM...
 ## }
 
 
@@ -1215,6 +1309,48 @@ def vehiclerefills(vrefill):
 
 
 ##--------------------------------------
+## calculate back start time at (x0, y0) which reaches (x, y) by 'time'
+##
+def initial_delivery2starttime(x, y, timevec, x0, y0):
+	return '0000'
+
+
+##--------------------------------------
+## return vehicles which can reach (x, y) suitable for timevec from
+## their current position
+##   - returns [vehicle: [distance, time window of possible arrival]]
+##   - sort hits earliest to latest
+##
+## 'vehicles' is Vehicle Positions
+## 'dists' is index/XY-to-index/XY distance lookup table
+##
+## uses string-indexed distances' table
+##
+def vehicle_may_reach(x, y, timevec, vehicles, dists):
+	res = {}
+
+	for vi, v in enumerate(vehicles):
+		print('xxx.v=', vi, vehicles[v])
+		if not 'x' in v:
+			t = timevec2asap(timevec)
+			print(f'xxx t=x{t:0x}')
+			res[ v ] = [0.0, timevec]
+			                       ## 'immediate start' placeholder
+			continue               ## assume vehicle start changed
+			                       ## to accommodate delivery
+
+		x0, y0 = float(vehicles[v]['x']), float(vehicles[v]['y'])
+		si = tuple2idxstring([x0, y0])
+		di = tuple2idxstring([vehicles[v]['x'], vehicles[v]['y']])
+
+		d = xy2time(float(x), float(y), float(x0), float(y0))
+		print('xxx.d=', d)
+		continue
+
+	return list(sorted(res.keys()))
+
+
+##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
 ##
@@ -1227,7 +1363,7 @@ def vehiclerefills(vrefill):
 ## perturbs existing one if passed non-[]
 ##
 def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
-	sched, vpos = [], {}
+	sched, vpos, decisions = [], {}, []
 				## vpos is vehicle positions, if already known
 
 	if len(deliveries) != len(aux):
@@ -1241,10 +1377,23 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 		alltime_v |= d[ 'time2vec' ]
 
 	refills = vehiclerefills(vrefill)
+	vlist   = sorted(refills.keys())                ## list of vehicles/IDs
+
+	vpos = {}
+	for v in vlist:
+		if not v in vpos:
+			vpos[v] = {}
+	for v in refills:
+		if not v in vpos:
+			vpos[v] = {}
+	## initial vehicle list
 
 
+			## calculate all distances between delivery
+			## points and bases
 			## ideally, this should be from table or query
-	dist = distances(aux)
+	xy2dist = {}
+	dist    = distances(aux, bases, xys=xy2dist)
 
 			## all entries, replicated from aux, increasing urgency
 			##
@@ -1253,13 +1402,29 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 		maxu = pathtools.bitcount(d[ 'MAX_TIME_ALL' ])
 		idx  = d[ 'index' ]
 
-		if d['time2vec'] == 0:
+		tvec, x, y = d['time2vec'], d['x'], d['y']
+		if tvec == 0:
 			continue
 
-		print(f"## T={ d['time'] }  [t.vec=x{ d['time2vec'] :0x}]")
-		print("##  TW=" +timevec2utilstr(d['time2vec'], maxu, sep='',
-		                               unitcols=1))
+		print(f"## T={ d['time'] }  [t.vec=x{ tvec :0x}]")
+		print("##  TW=" +timevec2utilstr(tvec, maxu, sep='',
+		                                 unitcols=1))
 		print('')
+		print('RRR', x, y)
+
+					## filter vehicles which may reach
+					## the suitable deliverxy2dist windows
+		vs = vehicle_may_reach(x, y, tvec, vpos, xy2dist)
+		if vs == []:
+			raise ValueError("no suitable delivery")
+					## -> backtrack
+
+					## route first vehicle here
+		print('xxxv', vpos)
+		vehicle2xy(vpos, vs[0], x, y, tvec)
+		print('xxxv2', vs[0], vpos)
+		print('')
+
 
 	yield([ 'pack-and-route schedule placeholder' ])
 
