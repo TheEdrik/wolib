@@ -1495,6 +1495,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 		for tvec in sorted(refills[v][ 'timevec' ]):
 			print(f"## FILL[{v}]=" +timevec2utilstr(tvec,
 			                        maxu, sep='', unitcols=1))
+	print()
 
 			## calculate all distances between delivery
 			## points and bases
@@ -1502,8 +1503,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 	xy2dist = {}
 	dist    = distances(aux, bases, xys=xy2dist)
 
-			## all entries, replicated from aux, increasing urgency
-			##
+				## all entries, replicated from aux
+				## sorted in increasing urgency order
+				##
 	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
 	for d in dlist:
 		idx  = d[ 'index' ]
@@ -1512,10 +1514,10 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 		if tvec == 0:
 			continue
 
+		print(f"##   DELIVERY={ len(place) +1 }/{ len(dlist) }")
 		print(f"## T={ d['time'] }  [t.vec=x{ tvec :0x}]")
 		print("##   TW=" +timevec2utilstr(tvec, maxu, sep='',
 		                                 unitcols=1))
-		print(f"##   DELIVERY={ len(place) +1 }/{ len(dlist) }")
 
 					## filter vehicles which may reach
 					## the suitable deliverxy2dist windows
@@ -1552,9 +1554,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 
 		print("##  del=" +timevec2utilstr(minute2timevec(arrival),
 		                                  maxu, sep='', unitcols=1))
-		print('XXX.VS', vid_picked, arrival)
-
-		print('XXX.ADD', primary, secondary)
+		print(f'## DEL { vid_picked } at { arrival }')
+		print(f'## ADD { vid_picked } {primary} sec={secondary}')
 		vehicle2xy(vpos, vid_picked, arrival, d)
 		print('')
 		place.append([ vs[0], [], ])
@@ -1864,8 +1865,9 @@ if __name__ == '__main__':
 			],
 
 			'V2': [
-				'1230-1430',
+				'1300-1415',
 				'1730-1900',
+				'0945-1030',
 			],
 		}
 
