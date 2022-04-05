@@ -332,6 +332,8 @@ def aux2plus(aux):
 ## maps HHMM-HHMM[+...] strings to bitvector, with each bit corresponding
 ## to 'twindow' minutes
 ##
+## returns [ vector, min.bit(vector), max.bit(vector), ]
+##
 ## vector sets x80 for bit corresponding to 'base..base+twindow', x40
 ##    for base+twindow..base+twindow*2 etc.
 ##
@@ -371,7 +373,11 @@ def times2vec(tstr, base=800, twindow=15):
 		eh, em = int(e[:-2]), int(e[-2:])
 
 		if (sh < bh):
-			raise ValueError(f"delivery in the past ({w})")
+					## 0000-2400, 'any suitable time'
+			if (sm == sh == sm == 0) and (eh == 24):
+				pass ## RRR: deal with optional deliveries
+			else:
+				raise ValueError(f"delivery in the past ({w})")
 
 		if (sm > 59) or (em > 59):
 			raise ValueError(f"times out of range ({w})")
@@ -629,6 +635,8 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##     'y': ...coordinate...
 ##     'seen': '1240',          -- if set and non-empty, delivery time
 ##     'svec': x40000,          -- time vector form of 'seen', if non-empty
+##     'optional': ...          -- is it OK to skip this delivery?
+##                              -- low-priority, 'deliver if possible today'
 ##   }
 ## ]
 ##
@@ -698,6 +706,8 @@ def table_read(fname, field=1, fmt='base'):
 				'x':        x,
 				'y':        y,
 			})
+			if False:
+				aux[-1][ 'optional' ] = True
 
 	res = sorted(res, key=functools.cmp_to_key(table_cmp))
 
