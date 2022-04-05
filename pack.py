@@ -135,10 +135,14 @@ TARGET = None        ## set to [ host, port ] if env specifies it
 CRLF   = b'\n\r'     ## telnet official separator
 COMM   = b'#'        ## prefix for commented log results
 
-vTIME_UNDEF = 9E9    ## value for time vector meaning 'undefined' (=too high)
+vTIME_UNIT_MINS = 15   ## how many minutes are in one time-vector unit
+vTIME_UNDEF = 9E9      ## value for time vector meaning 'undefined' (=too high)
 vTIME_DELIVER_MIN = 15    ## how many minutes to budget for one delivery
 vAVG_MIN_PER_KM   =  2    ## fallback for average-speed calculation
 ## TODO: needs map scale
+
+vHR_MAX = 18     ## max(schedule delivery), hours HH00
+vHR_MIN =  8     ## min(schedule delivery), hours HH00
 
 
 ##--------------------------------------
@@ -595,7 +599,10 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ## [
 ##   {
 ##     'index':    ...original index in input...,
+##     'primary':  ...primary parameter...
+##     'secondary':  ...secondary parameter...
 ##     'time':     '0845-0945+1015-1115',
+##     'minutes':  actual arrival, 0-based minutes from vHR_MIN:00
 ##     'time2vec': 0x1e78,
 ##                  --        0001'1110'0111'1000
 ##                  --             ^ ^  ^  ^  ^ ^
@@ -681,6 +688,8 @@ def table_read(fname, field=1, fmt='base'):
 					## any conversion etc. would come here
 
 			aux.append({
+				'primary':   fd1,
+				'secondary': fd2,
 				'time':     f[4],            ## original string
 				'time2vec': t,
 				'index':    fi,
@@ -689,7 +698,6 @@ def table_read(fname, field=1, fmt='base'):
 				'x':        x,
 				'y':        y,
 			})
-				
 
 	res = sorted(res, key=functools.cmp_to_key(table_cmp))
 
@@ -1175,13 +1183,48 @@ def distances(deliveries, bases, wgt=1.0, xys=None, idx=True):
 
 
 ##--------------------------------------
-## earliest unit of time vector
+def minute2timevec(m):
+	"0-based minutes, relative to start, to timevector/bitmask"
+	return 1 << (m // vTIME_UNIT_MINS)
+
+
+##--------------------------------------
+def minute2wall(m):
+	"0-based minutes to 24-hour wall-clock time [string]"
+	m += vHR_MIN * 60
+
+	return f"{ m //60 :02}{ m %60 :02}"
+
+
+##--------------------------------------
+def minute2vecbefore(m):
+	return minute2timevec(m) -1
+
+
+##--------------------------------------
+def timevec2after(t, maxunits):
+	"bitmask: all units strictly after all max(units(t))"
+
+	return ((1 << maxunits) -1) - ((1 << pathtools.bitcount(t)) -1)
+
+
+##--------------------------------------
+## earliest unit/minute of time vector
 ## 0 if vector is empty
 ##
-def timevec2asap(t):
+## returns minutes relative to vHR_MIN with True 'minutes', rounded
+## to LS point of time vector (so x1 -> minutes=0, x10 -> minutes=60)
+##
+def timevec2asap(t, minutes=False):
 	if t == 0:
 		return 0
-	return (t ^ (t & (t - 1)))  if (t > 0)  else 0
+
+	lsb = t ^ (t & (t - 1))
+
+	if minutes:
+		return vTIME_UNIT_MINS * (pathtools.bitcount(lsb) -1)
+
+	return lsb
 			## ... & (t-1) removes LS one bit
 
 
@@ -1226,32 +1269,67 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##    'x':        X coordinate, current
 ##    'y':        Y coordinate, current
 ##    'idx':      index of current point, if not None
+##    'refills':  chronologically increasing list of refill time vectors
 ##
 ##    'START.X':    X coordinate, start of deliveries
 ##    'START.Y':    Y coordinate...
-##    'START.TIME': ...HHMM...
+##    'START.MINS': 0-based minute
 ## }
 
 
 ##--------------------------------------
-## updates 'vehicles', routing vehicle 'v' to (x, y) with nominal arrival 't'
+## TODO: Python version-portable automatic values
+def vehicle2primary(vehicle):
+	return  vehicle[ 'primary' ]  if ('primary' in vehicle)  else 0
+
+
+##--------------------------------------
+## TODO: Python version-portable automatic values
+def vehicle2secondary(vehicle):
+	return  vehicle[ 'secondary' ]  if ('secondary' in vehicle)  else 0
+
+
+##--------------------------------------
+## updates 'vehicles', routing vehicle 'v' to (x, y) with
+## nominal arrival 't' (minutes)
+## notes time of _arrival_ at position
 ##
-def vehicle2xy(vehicles, v, x, y, t):
+def vehicle2xy(vehicles, v, minutes, delivery):
 	"register moving a vehicle (v) to XY at time T"
 	if (not vehicles) or (not v in vehicles):
 		raise ValueError(f"unknown vehicle '{v}'")
 
+	x, y = delivery['x'], delivery['y']
+
+	vehicle_from = ''
+	if ('x' in vehicles[v]) and (vehicles[v]['x'] != None):
+		vehicle_from =  f'from X={ vehicles[v]["x"] }'
+		vehicle_from += f',Y={ vehicles[v]["y"] }'
+
 	had_prev_xy = ('x' in vehicles[v])
 
-	vehicles[v][ 'time' ] = t
-	vehicles[v][ 'tvec' ] = 0       ## XXX arrival2timewindow
-	vehicles[v][ 'x'    ] = x
-	vehicles[v][ 'y'    ] = y
+	vehicles[v][ 'minutes' ] = minutes
+	vehicles[v][ 'tvec'    ] = minute2timevec(minutes)
+	vehicles[v][ 'x'       ] = x
+	vehicles[v][ 'y'       ] = y
+
+	vehicles[v][ 'primary' ] = vehicle2primary(vehicles[v]) + \
+					delivery[ 'primary' ]
+	vehicles[v][ 'secondary' ] = vehicle2secondary(vehicles[v]) + \
+					delivery[ 'secondary' ]
+		##
+		## assertion: no overruns
+
+	print(f'## STOP[{v}]={ minute2wall(minutes) } X={x},Y={y} ' +
+	      f'{ vehicle_from }[idx={ delivery["index"] }] +' +
+	      f'{ delivery[ "primary" ] }')
+	print(f'## LOAD.TOTAL[{v}]={ vehicles[v][ "primary" ] }')
 
 	if not had_prev_xy:
 		vehicles[v][ 'START.X'    ] = x
 		vehicles[v][ 'START.Y'    ] = y
-		vehicles[v][ 'START.TIME' ] = t         ## XXX
+		vehicles[v][ 'START.MINS' ] = minutes
+
 ## 'V.ID': {
 ##    'time':     nominal departure time, 'HHMM'
 ##    'tvec':     nominal earliest departure time, vector
@@ -1260,6 +1338,8 @@ def vehicle2xy(vehicles, v, x, y, t):
 ##    'x':        X coordinate, current
 ##    'y':        Y coordinate, current
 ##    'idx':      index of current point, if not None
+##    'primary':   sum of primary fields in already scheduled deliveries
+##    'secondary':     ...secondary fields...
 ##
 ##    'START.X':    X coordinate, start of deliveries
 ##    'START.Y':    Y coordinate...
@@ -1318,7 +1398,7 @@ def initial_delivery2starttime(x, y, timevec, x0, y0):
 ##--------------------------------------
 ## return vehicles which can reach (x, y) suitable for timevec from
 ## their current position
-##   - returns [vehicle: [distance, time window of possible arrival]]
+##   - returns [vehicle, distance, ASAP arrival, timevec of possible arrival]
 ##   - sort hits earliest to latest
 ##
 ## 'vehicles' is Vehicle Positions
@@ -1327,27 +1407,47 @@ def initial_delivery2starttime(x, y, timevec, x0, y0):
 ## uses string-indexed distances' table
 ##
 def vehicle_may_reach(x, y, timevec, vehicles, dists):
-	res = {}
+	res   = []
+	maxtb = pathtools.bitcount(timevec)
 
 	for vi, v in enumerate(vehicles):
-		print('xxx.v=', vi, vehicles[v])
-		if not 'x' in v:
-			t = timevec2asap(timevec)
-			print(f'xxx t=x{t:0x}')
-			res[ v ] = [0.0, timevec]
+		if (not 'x' in vehicles[v]) or (not 'minutes' in vehicles[v]):
+			t = timevec2asap(timevec, minutes=True)
+			res.append([ v, 0.0, t, timevec, ])
 			                       ## 'immediate start' placeholder
-			continue               ## assume vehicle start changed
-			                       ## to accommodate delivery
+			continue               ## assume vehicle start
+			                       ## updated later to
+			                       ## accommodate delivery
 
 		x0, y0 = float(vehicles[v]['x']), float(vehicles[v]['y'])
-		si = tuple2idxstring([x0, y0])
-		di = tuple2idxstring([vehicles[v]['x'], vehicles[v]['y']])
+##		si = tuple2idxstring([x0, y0])
+##		di = tuple2idxstring([vehicles[v]['x'], vehicles[v]['y']])
+		dt = xy2time(float(x), float(y), float(x0), float(y0))
 
-		d = xy2time(float(x), float(y), float(x0), float(y0))
-		print('xxx.d=', d)
+				## current v[...] time excludes delivery
+				## time; account for it now
+		dt = round(dt + vTIME_DELIVER_MIN)
+
+				## does arrival time fit within delivery
+				## window at all?
+		wt = minute2timevec(dt)
+		aw = wt | timevec2after(wt, maxtb)
+				## arrival window: <= arrival <= end(timevec)
+		aw &= timevec
+		if aw == 0:
+			continue                ## can not reach in time
+
+		t = timevec2asap(aw, minutes=True)
+
+		dist = xy2dist(float(x), float(y), float(x0), float(y0))
+
+		res.append([ v, dist, t, wt, ])
 		continue
+		print('')
+						## sort by ASAP arrival
+	res.sort(key=operator.itemgetter(2))
 
-	return list(sorted(res.keys()))
+	return res
 
 
 ##--------------------------------------
@@ -1363,7 +1463,8 @@ def vehicle_may_reach(x, y, timevec, vehicles, dists):
 ## perturbs existing one if passed non-[]
 ##
 def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
-	sched, vpos, decisions = [], {}, []
+	sched, place, vpos, decisions = [], [], {}, []
+	minutes_now = 0
 				## vpos is vehicle positions, if already known
 
 	if len(deliveries) != len(aux):
@@ -1388,6 +1489,12 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 			vpos[v] = {}
 	## initial vehicle list
 
+	maxu = max(pathtools.bitcount(d[ 'MAX_TIME_ALL' ])  for d in aux)
+
+	for v in sorted(refills.keys()):
+		for tvec in sorted(refills[v][ 'timevec' ]):
+			print(f"## FILL[{v}]=" +timevec2utilstr(tvec,
+			                        maxu, sep='', unitcols=1))
 
 			## calculate all distances between delivery
 			## points and bases
@@ -1399,7 +1506,6 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 			##
 	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
 	for d in dlist:
-		maxu = pathtools.bitcount(d[ 'MAX_TIME_ALL' ])
 		idx  = d[ 'index' ]
 
 		tvec, x, y = d['time2vec'], d['x'], d['y']
@@ -1407,10 +1513,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 			continue
 
 		print(f"## T={ d['time'] }  [t.vec=x{ tvec :0x}]")
-		print("##  TW=" +timevec2utilstr(tvec, maxu, sep='',
+		print("##   TW=" +timevec2utilstr(tvec, maxu, sep='',
 		                                 unitcols=1))
-		print('')
-		print('RRR', x, y)
+		print(f"##   DELIVERY={ len(place) +1 }/{ len(dlist) }")
 
 					## filter vehicles which may reach
 					## the suitable deliverxy2dist windows
@@ -1419,12 +1524,41 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 			raise ValueError("no suitable delivery")
 					## -> backtrack
 
-					## route first vehicle here
-		print('xxxv', vpos)
-		vehicle2xy(vpos, vs[0], x, y, tvec)
-		print('xxxv2', vs[0], vpos)
-		print('')
+		primary, secondary = d['primary'], d['secondary']
+		vid_picked, arrival = None, vTIME_UNDEF
 
+		for v in vs:
+			vid = v[0]
+			v1  = vehicle2primary  (vpos[ vid ])
+			v2  = vehicle2secondary(vpos[ vid ])
+
+			if (primary +v1) > MAX1:
+				print(f"##   OVERLOAD[{ vid }]: " +
+				      f"{ primary + v1 }")
+				continue
+
+			if MAX2 and ((secondary +v2) > MAX2):
+				print(f"##   OVERLOAD.SECONDARY[{ vid }]: " +
+				      f"{ secondary + v2 }")
+				continue
+
+			if (vid_picked == None) or (v[2] < arrival):
+				print('xxx21', vid_picked, arrival)
+				vid_picked, arrival = vid, v[2]
+				print('xxx22', vid_picked, arrival)
+
+		if vid_picked == None:
+			raise ValueError("no suitable vehicle")
+
+		print("##  del=" +timevec2utilstr(minute2timevec(arrival),
+		                                  maxu, sep='', unitcols=1))
+		print('XXX.VS', vid_picked, arrival)
+
+		print('XXX.ADD', primary, secondary)
+		vehicle2xy(vpos, vid_picked, arrival, d)
+		print('')
+		place.append([ vs[0], [], ])
+				## TODO: remember alternatives
 
 	yield([ 'pack-and-route schedule placeholder' ])
 
@@ -1448,9 +1582,6 @@ tHRS2 = [
 	1, 1, 1,
 ]
 
-vHR_MAX = 18     ## max(schedule delivery), hours HH00
-vHR_MIN =  8     ## min(schedule delivery), hours HH00
-
 
 ##--------------------------------------
 def duration2start(t):
@@ -1460,7 +1591,7 @@ def duration2start(t):
 	if (t > vHR_MAX -vHR_MIN):
 		raise ValueError("delivery window too wide")
 
-			## 0800 to 2000, quantized to 15 minutes
+				## 0800 to 2000, quantized to 15 minutes
 
 	if (t == vHR_MAX -vHR_MIN):
 		return [ vHR_MIN, 0, ]
@@ -1493,7 +1624,7 @@ def delivery_times():
 	if random.randint(0, 1000) < 3:                             ## full day
 		res = [ [0, 2400] ]
 
-	elif random.randint(0, 100) < 50:                ## 1 in 20: two windows
+	elif random.randint(0, 100) < 50:               ## 1 in 20: two windows
 		t   = random.choice(tHRS2)
 		s   = duration2start(t)
 		res = [ [s[0], s[1]], [s[0] +t, s[1]], ]
@@ -1723,7 +1854,7 @@ if __name__ == '__main__':
 				## at least one vehicle with multiple windows
 		v = {
 			'V0': {			## refill windows for V0:
-				'1200-1300+1400-1500',
+				'1100-1200+1300-1400',
 				'1600-1700',
 			},
 
