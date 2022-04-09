@@ -1500,6 +1500,14 @@ def starttimes(dels, strategy=0):
 	for u in range(len(ulist)):           ## reuse loop var falling through
 		possible[u] = sum(d['units'][u]  for d in cds)
 
+				## start units for each delivery
+				## sorted by decreasing certain-or-possible
+				## utilization
+	for d in cds:
+		su = list(possible[ui]  if (d['units'][ui])  else 0
+		                        for ui, u in enumerate(d['units']))
+		print('xxx.s', su)
+
 	print('xxx', possible)
 
 
