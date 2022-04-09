@@ -138,7 +138,7 @@ COMM   = b'#'        ## prefix for commented log results
 vTIME_UNIT_MINS = 15   ## how many minutes are in one time-vector unit
 vTIME_UNDEF = 9E9      ## value for time vector meaning 'undefined' (=too high)
 vTIME_DELIVER_MIN = 15    ## how many minutes to budget for one delivery
-vAVG_MIN_PER_KM   =  2    ## fallback for average-speed calculation
+vAVG_MIN_PER_KM   =  5    ## fallback for average-speed calculation
 ## TODO: needs map scale
 
 vHR_MAX = 18     ## max(schedule delivery), hours HH00
@@ -375,7 +375,8 @@ def times2vec(tstr, base=800, twindow=15):
 		if (sh < bh):
 					## 0000-2400, 'any suitable time'
 			if (sm == sh == sm == 0) and (eh == 24):
-				pass ## RRR: deal with optional deliveries
+				continue
+					## RRR: deal with optional deliveries
 			else:
 				raise ValueError(f"delivery in the past ({w})")
 
@@ -402,6 +403,9 @@ def times2vec(tstr, base=800, twindow=15):
 
 	if minv == vTIME_UNDEF:
 		minv = 0
+
+	if maxv == 0:
+		return [ 0, 0, 0, ]
 
 	return vec, 1 << minv, 1 << (maxv -1)
 
@@ -629,11 +633,13 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##
 ##                  -- globals replicated to each record
 ##                  -- (to allow local key function eval, things like that)
-##     'MIN_TIME_ALL': global min-time for all deliveries
+##     'MIN_TIME_ALL': global min-time for all deliveries (time vector)
 ##     'MAX_TIME_ALL': ... max-time ...
 ##     'x': ...coordinate... (None if unknown)
 ##     'y': ...coordinate...
-##     'seen': '1240',          -- if set and non-empty, delivery time
+##     'start': ...             -- initial delivery time, minutes, subject
+##                              -- to refinement
+##     'seen': '1240',          -- if set and non-empty, delivery time (string)
 ##     'svec': x40000,          -- time vector form of 'seen', if non-empty
 ##     'optional': ...          -- is it OK to skip this delivery?
 ##                              -- low-priority, 'deliver if possible today'
@@ -711,7 +717,8 @@ def table_read(fname, field=1, fmt='base'):
 
 	res = sorted(res, key=functools.cmp_to_key(table_cmp))
 
-	aux2plus(aux)
+	if (itype == 'extended'):
+		aux2plus(aux)
 
 	return res, aux
 
@@ -1136,7 +1143,7 @@ def xy2time(x, y, x0, y0, wgt=1.0, start_minutes=None):
 ## TODO: ASSUMES CONSTANT SPEED
 ## TODO: NEED MAP SCALE
 
-	return vAVG_MIN_PER_KM * (d * 20)
+	return vAVG_MIN_PER_KM * (d * 50)
 
 
 ##--------------------------------------
@@ -1279,7 +1286,10 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##    'x':        X coordinate, current
 ##    'y':        Y coordinate, current
 ##    'idx':      index of current point, if not None
+##    'primary':     sum of primary fields in already scheduled deliveries
+##    'secondary':   ...secondary fields...
 ##    'refills':  chronologically increasing list of refill time vectors
+##    'deliveries': { time: order.index, ... }
 ##
 ##    'START.X':    X coordinate, start of deliveries
 ##    'START.Y':    Y coordinate...
@@ -1330,6 +1340,11 @@ def vehicle2xy(vehicles, v, minutes, delivery):
 		##
 		## assertion: no overruns
 
+	if (not 'deliveries' in vehicles[v]):
+		vehicles[v][ 'deliveries' ] = {}
+			##
+	vehicles[v][ 'deliveries' ][ minutes ] = delivery[ 'index' ]
+
 	print(f'## STOP[{v}]={ minute2wall(minutes) } X={x},Y={y} ' +
 	      f'{ vehicle_from }[idx={ delivery["index"] }] +' +
 	      f'{ delivery[ "primary" ] }')
@@ -1339,22 +1354,6 @@ def vehicle2xy(vehicles, v, minutes, delivery):
 		vehicles[v][ 'START.X'    ] = x
 		vehicles[v][ 'START.Y'    ] = y
 		vehicles[v][ 'START.MINS' ] = minutes
-
-## 'V.ID': {
-##    'time':     nominal departure time, 'HHMM'
-##    'tvec':     nominal earliest departure time, vector
-##  ##  'time_max': ...earliest arrival...    if defined
-##  ##  'time_min': ...latest departure...    if defined
-##    'x':        X coordinate, current
-##    'y':        Y coordinate, current
-##    'idx':      index of current point, if not None
-##    'primary':   sum of primary fields in already scheduled deliveries
-##    'secondary':     ...secondary fields...
-##
-##    'START.X':    X coordinate, start of deliveries
-##    'START.Y':    Y coordinate...
-##    'START.TIME': ...HHMM...
-## }
 
 
 ##--------------------------------------
@@ -1430,8 +1429,6 @@ def vehicle_may_reach(x, y, timevec, vehicles, dists):
 			                       ## accommodate delivery
 
 		x0, y0 = float(vehicles[v]['x']), float(vehicles[v]['y'])
-##		si = tuple2idxstring([x0, y0])
-##		di = tuple2idxstring([vehicles[v]['x'], vehicles[v]['y']])
 		dt = xy2time(float(x), float(y), float(x0), float(y0))
 
 				## current v[...] time excludes delivery
@@ -1458,6 +1455,52 @@ def vehicle_may_reach(x, y, timevec, vehicles, dists):
 	res.sort(key=operator.itemgetter(2))
 
 	return res
+
+
+##--------------------------------------
+def timevec2units(tvec):
+	"generator, returning each unit present in 'tvec' in increasing order"
+
+	while tvec:
+		lsb   = tvec ^ (tvec & (tvec - 1))
+		tvec &= ~lsb
+		yield lsb
+
+
+##--------------------------------------
+## find 'reasonable' initial values for delivery-time search
+##
+## sets 'start' for yet-uninitialized entries
+##
+## strategies:
+##   0  place start times as far as feasible
+##
+## requires MIN_TIME_ALL/MAX_TIME_ALL to be set for all entries
+##
+def starttimes(dels, strategy=0):
+	cds = list(d  for d in dels
+	           if (d['time2vec'] != 0) and (not "start" in d))
+
+				## collect 'certain' (already assigned) and
+				## possible (possibly valid in T=...) load
+				##
+	minu, maxu = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
+	minu, maxu = pathtools.bitcount(minu), pathtools.bitcount(maxu)
+
+	certain  = [0] * (maxu +1)
+	possible = [0] * (maxu +1)
+
+	for d in cds:
+		ulist = list(1 if (d['time2vec'] & (1 << (u-1))) else 0
+		             for u in range(minu, maxu))
+					## TODO: store list form in addition
+					## to time2vec during init
+		d['units'] = ulist
+
+	for u in range(len(ulist)):           ## reuse loop var falling through
+		possible[u] = sum(d['units'][u]  for d in cds)
+
+	print('xxx', possible)
 
 
 ##--------------------------------------
@@ -1507,11 +1550,16 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 			                        maxu, sep='', unitcols=1))
 	print()
 
-			## calculate all distances between delivery
-			## points and bases
-			## ideally, this should be from table or query
+				## calculate all distances between delivery
+				## points and bases
+				## ideally, should be from table or query
 	xy2dist = {}
 	dist    = distances(aux, bases, xys=xy2dist)
+
+				## pick "reasonably spaced" start times for
+				## all deliveries
+	dlist = copy.deepcopy(aux)
+	starttimes(dlist)
 
 				## all entries, replicated from aux
 				## sorted in increasing urgency order
@@ -1570,6 +1618,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 		print('')
 		place.append([ vs[0], [], ])
 				## TODO: remember alternatives
+		print('xxx.V', vpos[vid_picked])
 
 	yield([ 'pack-and-route schedule placeholder' ])
 
