@@ -630,6 +630,7 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##     'max_time': 0x1000,
 ##                  -- LS, MS bit in bitmask
 ##                  -- used for fast 'X must happen before Y' comparisons
+##     'time_units': Hamming weight of 'time2vec'     -- save .bitcount() calls
 ##
 ##                  -- globals replicated to each record
 ##                  -- (to allow local key function eval, things like that)
@@ -702,15 +703,16 @@ def table_read(fname, field=1, fmt='base'):
 					## any conversion etc. would come here
 
 			aux.append({
-				'primary':   fd1,
-				'secondary': fd2,
-				'time':     f[4],            ## original string
-				'time2vec': t,
-				'index':    fi,
-				'min_time': mint,
-				'max_time': maxt,
-				'x':        x,
-				'y':        y,
+				'primary':    fd1,
+				'secondary':  fd2,
+				'time':       f[4],          ## original string
+				'time2vec':   t,
+				'time_units': pathtools.bitcount(t),
+				'index':      fi,
+				'min_time':   mint,
+				'max_time':   maxt,
+				'x':          x,
+				'y':          y,
 			})
 			if False:
 				aux[-1][ 'optional' ] = True
@@ -1498,17 +1500,52 @@ def starttimes(dels, strategy=0):
 		d['units'] = ulist
 
 	for u in range(len(ulist)):           ## reuse loop var falling through
-		possible[u] = sum(d['units'][u]  for d in cds)
+		possible[u] = sum(float(d['units'][u]) / d['time_units']
+		                  for d in cds)
 
-				## start units for each delivery
-				## sorted by decreasing certain-or-possible
-				## utilization
+					## TODO: initial assignment, in
+					## least-to-most available units order
 	for d in cds:
-		su = list(possible[ui]  if (d['units'][ui])  else 0
-		                        for ui, u in enumerate(d['units']))
-		print('xxx.s', su)
+		du = d['units']
 
-	print('xxx', possible)
+		pu = list(possible[ui] + certain[ui]  if (du[ ui ])  else 0
+		                        for ui, u in enumerate(du))
+
+								## minimum >0
+		smn = min(s  for s in pu  if s>0)
+								## where is it?
+		si  = list(i  for i in range(len(du))  if (pu[i] == smn))
+
+		if len(si) != 1:
+			si = [ si[0] ]
+					## multiple optimal starting units
+					## TODO: workaround: picking first one
+		si = si[0]
+
+		print(f"## SET.INITIAL unit={ si } idx={ d['index'] } " +
+		      f"T={ d['time'] } MIN(UTIL)={ smn :.06}")
+				##
+		print("##     TW=" +timevec2utilstr(d[ 'time2vec' ],
+		                                    maxu, sep='', unitcols=1))
+		print("##    D.0=" +timevec2utilstr(1 << si,
+		                                    maxu, sep='', unitcols=1))
+
+					## move weighted probable entries
+					## to 1-weight fixed ones
+					##
+					## remove-weight of current delivery
+		rwgt = 1.0 / d['time_units']
+
+		for ui, u in enumerate(d['units']):
+			if u:
+				possible[ui] -= rwgt
+
+					## at least currently in unit 'si'
+		certain[si] += 1
+
+	print('## UTIL.0', ",".join(str(c) for c in certain))
+	print(f'## MIN(UTIL.0)={ min(c  for c in certain  if (c>0)) }')
+	print(f'## MIN(UTIL.0)={ max(certain) }')
 
 
 ##--------------------------------------
