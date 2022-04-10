@@ -1102,7 +1102,7 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 ## for fields not to overlap.
 ##
 def del_timesort(d):
-	"sort: key function for deliveries"
+	"sort: key function for deliveries: decreasing urgency"
 
 				## MXB, NRB are bits of max-time, nr-of-slots
 				## fields, respectively
@@ -1123,6 +1123,23 @@ def del_timesort(d):
 	MXB, NRB = MXB *8, NRB *8       ## back to bits
 
 	rv = (mn << (MXB +NRB)) | (d[ 'max_time' ] << NRB) | nrbits
+
+	return rv
+
+
+##--------------------------------------
+## sort deliveries in increasing-delivery order; usable as .sort() key function
+## tolerate entries which lack the 'start'; schedule those in the end
+##
+def del_unit2sort(d):
+	"sort: key function for deliveries: recommended start time"
+	rv = 0
+
+	rv = (d[ 'start' ] << 48)  if ('start' in d)  else 0
+
+				## ~arbitrary tiebreakers
+	rv += d[ 'time_units' ] << 24
+	rv += d[ 'index' ]
 
 	return rv
 
@@ -1507,13 +1524,12 @@ def starttimes(dels, strategy=0):
 					## least-to-most available units order
 	for d in cds:
 		du = d['units']
-
 		pu = list(possible[ui] + certain[ui]  if (du[ ui ])  else 0
 		                        for ui, u in enumerate(du))
 
-								## minimum >0
-		smn = min(s  for s in pu  if s>0)
-								## where is it?
+		smn = min(s  for s in pu  if s>0.0)
+
+							## where is minimum>0?
 		si  = list(i  for i in range(len(du))  if (pu[i] == smn))
 
 		if len(si) != 1:
@@ -1542,10 +1558,12 @@ def starttimes(dels, strategy=0):
 
 					## at least currently in unit 'si'
 		certain[si] += 1
+		d[ 'start' ] = si
 
 	print('## UTIL.0', ",".join(str(c) for c in certain))
 	print(f'## MIN(UTIL.0)={ min(c  for c in certain  if (c>0)) }')
 	print(f'## MIN(UTIL.0)={ max(certain) }')
+	print('')
 
 
 ##--------------------------------------
@@ -1609,61 +1627,68 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 				## all entries, replicated from aux
 				## sorted in increasing urgency order
 				##
-	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
+## key=del_timesort -> increasing urgency
+##	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
+
+	dlist = sorted(list(dlist), key=del_unit2sort)
+
 	for d in dlist:
-		idx  = d[ 'index' ]
+		idx = d[ 'index' ]
 
 		tvec, x, y = d['time2vec'], d['x'], d['y']
 		if tvec == 0:
 			continue
+
+		assert('start' in d)       ## must have initial-assigned by now
 
 		print(f"##   DELIVERY={ len(place) +1 }/{ len(dlist) }")
 		print(f"## T={ d['time'] }  [t.vec=x{ tvec :0x}]")
 		print("##   TW=" +timevec2utilstr(tvec, maxu, sep='',
 		                                 unitcols=1))
 
-					## filter vehicles which may reach
-					## the suitable deliverxy2dist windows
-		vs = vehicle_may_reach(x, y, tvec, vpos, xy2dist)
-		if vs == []:
-			raise ValueError("no suitable delivery")
-					## -> backtrack
+##		for d in ():
 
-		primary, secondary = d['primary'], d['secondary']
-		vid_picked, arrival = None, vTIME_UNDEF
-
-		for v in vs:
-			vid = v[0]
-			v1  = vehicle2primary  (vpos[ vid ])
-			v2  = vehicle2secondary(vpos[ vid ])
-
-			if (primary +v1) > MAX1:
-				print(f"##   OVERLOAD[{ vid }]: " +
-				      f"{ primary + v1 }")
-				continue
-
-			if MAX2 and ((secondary +v2) > MAX2):
-				print(f"##   OVERLOAD.SECONDARY[{ vid }]: " +
-				      f"{ secondary + v2 }")
-				continue
-
-			if (vid_picked == None) or (v[2] < arrival):
-				print('xxx21', vid_picked, arrival)
-				vid_picked, arrival = vid, v[2]
-				print('xxx22', vid_picked, arrival)
-
-		if vid_picked == None:
-			raise ValueError("no suitable vehicle")
-
-		print("##  del=" +timevec2utilstr(minute2timevec(arrival),
-		                                  maxu, sep='', unitcols=1))
-		print(f'## DEL { vid_picked } at { arrival }')
-		print(f'## ADD { vid_picked } {primary} sec={secondary}')
-		vehicle2xy(vpos, vid_picked, arrival, d)
-		print('')
-		place.append([ vs[0], [], ])
-				## TODO: remember alternatives
-		print('xxx.V', vpos[vid_picked])
+##					## filter vehicles which may reach
+##					## the suitable deliverxy2dist windows
+##		vs = vehicle_may_reach(x, y, tvec, vpos, xy2dist)
+##		if vs == []:
+##			raise ValueError("no suitable delivery")
+##					## -> backtrack
+##
+##		primary, secondary = d['primary'], d['secondary']
+##		vid_picked, arrival = None, vTIME_UNDEF
+##
+##		for v in vs:
+##			vid = v[0]
+##			v1  = vehicle2primary  (vpos[ vid ])
+##			v2  = vehicle2secondary(vpos[ vid ])
+##
+##			if (primary +v1) > MAX1:
+##				print(f"##   OVERLOAD[{ vid }]: " +
+##				      f"{ primary + v1 }")
+##				continue
+##
+##			if MAX2 and ((secondary +v2) > MAX2):
+##				print(f"##   OVERLOAD.SECONDARY[{ vid }]: " +
+##				      f"{ secondary + v2 }")
+##				continue
+##
+##			if (vid_picked == None) or (v[2] < arrival):
+##				print('xxx21', vid_picked, arrival)
+##				vid_picked, arrival = vid, v[2]
+##				print('xxx22', vid_picked, arrival)
+##
+##		if vid_picked == None:
+##			raise ValueError("no suitable vehicle")
+##
+##		print("##  del=" +timevec2utilstr(minute2timevec(arrival),
+##		                                  maxu, sep='', unitcols=1))
+##		print(f'## DEL { vid_picked } at { arrival }')
+##		print(f'## ADD { vid_picked } {primary} sec={secondary}')
+##		vehicle2xy(vpos, vid_picked, arrival, d)
+##		print('')
+##		place.append([ vs[0], [], ])
+##				## TODO: remember alternatives
 
 	yield([ 'pack-and-route schedule placeholder' ])
 
