@@ -1137,7 +1137,7 @@ def del_unit2sort(d):
 
 	rv = (d[ 'start' ] << 48)  if ('start' in d)  else 0
 
-				## ~arbitrary tiebreakers
+						## ~arbitrary tiebreakers
 	rv += d[ 'time_units' ] << 24
 	rv += d[ 'index' ]
 
@@ -1520,6 +1520,21 @@ def starttimes(dels, strategy=0):
 		possible[u] = sum(float(d['units'][u]) / d['time_units']
 		                  for d in cds)
 
+## factor out, reuse as timeline-to-chart
+					## sketch rough possible-utilization
+	maxp, plines = max(possible), []
+					## plot 20+1 char utilization
+			##
+	print("## Approximate possible utilization as a function of time")
+	for i in possible:
+		lvl = round((20.0 * i) / maxp)
+		lvl = ('.' * lvl) +'#' +(' ' * (20 -lvl))
+		plines.append(lvl)
+			##
+	for i in range(len(plines[0])-1, -1, -1):
+		print("##    |", ''.join(pl[i]  for pl in plines))
+	print('')
+
 					## TODO: initial assignment, in
 					## least-to-most available units order
 	for d in cds:
@@ -1630,12 +1645,15 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 ## key=del_timesort -> increasing urgency
 ##	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
 
-	dlist = sorted(list(dlist), key=del_unit2sort)
+	dlist = list(sorted(list(dlist), key=del_unit2sort))
 
 	for d in dlist:
 		idx = d[ 'index' ]
+		if not 'start' in d:
+			continue
 
-		tvec, x, y = d['time2vec'], d['x'], d['y']
+##		tvec, x, y = d['time2vec'], d['x'], d['y']
+		tvec, x, y = d['start'], d['x'], d['y']
 		if tvec == 0:
 			continue
 
@@ -1643,10 +1661,48 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 
 		print(f"##   DELIVERY={ len(place) +1 }/{ len(dlist) }")
 		print(f"## T={ d['time'] }  [t.vec=x{ tvec :0x}]")
+		print(f"##   START={ d['start'] }u")
 		print("##   TW=" +timevec2utilstr(tvec, maxu, sep='',
 		                                 unitcols=1))
 
-##		for d in ():
+		vs = vehicle_may_reach(x, y, tvec, vpos, xy2dist)
+		if vs == []:
+			raise ValueError("no suitable delivery")
+
+		primary, secondary = d['primary'], d['secondary']
+		vid_picked, arrival = None, vTIME_UNDEF
+
+		for v in vs:
+			vid = v[0]
+			v1  = vehicle2primary  (vpos[ vid ])
+			v2  = vehicle2secondary(vpos[ vid ])
+
+			if (primary +v1) > MAX1:
+				print(f"##   OVERLOAD[{ vid }]: " +
+				      f"{ primary + v1 }")
+				continue
+
+			if MAX2 and ((secondary +v2) > MAX2):
+				print(f"##   OVERLOAD.SECONDARY[{ vid }]: " +
+				      f"{ secondary + v2 }")
+				continue
+
+			if (vid_picked == None) or (v[2] < arrival):
+				vid_picked, arrival = vid, v[2]
+
+		if vid_picked == None:
+			raise ValueError("no suitable vehicle")
+
+		print("##  del=" +timevec2utilstr(minute2timevec(arrival),
+		                                  maxu, sep='', unitcols=1))
+				##
+		print(f'## DEL { vid_picked } at { minute2wall(arrival) }')
+		print(f'## ADD { vid_picked } {primary} sec={secondary}')
+		vehicle2xy(vpos, vid_picked, arrival, d)
+		print('')
+		place.append([ vs[0], [], ])
+				## TODO: remember alternatives
+
 
 ##					## filter vehicles which may reach
 ##					## the suitable deliverxy2dist windows
@@ -1997,6 +2053,26 @@ if __name__ == '__main__':
 				'1300-1415',
 				'1730-1900',
 				'0945-1030',
+			],
+
+			'V3': [
+				'1400-1515',
+			],
+
+			'V4': [
+				'1400-1515',
+			],
+
+			'V5': [
+				'1400-1515',
+			],
+
+			'V6': [
+				'1400-1515',
+			],
+
+			'V7': [
+				'1400-1515',
 			],
 		}
 
