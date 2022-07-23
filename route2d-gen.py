@@ -146,7 +146,8 @@ def digitsneeded(val):
 
 ##----------------------------------------------------------------------------
 if __name__ == '__main__':
-	for n in [6, 7, 8, 9, 10]:
+##	for n in [6, 7, 8, 9, 10]:
+	for n in [8,]:
 		print(f'---2^{n} bits:--------------')
 
 		res, val2xy, cache, maxval = [], {}, emptycache(), -1
