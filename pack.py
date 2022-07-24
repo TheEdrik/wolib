@@ -65,6 +65,8 @@
 ##   RNCOORDS  add randomized, normalized, boundary-delimited random
 ##             delivery points.  Value of 'RNCOORDS' is boundary file:
 ##      X Y    ## coordinate pairs, one per line, in boundary order
+##   RNITEMS   generate N random deliveries; only secondary weight
+##             set N as value of env['RNITEMS']
 
 
 ##----------------------------------------------------------------------------
@@ -167,7 +169,7 @@ def terminate(msg):
 ##--------------------------------------
 def usage():
 	terminate("""
-	Assign
+	...binpack blurb comes here...
 	Usage: <MAX1=...> [MAX2=...] [PCT=...] [DEBUG=...]  ... <input list>
 	...usage blurb comes here...
 	""")
@@ -1856,8 +1858,40 @@ def times2print(t):
 
 
 ##--------------------------------------
+## typical .mkv sizes, bimodal distribution with two normal peaks
+##
+def random_weight():
+	mn, expd, var = 100, 750, 100
+	mega = 1000000
+
+	if random.randint(1, 100) <= 25:          ## small files
+		mn, expd, var = 50, 200, 75
+
+	return int(max(mn * mega, random.gauss(expd * mega, var * mega)))
+
+
+##--------------------------------------
+def random_xy(border):
+	while True:
+		x = random.randint(0, 1<<64)
+		y = random.randint(0, 1<<64)
+		x /= (1 << 64)
+		y /= (1 << 64)
+
+		if not pathtools.is_inside(x, y, border):
+			continue
+		break
+
+	return x, y
+
+
+##--------------------------------------
 ## call only with RNTIME set
 ## adds random, in-polygon points if 'RNCOORDS' is set
+##
+## generates new delivery points if 'RNITEMS' is set
+##   - basic format, N elems, if 'RNCOORDS' is not set
+##   - extended format, with X,Y coordinates within polygon if RNCOORDS is set
 ##
 ## TODO: centralized polygon reading, pass through 'border',
 ##       do not read RNCOORDS directly
@@ -1868,8 +1902,11 @@ def table_partial2full(t, border=None):
 		if len(seed) >= 2:
 			random.seed( seed.encode('utf-8') )
 
-	deliveries = list(delivery_times() for _ in t)
-	coords = []
+	if t != None:
+		deliveries = list(delivery_times() for _ in t)
+	else:
+		t = []
+	border, coords = None, []
 
 	if 'RNCOORDS' in os.environ:
 		border = (t.decode().split() for t in
@@ -1892,16 +1929,44 @@ def table_partial2full(t, border=None):
 			prevx, prevy = x, y
 		border = brd
 
+	##--------------------------------------------------------------------
+	if 'RNITEMS' in os.environ:
+		n = int(os.environ['RNITEMS'])
+		res = []
 
+		nd = math.ceil(math.log10(n))
+
+		for i in range(n):
+			wgt = random_weight()
+
+			if 'RNCOORDS' in os.environ:
+				x, y = random_xy(border)
+				t    = times2print( delivery_times() )
+				val  = [ wgt, 1, x, y, t,
+				         f"unit{ len(res) :>0{nd}}", ]
+
+			else:
+				val = [ wgt, 1, f"UNIT{ len(res) }", ]
+
+			res.append(','.join(str(v) for v in val))
+
+		for r in res:
+			print(r)
+
+		return 0
+
+	##--------------------------------------------------------------------
+	if 'RNCOORDS' in os.environ:
 			## generate delivery points, within polygon
 		while len(coords) < len(t):
-			x = random.randint(0, 1<<64)
-			y = random.randint(0, 1<<64)
-			x /= (1 << 64)
-			y /= (1 << 64)
-
-			if not pathtools.is_inside(x, y, border):
-				continue
+			x, y = random_xy(border)
+##			x = random.randint(0, 1<<64)
+##			y = random.randint(0, 1<<64)
+##			x /= (1 << 64)
+##			y /= (1 << 64)
+##
+##			if not pathtools.is_inside(x, y, border):
+##				continue
 
 			coords.append([x, y])
 
@@ -1975,14 +2040,15 @@ if __name__ == '__main__':
 
 	DEBUG = env2num('DEBUG', 0)
 
-	if not 'MAX1' in os.environ:
-		terminate("need MAX1 [optimization-target] definition")
+	if (not 'RNTIME' in os.environ):
+		if (not 'MAX1' in os.environ):
+			terminate("need MAX1 [optimization-target] definition")
 
-	MAX1 = str2num(os.getenv('MAX1'))
-	if (MAX1 == None) or (MAX1 <= 0):
-		terminate(f"invalid MAX1 definition [{MAX1}]")
-	if (MAX1 <= 0):
-		terminate(f"MAX1 def out of range [{MAX1}]")
+		MAX1 = str2num(os.getenv('MAX1'))
+		if (MAX1 == None) or (MAX1 <= 0):
+			terminate(f"invalid MAX1 definition [{MAX1}]")
+		if (MAX1 <= 0):
+			terminate(f"MAX1 def out of range [{MAX1}]")
 
 	MAX2 = env2num('MAX2', 0)     ## MAX2 is optional; default None is fine
 	if (MAX2 == None) and ('MAX2' in os.environ):
@@ -2028,11 +2094,16 @@ if __name__ == '__main__':
 ##---  /parameter-read code
 
 	sys.argv.pop(0)
-	if [] == sys.argv:
-		usage()
-	tbl, aux = table_read(sys.argv[0], 2  if FIELD2  else 1, fmt='base')
+	if not 'RNTIME' in os.environ:
+		if [] == sys.argv:
+			usage()
+		tbl, aux = table_read(sys.argv[0], 2  if FIELD2  else 1,
+		                      fmt='base')
+	else:
+		tbl = None
 
-	if 'RNTIME' in os.environ:
+	if (('RNTIME' in os.environ) or ('RNCOORDS' in os.environ) or
+	    ('RNITEMS' in os.environ)):
 		sys.exit( table_partial2full(tbl) )
 
 	if bases and aux:
