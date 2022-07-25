@@ -1737,9 +1737,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 ##				continue
 ##
 ##			if (vid_picked == None) or (v[2] < arrival):
-##				print('xxx21', vid_picked, arrival)
 ##				vid_picked, arrival = vid, v[2]
-##				print('xxx22', vid_picked, arrival)
 ##
 ##		if vid_picked == None:
 ##			raise ValueError("no suitable vehicle")
@@ -1879,10 +1877,28 @@ def random_weight():
 ## generate [approximate] distance-to-cost lookup from X,Y pairs in
 ## extended-format input
 ##
-## note: currently, only symmetric costs
+## note: currently, only symmetric costs (symm. approximations only)
 ##
-def xy2table(tab):
-	print('xxx', tab)
+def xy2table(tab, aux):
+	pts  = list(set((p['x'], p['y'])  for p in aux))
+	cost = []
+
+	for si, src in enumerate(pts):
+		cost.append([])
+
+		for di, dst in enumerate(pts):
+			if (si == di):
+				dist = 0.0  
+			else:
+				dist = xy2time(src[0], src[1], dst[0], dst[1])
+			cost[-1].append(dist)
+
+	res = {
+		'points': pts,
+		'time':   cost,
+	}
+	print(json.dumps(res))
+
 	return 0
 
 
@@ -2120,7 +2136,7 @@ if __name__ == '__main__':
 		sys.exit( table_partial2full(tbl) )
 
 	if ('XY2TABLE' in os.environ):
-		sys.exit( xy2table(tbl) )
+		sys.exit( xy2table(tbl, aux) )
 
 	if bases and aux:
 				## TODO: hardwared vehicle/shift plans
