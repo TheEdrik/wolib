@@ -59,6 +59,11 @@
 ##            feasible completion windows.
 ##            Vehicle IDs MUST be all-numeric.
 ##
+## auxiliary functionality
+##   XY2TABLE  generate point-to-point time/cost lookup table
+##             requires extended input format
+##             outputs JSON table, with X/Y indexing costs as strings
+##
 ## diagnostics+test
 ##   RNTIME    randomize time for each delivery
 ##             if value > 2 characters, it is used as seed
@@ -88,7 +93,7 @@
 ##   - select tuples of 1..MAX_TUPLE_N items each from non/selected lists
 ##     - with non-negative weights, de-selecting items makes no sense,
 ##       so only N-to-M swaps with N,M>0 are reasonable
-##     - 0-to-M "swaps", just adding to the selection, are possible 
+##     - 0-to-M "swaps", just adding to the selection, are possible
 ##       - these are simple linear searches, essentially free, do not skip them
 ##   - references:
 ##     - Fiduccia, Mattheyses: A Linear-Time Heuristic for Improved Network
@@ -400,7 +405,7 @@ def times2vec(tstr, base=800, twindow=15):
 
 		minv = min(su, minv)
 		maxv = max(eu, maxv)
- 
+
 		vec |= (1 << eu) - (1 << su)
 
 	if minv == vTIME_UNDEF:
@@ -546,7 +551,7 @@ def selection2lines(sel, format='plain'):
 ## set, if asked for, is _not_ cross-checked (since it may be larger
 ## than MAX1)
 ##
-## NOP for empty 
+## NOP for empty
 ##
 def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 	if not format in tFORMATS:
@@ -936,7 +941,7 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None,
 
 		if MAX2 and (sum2updated > MAX2):
 			continue    ## swap increases secondary sum above limit
-	
+
 		if (best_sum1 >= sum1updated):
 			continue     ## no improvement over any preceding swaps
 
@@ -1095,7 +1100,7 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 ## sort deliveries in order of urgency; usable as .sort() key function
 ##   - earliest delivery time
 ##   - secondary: latest delivery time
-##   - third: 
+##   - third:
 ##   - fourth: increasing order of nr. of possible delivery slots
 ##
 ## see 'List Auxiliary Data' for input structure
@@ -1187,7 +1192,7 @@ def distances(deliveries, bases, wgt=1.0, xys=None, idx=True):
 	arr = list(arr for r in range(len(arr)))
 
 	for si, src in enumerate(points):
-		x0, y0 = float(src['x']), float(src['y']) 
+		x0, y0 = float(src['x']), float(src['y'])
 		xs, ys = float(x0), float(y0)
 
 		for di, dst in enumerate(points):
@@ -1871,6 +1876,18 @@ def random_weight():
 
 
 ##--------------------------------------
+## generate [approximate] distance-to-cost lookup from X,Y pairs in
+## extended-format input
+##
+## note: currently, only symmetric costs
+##
+def xy2table(tab):
+	print('xxx', tab)
+	return 0
+
+
+##--------------------------------------
+##
 def random_xy(border):
 	while True:
 		x = random.randint(0, 1<<64)
@@ -1918,6 +1935,9 @@ def table_partial2full(t, border=None):
 			## X+Y segments, preserving order
 
 		brd, prevx, prevy = [], border[0][0], border[0][1]
+## TODO: centralize and name
+## see reference from xytable()
+##
 		for x,y in border[1:]:
 			brd.append([
 				prevx, prevy, x, y,
@@ -1942,7 +1962,8 @@ def table_partial2full(t, border=None):
 			if 'RNCOORDS' in os.environ:
 				x, y = random_xy(border)
 				t    = times2print( delivery_times() )
-				val  = [ wgt, 1, x, y, t,
+				val  = [ wgt, 1, f"{x:.06}", f"{y:.06}",
+				         t,
 				         f"unit{ len(res) :>0{nd}}", ]
 
 			else:
@@ -1960,14 +1981,6 @@ def table_partial2full(t, border=None):
 			## generate delivery points, within polygon
 		while len(coords) < len(t):
 			x, y = random_xy(border)
-##			x = random.randint(0, 1<<64)
-##			y = random.randint(0, 1<<64)
-##			x /= (1 << 64)
-##			y /= (1 << 64)
-##
-##			if not pathtools.is_inside(x, y, border):
-##				continue
-
 			coords.append([x, y])
 
 			## 1-based indexes may have skipped empty lines etc.
@@ -1980,7 +1993,7 @@ def table_partial2full(t, border=None):
 			##               []  * 2  is []; needs range+list
 
 			## in: [primary, secondary, item, index]
-			## [9267620, 1, 'from-russia-with-love83.mkv', 3] 
+			## [9267620, 1, 'from-russia-with-love83.mkv', 3]
 			##
 	for v, d, xy in zip(t, deliveries, coords):
 		idx = v[ -1 ]
@@ -2105,6 +2118,9 @@ if __name__ == '__main__':
 	if (('RNTIME' in os.environ) or ('RNCOORDS' in os.environ) or
 	    ('RNITEMS' in os.environ)):
 		sys.exit( table_partial2full(tbl) )
+
+	if ('XY2TABLE' in os.environ):
+		sys.exit( xy2table(tbl) )
 
 	if bases and aux:
 				## TODO: hardwared vehicle/shift plans
