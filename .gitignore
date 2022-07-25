@@ -5,4 +5,5 @@ plot.r
 bases*.txt
 orders*txt
 r/
+*.time
 
