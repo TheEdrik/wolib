@@ -142,8 +142,12 @@ tFORMATS = [ 'csv', 'plain', 'json', ]
 ##-----  code generation  ----------------------------------
 sCPREFIX = 'PCK'     ## common prefix for generated code (uppercase: public)
                      ##
-sCDIST   = sCPREFIX.lower() +'_xy_table'
+sCDIST   = sCPREFIX.lower() +'_xy2dist'
                      ## name of xy->xy distances table, indexed by item index
+
+sCGUARDVAR = sCPREFIX.upper() +'_INCLUDED__'        ## include guard variable
+
+sCXYS      = sCPREFIX.lower() +'_xy_coords'  ## table of (x,y) pairs
 
 sCDELIVERIES = sCPREFIX.upper() +'_ORDERS'
                      ## number of orders, w/o removing any duplicate coordinates
@@ -234,29 +238,53 @@ def str2num(val):
 
 
 ##=====  delimiter: output formatting  =======================================
+def include_guard(start=True):
+	guardvar = sCGUARDVAR
+
+	if start:
+		return(f'#if !defined({ sCGUARDVAR })' +'\n' +
+		       f'#define  { sCGUARDVAR } 1  /* API version */')
+
+	return f'#endif   /* defined({ sCGUARDVAR }) */'
+
+
+##--------------------------------------
 ## output table of XY points and their distances
 ##
-## input, see xy2table():
-## {
-##   'points': [[X0, Y0], [X1, Y1], ...],
-##   'time':   [[0.0, dist(XY0->XY1), dist(XY0->XY2)... ],
-##              [dist(XY1->XY0), 0.0, dist(XY1->XY2)... ],
-##   ]
-## }
+## with non-None 'pts', we output coordinate list (in commented-out
+## explanatory table)
 ##
-def xy2c(arr):
+## input: see xy2table()
+##
+def xy2c(arr, pts=None):
 	res = []
 	if ((not 'points' in arr)  or
 	    (not 'time' in arr)    or
 	    (len(arr['points']) != len(arr['time']))):
 		raise ValueError("invalid XY-to-XY distance setup")
 
-	n   = len(arr[ "points" ])
+	n = len(arr[ "points" ])
 
 	res.append(f'#define  { sCDELIVERIES }  ((unsigned int) {n})')
 	res.append('')
 
-	res.append(f'static const uint32_t { sCDIST }[ {n} ][ {n} ] = {{')
+	if pts:
+		assert(len(pts) == n)
+
+		xys = ', '.join(f'{{{x},{y}}}'  for x,y in pts)
+
+		res.extend([
+			'#if 0',
+			f'static const uint32_t { sCXYS }' +
+				f'[ { sCDELIVERIES } /* {n} */ ] = {{',
+			sINDENT + xys + ',',
+			'} ;',
+			'#endif',
+			'',
+		])
+
+	res.append(f'static const uint32_t { sCDIST }' +
+		f'[ {sCDELIVERIES} ][ {sCDELIVERIES} ] /* {n}x{n} */= {{')
 		##
 		## align all columns; cdigits stores per-column digit.count
 		##
@@ -1959,10 +1987,18 @@ def random_weight():
 ## generate [approximate] distance-to-cost lookup from X,Y pairs in
 ## extended-format input
 ##
+## JSON output:
+## {
+##   'points': [[X0, Y0], [X1, Y1], ...],
+##   'time':   [[0.0, dist(XY0->XY1), dist(XY0->XY2)... ],
+##              [dist(XY1->XY0), 0.0, dist(XY1->XY2)... ],
+##   ]
+## }
+##
 ## note: currently, only symmetric costs (symm. approximations only)
 ##
 def xy2table(tab, aux, fmt='json'):
-	pts  = list(set((p['x'], p['y'])  for p in aux))
+	pts  = list((p['x'], p['y'])  for p in aux)
 	cost = []
 
 	for si, src in enumerate(pts):
@@ -1970,7 +2006,7 @@ def xy2table(tab, aux, fmt='json'):
 
 		for di, dst in enumerate(pts):
 			if (si == di):
-				dist = 0.0  
+				dist = 0.0
 			else:
 				dist = xy2time(src[0], src[1], dst[0], dst[1])
 			cost[-1].append(dist)
@@ -1982,7 +2018,7 @@ def xy2table(tab, aux, fmt='json'):
 	if fmt == 'json':
 		print(json.dumps(res))
 	else:
-		print(xy2c(res))
+		print(xy2c(res, pts))
 
 	return 0
 
@@ -2221,7 +2257,8 @@ if __name__ == '__main__':
 		sys.exit( table_partial2full(tbl) )
 
 	if ('XY2TABLE' in os.environ):
-		fmt = 'C'  if ('TO_C' in os.environ)  else 'json' 
+		fmt = 'C'  if ('TO_C' in os.environ)  else 'json'
+				##
 		sys.exit( xy2table(tbl, aux, fmt=fmt) )
 
 	if bases and aux:
