@@ -63,6 +63,8 @@
 ##   XY2TABLE  generate point-to-point time/cost lookup table
 ##             requires extended input format
 ##             outputs JSON table, with X/Y indexing costs as strings
+##   TO_C      generate result for direct inclusion into C source
+##             TODO: external spec for including C
 ##
 ## diagnostics+test
 ##   RNTIME    randomize time for each delivery
@@ -136,6 +138,21 @@ MAX_TUPLE_N = 4      ## try bundling 1..<this many> entries as single swap unit
                      ## we do not currently build combinations incrementally
 
 tFORMATS = [ 'csv', 'plain', 'json', ]
+
+##-----  code generation  ----------------------------------
+sCPREFIX = 'PCK'     ## common prefix for generated code (uppercase: public)
+                     ##
+sCDIST   = sCPREFIX.lower() +'_xy_table'
+                     ## name of xy->xy distances table, indexed by item index
+
+sCDELIVERIES = sCPREFIX.upper() +'_ORDERS'
+                     ## number of orders, w/o removing any duplicate coordinates
+sINDENT  = '    '    ## prefix added per indented level
+
+sTABLE_BREAK = 10    ## add empty columns/rows every N units in large tables
+
+
+##----------------------------------------------------------
 
 TARGET = None        ## set to [ host, port ] if env specifies it
 
@@ -213,6 +230,71 @@ def str2num(val):
 		return val
 	except:
 		return None
+
+
+
+##=====  delimiter: output formatting  =======================================
+## output table of XY points and their distances
+##
+## input, see xy2table():
+## {
+##   'points': [[X0, Y0], [X1, Y1], ...],
+##   'time':   [[0.0, dist(XY0->XY1), dist(XY0->XY2)... ],
+##              [dist(XY1->XY0), 0.0, dist(XY1->XY2)... ],
+##   ]
+## }
+##
+def xy2c(arr):
+	res = []
+	if ((not 'points' in arr)  or
+	    (not 'time' in arr)    or
+	    (len(arr['points']) != len(arr['time']))):
+		raise ValueError("invalid XY-to-XY distance setup")
+
+	n   = len(arr[ "points" ])
+
+	res.append(f'#define  { sCDELIVERIES }  ((unsigned int) {n})')
+	res.append('')
+
+	res.append(f'static const uint32_t { sCDIST }[ {n} ][ {n} ] = {{')
+		##
+		## align all columns; cdigits stores per-column digit.count
+		##
+	d, cdigits = [], []
+	for ri, row in enumerate(arr['time']):
+		d.append(list(round(v)  for v in row))
+
+		if ri:
+			cdigits = list(max(cdigits[ci], len(str(d[-1][ci])))
+			               for ci in range(len(d[-1])))
+		else:
+			cdigits = list(len(str(val))  for val in d[-1])
+
+			## column breaks
+	colbrk = list([''] * len(d[0]))
+
+	if sTABLE_BREAK:
+		for i in range(len(d[0])):
+			if i and ((i % sTABLE_BREAK) == 0) and (i < len(d)):
+				colbrk[i] = ' '
+## TODO: factor out, will be used by other array formatters
+
+	for ri, row in enumerate(d):
+		curr = ''.join(f'{row[ci] :>{ cdigits[ ci ] }},' +colbrk[ci]
+		               for ci in range(len(row)))
+		res.append(sINDENT +'['+ curr +'],')
+
+		if (sTABLE_BREAK and ri and ((ri % sTABLE_BREAK) == 0) and
+		   (ri < len(d))):
+			res.append('')
+
+	res.append('} ;')
+	res.append('')
+
+	return('\n'.join(res))
+
+
+##=====  /delimiter  =========================================================
 
 
 ##---------------------------------------
@@ -1879,7 +1961,7 @@ def random_weight():
 ##
 ## note: currently, only symmetric costs (symm. approximations only)
 ##
-def xy2table(tab, aux):
+def xy2table(tab, aux, fmt='json'):
 	pts  = list(set((p['x'], p['y'])  for p in aux))
 	cost = []
 
@@ -1897,7 +1979,10 @@ def xy2table(tab, aux):
 		'points': pts,
 		'time':   cost,
 	}
-	print(json.dumps(res))
+	if fmt == 'json':
+		print(json.dumps(res))
+	else:
+		print(xy2c(res))
 
 	return 0
 
@@ -2136,7 +2221,8 @@ if __name__ == '__main__':
 		sys.exit( table_partial2full(tbl) )
 
 	if ('XY2TABLE' in os.environ):
-		sys.exit( xy2table(tbl, aux) )
+		fmt = 'C'  if ('TO_C' in os.environ)  else 'json' 
+		sys.exit( xy2table(tbl, aux, fmt=fmt) )
 
 	if bases and aux:
 				## TODO: hardwared vehicle/shift plans
