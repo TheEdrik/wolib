@@ -27,7 +27,7 @@ BORDER=${BORDER:-budapest0.txt}
 ## coordinates stored as strings: we want exact matching for lookups,
 ## not subject to FP rounding etc.
 ##
-DIST=distance.json
+DIST=distance
 
 
 ##-----  nothing user-serviceable below  -------------------------------------
@@ -38,5 +38,8 @@ DIST=distance.json
 RNITEMS=$ITEMS RNTIME=1 RNCOORDS=${BORDER} ./pack.py > $DELIVERIES
 
 ## table for XY(pair)-to-distance lookup
-MAX1=99999999999999999 XY2TABLE=1 ./pack.py $DELIVERIES > $DIST
+MAX1=99999999999999999 XY2TABLE=1 ./pack.py $DELIVERIES > $DIST.json
+
+## C table, include-ready, for XY(pair)-to-distance lookup
+MAX1=99999999999999999 XY2TABLE=1 TO_C=1 ./pack.py $DELIVERIES > $DIST.c
 

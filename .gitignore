@@ -7,4 +7,5 @@ orders*txt
 r/
 *.time
 dist*.json
+distance*.c
 
