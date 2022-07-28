@@ -149,7 +149,10 @@ sCGUARDVAR = sCPREFIX.upper() +'_INCLUDED__'        ## include guard variable
 
 sCXYS      = sCPREFIX.lower() +'_xy_coords'  ## table of (x,y) pairs
 sCXY_TYPE  = sCPREFIX.upper() +'_XYpair'     ## type(...table elements...)
+sCXY_INIT0 = sCPREFIX.upper() +'_XYPAIR_INIT0'          ## 00-init all fields
+
 sCORD_TYPE = sCPREFIX.upper() +'_Orders'     ## type(...order entries...)
+sCORD_INIT0  = sCPREFIX.upper() +'_ORDERS_INIT0'          ## 00-init all fields
 
 sCDELIVERIES = sCPREFIX.upper() +'_ORDERS'
                      ## number of orders, w/o removing any duplicate coordinates
@@ -251,13 +254,39 @@ def include_guard(start=True):
 
 
 ##--------------------------------------
+tTIMEVEC = 'uint64_t'
+
+
+##--------------------------------------
 ## struct ... { ... } field listing (field defs only)
+##
+## all-0 init in order_struct_all0(), see also order_xy_all0()
 ##
 def order_struct_c(pts, const=True):
 	return (
 		sINDENT + ('const '  if const  else '')
-			+'struct { float x; float y; } coords;',
+			+f'struct { sCXY_TYPE } coords;',  ## -> order_xy_all0()
+
+		sINDENT + f'{ tTIMEVEC } time_windows;',
 	)
+
+
+##--------------------------------------
+## all0-init const for "struct { sCXY_TYPE }"
+##
+## mapped to " sCXY_INIT0 "
+##
+def order_xy_init0():
+	return '{ 0, 0, }'
+
+
+##--------------------------------------
+## init const for field-list struct
+## see order_struct_c()
+##
+def order_struct_init0():
+##	return f'{{ { order_xy_init0() }, 0, }}'
+	return f'{{ { sCXY_INIT0 }, 0, }}'
 
 
 ##--------------------------------------
@@ -282,12 +311,27 @@ def xy2c(arr, pts=None):
 	res.append('')
 
 	res.extend([
+		f'struct { sCXY_TYPE } {{',
+			sINDENT + 'float x;',
+			sINDENT + 'float y;',
+		f'}} ;',
+		'/**/',
+		f'#define { sCXY_INIT0 } { order_xy_init0() }',
+		'',
+	])
+
+				## struct for delivery-item list
+	res.extend([
 		'#if 0',
-		f'typedef struct { sCORD_TYPE } {{',
+###		f'typedef struct { sCORD_TYPE } {{',
+		f'struct { sCORD_TYPE } {{',
 	])
 	res.extend(order_struct_c(pts))
 	res.extend([
-		f'}} *{ sCORD_TYPE }_t ;',
+###		f'}} *{ sCORD_TYPE }_t ;',
+		f'}} ;',
+		'/**/',
+		f'#define { sCORD_INIT0 } { order_struct_init0() }',
 		'#endif',
 		'',
 	])
@@ -303,10 +347,8 @@ def xy2c(arr, pts=None):
 			f' * see { sCDIST }[] for point-to-point ' +
 				'traversal cost',
 			f' */',
-			f'static const struct { sCXY_TYPE } {{',
-				sINDENT + 'float x;',
-				sINDENT + 'float y;',
-			f'}} { sCXYS }[ { sCDELIVERIES } /* {n} */ ] = {{',
+			f'struct PCK_XYpair { sCXYS }[ { sCDELIVERIES } ' +
+				f'/* {n} */ ] = {{',
 			sINDENT + xys + ',',
 			'} ;',
 			'#endif',
