@@ -148,6 +148,8 @@ sCDIST   = sCPREFIX.lower() +'_xy2dist'
 sCGUARDVAR = sCPREFIX.upper() +'_INCLUDED__'        ## include guard variable
 
 sCXYS      = sCPREFIX.lower() +'_xy_coords'  ## table of (x,y) pairs
+sCXY_TYPE  = sCPREFIX.upper() +'_XYpair'     ## type(...table elements...)
+sCORD_TYPE = sCPREFIX.upper() +'_Orders'     ## type(...order entries...)
 
 sCDELIVERIES = sCPREFIX.upper() +'_ORDERS'
                      ## number of orders, w/o removing any duplicate coordinates
@@ -249,6 +251,16 @@ def include_guard(start=True):
 
 
 ##--------------------------------------
+## struct ... { ... } field listing (field defs only)
+##
+def order_struct_c(pts, const=True):
+	return (
+		sINDENT + ('const '  if const  else '')
+			+'struct { float x; float y; } coords;',
+	)
+
+
+##--------------------------------------
 ## output table of XY points and their distances
 ##
 ## with non-None 'pts', we output coordinate list (in commented-out
@@ -266,7 +278,19 @@ def xy2c(arr, pts=None):
 	n = len(arr[ "points" ])
 
 	res.append(f'#define  { sCDELIVERIES }  ((unsigned int) {n})')
+	res.append('#include <stdint.h>')
 	res.append('')
+
+	res.extend([
+		'#if 0',
+		f'typedef struct { sCORD_TYPE } {{',
+	])
+	res.extend(order_struct_c(pts))
+	res.extend([
+		f'}} *{ sCORD_TYPE }_t ;',
+		'#endif',
+		'',
+	])
 
 	if pts:
 		assert(len(pts) == n)
@@ -275,13 +299,26 @@ def xy2c(arr, pts=None):
 
 		res.extend([
 			'#if 0',
-			f'static const uint32_t { sCXYS }' +
-				f'[ { sCDELIVERIES } /* {n} */ ] = {{',
+			'/* (X,Y) coordinates, in delivery-item order',
+			f' * see { sCDIST }[] for point-to-point ' +
+				'traversal cost',
+			f' */',
+			f'static const struct { sCXY_TYPE } {{',
+				sINDENT + 'float x;',
+				sINDENT + 'float y;',
+			f'}} { sCXYS }[ { sCDELIVERIES } /* {n} */ ] = {{',
 			sINDENT + xys + ',',
 			'} ;',
 			'#endif',
 			'',
 		])
+
+	res.extend([
+		f'/* order-to-order costs, [i][j] == xy[i] -> xy[j] '
+			'traversal cost',
+		f' * see { sCXYS }[] for coordinate pairs',
+		f' */',
+	])
 
 	res.append(f'static const uint32_t { sCDIST }' +
 		f'[ {sCDELIVERIES} ][ {sCDELIVERIES} ] /* {n}x{n} */= {{')
@@ -310,7 +347,7 @@ def xy2c(arr, pts=None):
 	for ri, row in enumerate(d):
 		curr = ''.join(f'{row[ci] :>{ cdigits[ ci ] }},' +colbrk[ci]
 		               for ci in range(len(row)))
-		res.append(sINDENT +'['+ curr +'],')
+		res.append(sINDENT +'{'+ curr +'},')
 
 		if (sTABLE_BREAK and ri and ((ri % sTABLE_BREAK) == 0) and
 		   (ri < len(d))):
