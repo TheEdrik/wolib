@@ -243,14 +243,19 @@ def str2num(val):
 
 
 ##=====  delimiter: output formatting  =======================================
+def comm(s, fmt='C'):
+	return '/* ' +s +' */'
+
+
+##--------------------------------------
 def include_guard(start=True):
 	guardvar = sCGUARDVAR
 
 	if start:
 		return(f'#if !defined({ sCGUARDVAR })' +'\n' +
-		       f'#define  { sCGUARDVAR } 1  /* API version */')
+		       f'#define  { sCGUARDVAR } 1  { comm("API version") }')
 
-	return f'#endif   /* defined({ sCGUARDVAR }) */'
+	return f'#endif   { comm("defined({ sCGUARDVAR })") }'
 
 
 ##--------------------------------------
@@ -260,14 +265,34 @@ tTIMEVEC = 'uint64_t'
 ##--------------------------------------
 ## struct ... { ... } field listing (field defs only)
 ##
-## all-0 init in order_struct_all0(), see also order_xy_all0()
+## all-0 init in order_struct_all0(); keep these in sync
 ##
 def order_struct_c(pts, const=True):
 	return (
 		sINDENT + ('const '  if const  else '')
 			+f'struct { sCXY_TYPE } coords;',  ## -> order_xy_all0()
+		'',
+
+		sINDENT + 'unsigned int minute;    ' +
+			comm('expected arrival, 1-based minute, >0 if known'),
+		'',
+
+		sINDENT + 'unsigned int vehicle;    ' +
+			comm('assigned vehicle, 1-based index; ' +
+				'0 when unknown'),
+		'',
 
 		sINDENT + f'{ tTIMEVEC } time_windows;',
+
+		sINDENT + f'const char *time0;    ' +
+			comm('human-readable delivery window/s'),
+		'',
+
+		sINDENT + f'unsigned int idx;    ' +
+			comm("redundant, for context/debug"),
+		'',
+
+		sINDENT + f'unsigned int flags;',
 	)
 
 
@@ -286,11 +311,12 @@ def order_xy_init0():
 ##
 def order_struct_init0():
 ##	return f'{{ { order_xy_init0() }, 0, }}'
-	return f'{{ { sCXY_INIT0 }, 0, }}'
+	return f'{{ { sCXY_INIT0 }, 0, 0, NULL, 0, 0, 0, }}'
 
 
 ##--------------------------------------
 ## output table of XY points and their distances
+## includes table-struct definitions
 ##
 ## with non-None 'pts', we output coordinate list (in commented-out
 ## explanatory table)
@@ -362,14 +388,15 @@ def xy2c(arr, pts=None):
 		f' */',
 	])
 
-	res.append(f'static const uint32_t { sCDIST }' +
-		f'[ {sCDELIVERIES} ][ {sCDELIVERIES} ] /* {n}x{n} */= {{')
-		##
-		## align all columns; cdigits stores per-column digit.count
-		##
 	d, cdigits = [], []
+	maxd, mind = -1, 9999999999999
+
 	for ri, row in enumerate(arr['time']):
-		d.append(list(round(v)  for v in row))
+		rowr = list(round(v)  for v in row)
+		d.append(rowr)
+
+		maxd = max(maxd, max(rowr))
+		mind = min(mind, min(r  for r in rowr  if (r > 0)))
 
 		if ri:
 			cdigits = list(max(cdigits[ci], len(str(d[-1][ci])))
@@ -386,9 +413,21 @@ def xy2c(arr, pts=None):
 				colbrk[i] = ' '
 ## TODO: factor out, will be used by other array formatters
 
+	res.extend([
+		f'/* min(table>0)={ mind }; max(table)={ maxd }',
+		' */',
+	])
+
+	res.append(f'static const uint32_t { sCDIST }' +
+		f'[ {sCDELIVERIES} ][ {sCDELIVERIES} ] /* {n}x{n} */= {{')
+		##
+		## align all columns; cdigits stores per-column digit.count
+		##
+
 	for ri, row in enumerate(d):
 		curr = ''.join(f'{row[ci] :>{ cdigits[ ci ] }},' +colbrk[ci]
 		               for ci in range(len(row)))
+
 		res.append(sINDENT +'{'+ curr +'},')
 
 		if (sTABLE_BREAK and ri and ((ri % sTABLE_BREAK) == 0) and
@@ -1358,7 +1397,7 @@ def xy2time(x, y, x0, y0, wgt=1.0, start_minutes=None):
 ## TODO: ASSUMES CONSTANT SPEED
 ## TODO: NEED MAP SCALE
 
-	return vAVG_MIN_PER_KM * (d * 50)
+	return vAVG_MIN_PER_KM * (d * 15)
 
 
 ##--------------------------------------
