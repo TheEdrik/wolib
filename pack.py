@@ -46,8 +46,9 @@
 ##            log current-best results as they evolve to socket
 ##            excluding any other incremental etc. logged data
 ##            writing results is opportunistic, ignoring sending errors
-##   BASE=X,Y[:X,Y...]
+##   BASES=X,Y[:X,Y...]
 ##            list of start/refill locations
+##            alt. BASE=...file containing X,Y pairs of bases...
 ##   VREFILL=[V.ID1]=[...time spec...][:V.ID2=[...time spec...]...]
 ##            vehicle refills.  Vehicle ID1 must be refilled in given time
 ##            window/s; Vehicle ID2 in other windows etc.
@@ -58,6 +59,8 @@
 ##            These are different program points, each possibly with multiple
 ##            feasible completion windows.
 ##            Vehicle IDs MUST be all-numeric.
+##   DIST=...filename of XY-to-distance JSON table...
+##            simple distance-based approximation used if not supplied
 ##
 ## auxiliary functionality
 ##   XY2TABLE  generate point-to-point time/cost lookup table
@@ -111,6 +114,29 @@
 ##     generally not performed on identical-sized primary and secondary sets
 ##   - when optimizing for multiple binned entries, repeate procedure for
 ##     previous non-selected set with identical MAX1 (and MAX2, if applicable)
+
+
+## pack-and-route:
+##   - vehicles' data structure:
+##     - X,Y coordinates
+##     - earliest minute when they may leave (X,Y)
+##     - list of all previous stops: this is the per-vehicle delivery plan
+##
+##   - scan each possible time window
+##     - list deliveries which may happen in given time window
+##       - find vehicles which may deliver within time window
+##         - backtrack if (1) no later delivery windows and (2) no vehicle
+##       - assign each capable vehicle+delivery minute; process rest
+##       - save and compare overall quality for each complete solution
+##
+## backtrack-friendly data structure: store enough information to roll
+## back all updates efficiently
+##   - deliveries: store all other (delivery, vehicle) assignments
+##     which were _not_ taken when assigning current one
+##     - when backtracking, roll back currently assigned delivery and
+##       vehicle assignmet, take next possible (delivery, vehicle) assignment
+##   - vehicles: store pre-update (X,Y), previous earliest-minute tuple
+##     - stops' list just pops last entry to backtrack
 
 
 ##=====  nothing user-serviceable below  =====================================
@@ -643,6 +669,22 @@ def times2vec(tstr, base=800, twindow=15):
 		return [ 0, 0, 0, ]
 
 	return vec, 1 << minv, 1 << (maxv -1)
+
+
+##--------------------------------------
+## read back XY-to-distance lookup table
+## only checking subsequently: table is retrieved before deliveries are read
+##
+def json2distances(fname):
+					## TODO: proper exception handling
+	try:
+		tab = json.load(open(fname, "rb"))
+	except:
+		sys.stderr.write("Unable to read XY-to-distance table " +
+				f"({ fname })\n")
+		return None
+
+	return tab
 
 
 ##--------------------------------------
@@ -1553,61 +1595,72 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 
 ##--------------------------------------
 ## TODO: Python version-portable automatic values
+##
 def vehicle2primary(vehicle):
 	return  vehicle[ 'primary' ]  if ('primary' in vehicle)  else 0
 
 
 ##--------------------------------------
 ## TODO: Python version-portable automatic values
+##
 def vehicle2secondary(vehicle):
 	return  vehicle[ 'secondary' ]  if ('secondary' in vehicle)  else 0
 
 
 ##--------------------------------------
 ## updates 'vehicles', routing vehicle 'v' to (x, y) with
+## (changes restricted to 'vehicles[v]')
+##
 ## nominal arrival 't' (minutes)
+##
 ## notes time of _arrival_ at position
 ##
-def vehicle2xy(vehicles, v, minutes, delivery):
+## returns updated vehicle record only with False 'update'
+##
+def vehicle2xy(vehicles, v, minutes, delivery, update=True):
 	"register moving a vehicle (v) to XY at time T"
+
 	if (not vehicles) or (not v in vehicles):
 		raise ValueError(f"unknown vehicle '{v}'")
 
-	x, y = delivery['x'], delivery['y']
+	x, y  = delivery['x'], delivery['y']
+	nv    = {}
+	currv = vehicles[v]
 
-	vehicle_from = ''
-	if ('x' in vehicles[v]) and (vehicles[v]['x'] != None):
-		vehicle_from =  f'from X={ vehicles[v]["x"] }'
-		vehicle_from += f',Y={ vehicles[v]["y"] }'
+	v_from = ''
+	if ('x' in currv) and (currv['x'] != None):
+		v_from =  f'from X={ currv["x"] }'
+		v_from += f',Y={ currv["y"] }'
 
-	had_prev_xy = ('x' in vehicles[v])
+	had_prev_xy = ('x' in currv)
 
-	vehicles[v][ 'minutes' ] = minutes
-	vehicles[v][ 'tvec'    ] = minute2timevec(minutes)
-	vehicles[v][ 'x'       ] = x
-	vehicles[v][ 'y'       ] = y
+	nv[ 'minutes' ] = minutes
+	nv[ 'tvec'    ] = minute2timevec(minutes)
+	nv[ 'x'       ] = x
+	nv[ 'y'       ] = y
 
-	vehicles[v][ 'primary' ] = vehicle2primary(vehicles[v]) + \
-					delivery[ 'primary' ]
-	vehicles[v][ 'secondary' ] = vehicle2secondary(vehicles[v]) + \
-					delivery[ 'secondary' ]
+	nv[ 'primary'   ] = vehicle2primary(currv)   + delivery[ 'primary'   ]
+	nv[ 'secondary' ] = vehicle2secondary(currv) + delivery[ 'secondary' ]
 		##
 		## assertion: no overruns
 
-	if (not 'deliveries' in vehicles[v]):
-		vehicles[v][ 'deliveries' ] = {}
-			##
-	vehicles[v][ 'deliveries' ][ minutes ] = delivery[ 'index' ]
+	nv[ 'deliveries' ] = {}
+	nv[ 'deliveries' ][ minutes ] = delivery[ 'index' ]
 
-	print(f'## STOP[{v}]={ minute2wall(minutes) } X={x},Y={y} ' +
-	      f'{ vehicle_from }[idx={ delivery["index"] }] +' +
+	print(f'## ARRIVE[{v}]={ minute2wall(minutes) } X={x},Y={y} ' +
+	      f'{ v_from }[idx={ delivery["index"] }] +' +
 	      f'{ delivery[ "primary" ] }')
-	print(f'## LOAD.TOTAL[{v}]={ vehicles[v][ "primary" ] }')
+	print(f'## LOAD.TOTAL[{ v }]={ nv[ "primary" ] }')
 
 	if not had_prev_xy:
-		vehicles[v][ 'START.X'    ] = x
-		vehicles[v][ 'START.Y'    ] = y
-		vehicles[v][ 'START.MINS' ] = minutes
+		nv[ 'START.X'    ] = x
+		nv[ 'START.Y'    ] = y
+		nv[ 'START.MINS' ] = minutes
+
+	if update:
+		vehicles[v] = nv
+
+	return nv
 
 
 ##--------------------------------------
@@ -1663,6 +1716,7 @@ def initial_delivery2starttime(x, y, timevec, x0, y0):
 ## their current position
 ##   - returns [vehicle, distance, ASAP arrival, timevec of possible arrival]
 ##   - sort hits earliest to latest
+##   - only add one
 ##
 ## 'vehicles' is Vehicle Positions
 ## 'dists' is index/XY-to-index/XY distance lookup table
@@ -1672,12 +1726,17 @@ def initial_delivery2starttime(x, y, timevec, x0, y0):
 def vehicle_may_reach(x, y, timevec, vehicles, dists):
 	res   = []
 	maxtb = pathtools.bitcount(timevec)
+	new   = 0          ## how many newly assigned vehicles (no history)
+	                   ## have been seen?
 
 	for vi, v in enumerate(vehicles):
+						## new vehicle: no history
 		if (not 'x' in vehicles[v]) or (not 'minutes' in vehicles[v]):
-			t = timevec2asap(timevec, minutes=True)
-			res.append([ v, 0.0, t, timevec, ])
+			if new < 1:
+				t = timevec2asap(timevec, minutes=True)
+				res.append([ v, 0.0, t, timevec, ])
 			                       ## 'immediate start' placeholder
+			new += 1
 			continue               ## assume vehicle start
 			                       ## updated later to
 			                       ## accommodate delivery
@@ -1685,12 +1744,12 @@ def vehicle_may_reach(x, y, timevec, vehicles, dists):
 		x0, y0 = float(vehicles[v]['x']), float(vehicles[v]['y'])
 		dt = xy2time(float(x), float(y), float(x0), float(y0))
 
-				## current v[...] time excludes delivery
-				## time; account for it now
+					## current v[...] time excludes delivery
+					## time; account for it now
 		dt = round(dt + vTIME_DELIVER_MIN)
 
-				## does arrival time fit within delivery
-				## window at all?
+					## does arrival time fit within delivery
+					## window at all?
 		wt = minute2timevec(dt)
 		aw = wt | timevec2after(wt, maxtb)
 				## arrival window: <= arrival <= end(timevec)
@@ -1817,6 +1876,62 @@ def starttimes(dels, strategy=0):
 
 
 ##--------------------------------------
+## filter vehicle IDs which may pick up delivery
+## returns list of [vehicle ID, earliest arrival] tuples
+##
+## 'new_load' is [primary, secondary] tuple
+## 'vpos' is vehicle-position vector
+##
+def vehicles_which_may_deliver(new_load, vehicles, vpos):
+	primary, secondary = new_load
+
+	if vehicles == []:
+		return []     ## would do below, after some bookkeeping
+
+	res = []
+	for v in vehicles:
+		vid = v[0]
+		v1  = vehicle2primary  (vpos[ vid ])
+		v2  = vehicle2secondary(vpos[ vid ])
+
+		if (primary +v1) > MAX1:
+			print(f"##   V.OVERLOAD[{ vid }]: " +
+			      f"{ primary + v1 }")
+			continue
+
+		if MAX2 and ((secondary +v2) > MAX2):
+			print(f"##   V.OVERLOAD.SECONDARY[{ vid }]: " +
+			      f"{ secondary + v2 }")
+			continue
+
+		res.append([ vid, v[2], ])
+
+	return res
+
+
+##--------------------------------------
+def msbit(t):
+	return (1 << (t.bit_length() -1))
+
+
+##--------------------------------------
+def has_time_after(d, t):
+	"may this delivery be completed after time window?"
+
+	if d and ("time2vec" in d):
+					## possible delivery times, minus any
+					## bits of 't' or before
+
+		t = msbit(t)
+
+		dminust = d[ "time2vec" ] & ~(t + t -1)
+
+		return (dminust > 0)
+
+	return False
+
+
+##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
 ##
@@ -1828,7 +1943,8 @@ def starttimes(dels, strategy=0):
 ## creates new plan with [] (default)
 ## perturbs existing one if passed non-[]
 ##
-def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
+def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
+                   xy2d=None):
 	sched, place, vpos, decisions = [], [], {}, []
 	minutes_now = 0
 				## vpos is vehicle positions, if already known
@@ -1862,12 +1978,82 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 			print(f"## FILL[{v}]=" +timevec2utilstr(tvec,
 			                        maxu, sep='', unitcols=1))
 	print()
+				## compulsory refill windows
 
 				## calculate all distances between delivery
-				## points and bases
-				## ideally, should be from table or query
-	xy2dist = {}
-	dist    = distances(aux, bases, xys=xy2dist)
+				## points and bases, unless loaded as table
+	if xy2d == None:
+		xy2d = {}
+		dist = distances(aux, bases, xys=xy2d)
+
+	##-----  v1:  --------------------------------------------------------
+
+	dels = copy.deepcopy(aux)
+				## enumerate delivery windows (bits in mask)
+				## in chronological order
+
+	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
+	t = tmin
+
+	backtrack = []
+
+	vpos0 = copy.deepcopy(vpos)
+
+	while (t <= tmax):
+					## deliveries (1) not yet scheduled
+					## (2) can be delivered in this window
+
+		ds = list(d  for d in dels  if (t & d['time2vec']))
+
+		t0 = timevec2asap(t, minutes=True)
+		te = t0 + vTIME_UNIT_MINS -1
+		print(f'## T.WINDOW={ minute2wall(t0) }..' +
+			f'{ minute2wall(te) }')
+
+		ds = list(sorted(ds, key=del_unit2sort))
+		for d in ds:
+			didx = d["index"]
+
+			print(f'## T.DEL.IDX={ didx }')
+			print(f'## T.DEL.WINDOW={ d["time"] }')
+
+			x, y = d['x'], d['y']
+			new_load = [ d['primary'], d['secondary'] ]
+
+			vs   = vehicle_may_reach(x, y, t, vpos, xy2d)
+			vids = vehicles_which_may_deliver(new_load, vs, vpos)
+
+			if vids == []:
+				if has_time_after(d, t):
+					print(f'## DELAY[{ didx }]')
+					continue
+
+				raise ValueError("no suitable delivery")
+							## backtrack
+
+				## descend into all (this.delivery, vehicle)
+				## options
+
+			print(f'## D.DEL.V[{didx}]=' +
+				f'{ ",".join(v[0] for v in vids) }')
+			print(f'## D.DEL.V.ASAP[{didx}]=' +
+				",".join(f"{v[1]}" for v in vids))
+
+			if len(vids) > 1:
+				pass
+
+			for vid, asap in vids:
+				print(f'## V.ASSIGN[{ didx }]=[{ vid }]')
+
+				upd = vehicle2xy(vpos, vid, asap, d,
+						update=True)
+
+		print('##')
+		t += t
+
+	vpos = vpos0
+
+	##-----  v0:  --------------------------------------------------------
 
 				## pick "reasonably spaced" start times for
 				## all deliveries
@@ -1898,15 +2084,16 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 		print(f"## T={ d['time'] }  [t.vec=x{ tvec :0x}]")
 		print(f"##   START={ d['start'] }u")
 		print("##   TW=" +timevec2utilstr(tvec, maxu, sep='',
-		                                 unitcols=1))
+		                                  unitcols=1))
 
-		vs = vehicle_may_reach(x, y, tvec, vpos, xy2dist)
+		vs = vehicle_may_reach(x, y, tvec, vpos, xy2d)
 		if vs == []:
 			raise ValueError("no suitable delivery")
 
 		primary, secondary = d['primary'], d['secondary']
 		vid_picked, arrival = None, vTIME_UNDEF
 
+## RRR
 		for v in vs:
 			vid = v[0]
 			v1  = vehicle2primary  (vpos[ vid ])
@@ -1924,6 +2111,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[]):
 
 			if (vid_picked == None) or (v[2] < arrival):
 				vid_picked, arrival = vid, v[2]
+## RRR
 
 		if vid_picked == None:
 			raise ValueError("no suitable vehicle")
@@ -2350,12 +2538,18 @@ if __name__ == '__main__':
 	elif MAX_ELEMS and (MAX_ELEMS < 0):
 		terminate("MAX_ELEMS def out of range [{}]".format(MAX_ELEMS))
 
-	bases = None
+	bases, xy2dist_table = None, None
 	if ('BASE' in os.environ):
 		bases = str2bases(os.environ[ 'BASE' ])
 		if not bases:
 			terminate("invalid list of bases (" +
 			          f"{ os.environ[ 'BASE' ] })")
+
+	if ('DIST' in os.environ):
+		distf = os.environ[ 'DIST' ]
+		xy2dist_table = json2distances(distf)
+		if not xy2dist_table:
+			terminate("can not read XY-to-distance DB ({distf})")
 
 	vehicles = [None] * env2num('VEHICLES', 1)
 
@@ -2421,7 +2615,7 @@ if __name__ == '__main__':
 		}
 
 		for sched in pack_and_route(tbl, aux, bases, vehicles,
-		                            vrefill=v):
+		                            vrefill=v, xy2d=xy2dist_table):
 			print('TODO: schedule placeholder', sched)
 		sys.exit(0)
 
