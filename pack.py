@@ -1572,7 +1572,7 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 
 
 ##--------------------------------------
-## Vehicle Positions
+## Vehicle Status
 ##
 ## 'V.ID': {
 ##    'time':     nominal departure time, 'HHMM'
@@ -1608,7 +1608,7 @@ def vehicle2secondary(vehicle):
 
 
 ##--------------------------------------
-## updates 'vehicles', routing vehicle 'v' to (x, y) with
+## updates 'vehicles', routing vehicle with ID 'v' to (x, y) with
 ## (changes restricted to 'vehicles[v]')
 ##
 ## nominal arrival 't' (minutes)
@@ -1718,12 +1718,14 @@ def initial_delivery2starttime(x, y, timevec, x0, y0):
 ##   - sort hits earliest to latest
 ##   - only add one
 ##
-## 'vehicles' is Vehicle Positions
+## 'vehicles' is Vehicle Status
 ## 'dists' is index/XY-to-index/XY distance lookup table
+##
+## 'delivery' would be, at some point, used to filter delivery/vehicle pairs
 ##
 ## uses string-indexed distances' table
 ##
-def vehicle_may_reach(x, y, timevec, vehicles, dists):
+def vehicle_may_reach(x, y, timevec, vehicles, dists, delivery):
 	res   = []
 	maxtb = pathtools.bitcount(timevec)
 	new   = 0          ## how many newly assigned vehicles (no history)
@@ -1921,7 +1923,6 @@ def has_time_after(d, t):
 	if d and ("time2vec" in d):
 					## possible delivery times, minus any
 					## bits of 't' or before
-
 		t = msbit(t)
 
 		dminust = d[ "time2vec" ] & ~(t + t -1)
@@ -1929,6 +1930,62 @@ def has_time_after(d, t):
 		return (dminust > 0)
 
 	return False
+
+
+##--------------------------------------
+## input is aux.data struct for delivery
+##
+def btrack_delivery(d, delay=False):
+	"data structure to back up delivery 'before' state (backtrack form)"
+
+	res = {
+		'type': 'DELIVERY',
+		'data': {
+			'id':       d[ 'index'    ],
+			'time2vec': d[ 'time2vec' ],
+		}
+	}
+
+	if delay:
+		res[ 'delayed' ] = True
+
+	return res
+
+
+##--------------------------------------
+## input is 'Vehicle Status' struct for vehicle
+## stores ID of delivery if known
+##
+def btrack_vehicle(v, vid, delivery=None):
+	"data structure to back up vehicle 'before' state (backtrack form)"
+
+	vraw = copy.deepcopy(v)                       ## resolve all references
+
+	res = {
+		'type': 'VEHICLE',
+		'id':   vid,
+		'data': vraw
+	}
+
+	if delivery:
+		res[ 'orderid' ] = delivery[ 'index' ]
+
+	return res
+
+
+##--------------------------------------
+## raises exception if
+##   - vehicles MUST reference controlling delivery (if 'orderid' present)
+##   - deliveries which lack vehicles MUST be marked as delayed
+##     - exception: last entry is delivery; assume corresponding
+##       vehicles have not yet been entered as 
+##
+def list_backtrack(bt):
+	"format and parse back current backtrack state"
+
+	for bi, b in enumerate(reversed(bt)):
+		pass
+## pretty-print(backtrace) comes here
 
 
 ##--------------------------------------
@@ -2003,50 +2060,68 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 					## deliveries (1) not yet scheduled
 					## (2) can be delivered in this window
 
-		ds = list(d  for d in dels  if (t & d['time2vec']))
+		ds = list(d  for d in dels
+			if ((t & d['time2vec']) and not 'minutes' in d))
 
 		t0 = timevec2asap(t, minutes=True)
 		te = t0 + vTIME_UNIT_MINS -1
-		print(f'## T.WINDOW={ minute2wall(t0) }..' +
-			f'{ minute2wall(te) }')
+		debugmsg(f'## T.WINDOW={ minute2wall(t0) }..' +
+			 f'{ minute2wall(te) }', 1)
+
+				## build (delivery, vehicle) pairs for all
+				## vehicles which may hit this delivery
+				##
+				## push to backtrack stack, then
+				## explore each as it would happen
 
 		ds = list(sorted(ds, key=del_unit2sort))
 		for d in ds:
 			didx = d["index"]
 
-			print(f'## T.DEL.IDX={ didx }')
-			print(f'## T.DEL.WINDOW={ d["time"] }')
+			debugmsg(f'## T.DEL.IDX={ didx }', 1)
+			debugmsg(f'## T.DEL.WINDOW={ d["time"] }', 1)
 
 			x, y = d['x'], d['y']
 			new_load = [ d['primary'], d['secondary'] ]
 
-			vs   = vehicle_may_reach(x, y, t, vpos, xy2d)
+			vs   = vehicle_may_reach(x, y, t, vpos, xy2d, d)
 			vids = vehicles_which_may_deliver(new_load, vs, vpos)
 
 			if vids == []:
 				if has_time_after(d, t):
+					backtrack.append(
+						btrack_delivery(d, delay=True) )
 					print(f'## DELAY[{ didx }]')
 					continue
 
 				raise ValueError("no suitable delivery")
 							## backtrack
 
+			backtrack.append( btrack_delivery(d) )
+
 				## descend into all (this.delivery, vehicle)
 				## options
 
-			print(f'## D.DEL.V[{didx}]=' +
-				f'{ ",".join(v[0] for v in vids) }')
-			print(f'## D.DEL.V.ASAP[{didx}]=' +
-				",".join(f"{v[1]}" for v in vids))
+			debugmsg(f'## D.DEL.V[{didx}]=' +
+			         f'{ ",".join(v[0] for v in vids) }', 2)
+			debugmsg(f'## D.DEL.V.ASAP[{didx}]=' +
+			         ",".join(f"{v[1]}" for v in vids), 2)
 
 			if len(vids) > 1:
 				pass
 
 			for vid, asap in vids:
+				backtrack.append(
+					btrack_vehicle(vpos[vid], vid, d))
+
 				print(f'## V.ASSIGN[{ didx }]=[{ vid }]')
 
 				upd = vehicle2xy(vpos, vid, asap, d,
-						update=True)
+				                 update=True)
+				d[ 'minutes' ] = asap
+
+			if debug_is_active(2):
+				list_backtrack(backtrack)
 
 		print('##')
 		t += t
