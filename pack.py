@@ -211,7 +211,10 @@ vNEW_VEHICLE = 'NEW.VEHICLE'
 
 ##----------------------------------------------------------
 ## trace types (bitmask)
-vTRC_TIME = 1
+vTRC_TIME  = 1
+vTRC_MAP   = 2        ## map-related properties: coordinates, distances
+vTRC_SCHED = 4        ## schedule-related properties: options when
+                      ## assigning units to dispatch etc.
 
 
 ##----------------------------------------------------------
@@ -260,8 +263,11 @@ def usage():
 
 
 ##--------------------------------------
-def debug_is_active(lvl=1):
-	return DEBUG and (DEBUG >= 0) and (DEBUG >= lvl)
+tTRACETYPES = {
+	'time':  vTRC_TIME,
+	'map':   vTRC_MAP,
+	'sched': vTRC_SCHED,
+}
 
 
 ##--------------------------------------
@@ -271,12 +277,8 @@ sys_trace = None
 
 
 ##--------------------------------------
-tTRACETYPES = {
-	'time': vTRC_TIME,
-}
-
-
-##--------------------------------------
+## query and cache what has been marked to log by the 'TRACE' env. variable
+##
 def tracetypes():
 	global sys_trace
 
@@ -292,6 +294,19 @@ def tracetypes():
 
 
 ##--------------------------------------
+## does the global 'DEBUG' setting, or optionally any of the trace
+## types in 'trace', mean we want to log a current message?
+##
+def debug_is_active(lvl=1, trace=0):
+	if DEBUG and (DEBUG >= 0) and (DEBUG >= lvl):
+		return True
+
+	return (trace & tracetypes())  if trace  else 0
+			## nano-optimization to save calls to tracetypes()
+			## please do not comment on it
+
+
+##--------------------------------------
 ## returns False to allow set-log-passthrough chains
 ##
 ## 'type' is bitmask of vTRC... types, if specific event
@@ -303,6 +318,18 @@ def debugmsg(msg, lvl=1, type=0):
 		print(msg)
 
 	return False
+
+
+##--------------------------------------
+## transform to human-scaled time
+## start, end must have been supplied by time.perf_counter()
+##
+def timediff_str(start, end):
+	diff  = end - start
+	scale = 1000.0
+	unit  = 'ms'
+
+	return(f"{ diff * scale :.2f}{unit}")
 
 
 ##--------------------------------------
@@ -2112,6 +2139,22 @@ def best_fit_decreasing_multiple(tbl):
 
 
 ##--------------------------------------
+## human-readable form for special assignments
+##
+def delvtuple2str(v, asap):
+	"pretty-print [ vehicle, time(ASAP), ] tuples"
+
+	if (v == vNEW_VEHICLE):
+		return '[new vehicle]'
+
+	elif (v == vDELAY_DELIVERY):
+		return '[deliver later]'
+
+	return f'V[,ASAP={ asap }min]'
+
+
+
+##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
 ##
@@ -2171,12 +2214,28 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## pick "reasonably spaced" start times for
 				## all deliveries
 	dels = copy.deepcopy(aux)
+
+	tstart = time.perf_counter()
+
 	starttimes(dels)
+
+	tend = time.perf_counter()
+	debugmsg(f'## time(START.TIMES)={ timediff_str(tstart, tend) }',
+	         lvl=2, type=vTRC_TIME)
+	tstart = tend
+	##-----  tstart is after initial delivery assignments  ---------------
+
 
 				## try BFD plans as an approximation of
 				## how many vehicles are needed
 	bfds = best_fit_decreasing_multiple(tbl)
 	debugmsg(f'## BFD.VEHICLES={ len(bfds) }', 1)
+
+	tend = time.perf_counter()
+	debugmsg(f'## time(BFD.VEHICLES)={ timediff_str(tstart, tend) }',
+	         lvl=2, type=vTRC_TIME)
+	tstart = tend
+	##-----  tstart is after nr-of-units(BFD) calc  ----------------------
 
 	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
 	t = tmin
@@ -2192,6 +2251,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	while (t <= tmax):
 		t0 = timevec2asap(t, minutes=True)
 		te = t0 + vTIME_UNIT_MINS -1
+			##
 		debugmsg(f'## T.WINDOW={ minute2wall(t0) }..' +
 			 f'{ minute2wall(te) }', 1)
 
@@ -2206,49 +2266,144 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 			    (not is_delivery_frozen(d))))
 
 		didxs = sorted(d["index"] for d in (ds))
-				## which deliveries are recommended-to-start now
+			## which deliveries are recommended-to-start now?
 
 		debugmsg(f'## T.START0.COUNT={ len(ds) }', 1)
 		if ds:
 			debugmsg('## T.START0.UNITS=' +
 				f'{ ",".join(str(di)  for di in didxs) }', 1)
 
-		curr = {}
+				## time assignments in current round
+				## nr. of possible pairs (total)
+				## does this combination break/backtrack?
+		curr, pairs, btrack = {}, 0, False
+
+		ds = list(sorted(ds, key=del_unit2sort))
+		for d in ds:
+			didx = d[ "index" ]
+
+			debugmsg(f'## T.DELV.IDX={ didx }', 1)
+			debugmsg(f'## T.DELV.WINDOW={ d["time"] }', 1)
+
+			x, y = d['x'], d['y']
+			new_load = [ d['primary'], d['secondary'] ]
+
+			debugmsg(f'## T.DELV.XY={ x },{ y }', 2, type=vTRC_MAP)
+
+			vs   = vehicle_may_reach(x, y, t, vpos, xy2d, d)
+			vids = vehicles_which_may_deliver(new_load, vs, vpos)
+
+			curr[ didx ] = vids
+
+			if has_time_after(d, t) and (not asap):
+				curr[ didx ].append([ vDELAY_DELIVERY, 0, ])
+
+			## categorize all possibilities; pick option to
+			## descend into.  split option tuples into
+			## (1) assigned (2) alternate groups; first
+			## one is assigned, second one will be picked up
+			## if backtracking
+			##
+			## each delivery may have only one option
+			## assigned to it; if out of options, backtrack.
+
+			if vids == []:
+				btrack = True
+				break
+
+			pairs += len(curr[ didx ])
+				## could just sum(len(curr[didx])) instead
+
+##			if vids == []:
+##				if has_time_after(d, t):
+##					backtrack.append(
+##						btrack_delivery(d, delay=True) )
+##					print(f'## DELAY[{ didx }]')
+##					continue
+##				vids = [ vDELAY_DELIVERY, 0, ]
+##
+##				raise ValueError("no suitable delivery")
+##
+##			for vid, asap in vids:
+##				backtrack.append(
+##					btrack_vehicle(vpos[vid], vid, d))
+##
+##				debugmsg(f'## V.ASSIGN[{ didx }]=[{ vid }]', 2)
+##
+##				upd = vehicle2xy(vpos, vid, asap, d,
+##				                 update=True)
+##				d[ 'minutes' ] = asap
+##
+##			backtrack.append( btrack_delivery(d) )
+##
+##				## descend into all (this.delivery, vehicle)
+##				## options
+##
+##			debugmsg(f'## D.DELV.V[{didx}]=' +
+##			         f'{ ",".join(v[0] for v in vids) }', 2)
+##			debugmsg(f'## D.DELV.V.ASAP[{didx}]=' +
+##			         ",".join(f"{v[1]}" for v in vids), 2)
+
+		if btrack:
+			pass
+
+				## split [delivery: vehicle, ASAP] tuples' list
+				## to 'taken', 'not taken' list of options
+
+		if debug_is_active(1, vTRC_SCHED):
+			print('## DELV.SCHED.TUPLES[time.w=' +
+				f'{ t.bit_length()-1 }].COUNT={ pairs }')
+			print(f'## VEH.AVAIL={ avail }')
+
+			for d in sorted(curr.keys()):
+				dstr = ",".join(delvtuple2str(v, asap)
+				                for v, asap in curr[d])
+					##
+				print(f'## DELV[{ d }]={ dstr }')
+
+		debugmsg('##', 1)
+		t += t
+		continue
+		##============================================================
 
 		ds = list(d  for d in dels
-			if ((t & d['time2vec']) and
-			    (not is_delivery_frozen(d))))
+		          if ((t & d['time2vec']) and
+		              (not is_delivery_frozen(d))))
 				##
 				## deliveries (1) not yet scheduled
 				## (2) can be delivered in this window
 
-				## build (delivery, vehicle) pairs for all
-				## vehicles which may hit this delivery
+				## build (delivery, vehicle) pairs, listing
+				## all vehicles which may hit this delivery
 				##
 				## - all specific, already traversing vehicles
-				##   are listed if they may reach this
-				##   delivery.
+				##   which may reach this delivery (in the
+				##   currently checked window)
+				##
 				## - available but not yet started vehicles
 				##   are assigned from a 'pool' as they
 				##   are interchangeable. we only need to
 				##   keep track of how many there are,
 				##   and one is sufficient to 'assign'
 				##   (since we do not care about which one)
-				## - an extra token is added if delivery
-				##   may be delayed
-				## - conversely, if delivery may not be
-				##   delayed, and is not reachable,
-				##   we must backtrack.
 				##
-				## push to backtrack stack, then
-				## explore each as it would happen
+				## - an extra 'virtual vehicle' is added
+				##   if delivery may be delayed. this is
+				##   a placeholder, making it explicit that
+				##   the delivery has been considered, but
+				##   it does not happen now.
+				##
+				## - conversely, if delivery may not be
+				##   delayed, is not reachable, and we are
+				##   out of unassigned vehicles,
+				##   we must backtrack.
 
 		ds = list(sorted(ds, key=del_unit2sort))
 		for d in ds:
 			didx = d[ "index" ]
 
-			debugmsg(f'## T.DEL.IDX={ didx }', 1)
-			debugmsg(f'## T.DEL.WINDOW={ d["time"] }', 1)
+			debugmsg(f'## T.DELV.IDX={ didx }', 1)
+			debugmsg(f'## T.DELV.WINDOW={ d["time"] }', 1)
 
 			x, y = d['x'], d['y']
 			new_load = [ d['primary'], d['secondary'] ]
@@ -2277,9 +2432,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## descend into all (this.delivery, vehicle)
 				## options
 
-			debugmsg(f'## D.DEL.V[{didx}]=' +
+			debugmsg(f'## D.DELV.V[{didx}]=' +
 			         f'{ ",".join(v[0] for v in vids) }', 2)
-			debugmsg(f'## D.DEL.V.ASAP[{didx}]=' +
+			debugmsg(f'## D.DELV.V.ASAP[{didx}]=' +
 			         ",".join(f"{v[1]}" for v in vids), 2)
 
 			continue
@@ -2302,6 +2457,12 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 		debugmsg('##', 1)
 		t += t
+
+	tend = time.perf_counter()
+	debugmsg(f'## time(PACK.ROUTE.ASSIGN0)={ timediff_str(tstart, tend) }',
+	         lvl=2, type=vTRC_TIME)
+	tstart = tend
+	##-----  tstart is after initial greedy assignment  ------------------
 
 	vpos = vpos0
 
