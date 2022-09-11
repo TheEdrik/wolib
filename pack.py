@@ -1113,6 +1113,8 @@ def table_read(fname, field=1, fmt='base'):
 			x, y = f[2], f[3]
 					## any conversion etc. would come here
 
+## TODO: centralized return-all0 for struct
+
 			aux.append({
 				'primary':     fd1,
 				'secondary':   fd2,
@@ -1782,6 +1784,89 @@ def vehicle2secondary(vehicle):
 
 
 ##--------------------------------------
+## route vehicle with ID 'vid' to delivery in 'id', arriving at 'minutes'
+##
+## returns time of arrival, in minutes
+##
+## route MUST have been prefiltered to be consistent with current
+## position and delivery window
+##
+## 'vcost'      is current vehicle VRoute Status (already 'vid'-indexed);
+##              updated
+## 'arrival'    is delivery-to-minute mapping; unassigned entries are NOT
+##              present; updated
+## 'deliveries' is complete delivery struct; read-only access
+##
+def vehicle2xy_minimal(vcost, arrival, vid, id, arrv_minute, deliveries):
+
+	##-----  sanity checks  ----------------------------------------------
+	if len(deliveries) <= id:
+		raise ValueError(f"assigning invalid delivery ID ({ id })")
+
+	if id in arrival:
+		raise ValueError(f"delivery ID={id} is already assigned")
+
+	##-----  /sanity checks  ---------------------------------------------
+
+	if vcost[ 'stops' ] == []:
+		px, py = None, None
+	else:
+		px, py = vcost[ 'stops' ][-1][2], vcost[ 'stops' ][-1][3]
+							## previous x, y
+
+	x, y = deliveries[ id ]['x'], deliveries[ id ]['y']
+
+	if px == None:
+ 		px, py = 0.5, 0.5
+## TODO: dummy mid-of-map base coordinate
+	else:
+		px, py = float(px), float(py)
+
+	dxy  = xy2dist(float(x), float(y), px, py)
+	dmin = xy2minutes(float(x), float(y), px, py)
+
+	vcost[ "distances" ].append(dxy)
+	vcost[ "d_minutes" ].append(dmin)
+
+	add1 = deliveries[ id ]['primary'  ]
+	add2 = deliveries[ id ]['secondary']
+
+	if (add1 +vcost[ "primary" ] > MAX1):
+		raise ValueError(f"delivery ID={id} would overload to" +
+		                 f"{ add1 +vcost[ 'primary' ]}")
+			##
+	if (add1 +vcost[ "primary" ] > MAX1):
+		raise ValueError(f"delivery ID={id} would secondary-" +
+			f"overload to { add1 +vcost[ 'secondary' ]}")
+
+	vcost[ "primary"   ] += add1
+	vcost[ "secondary" ] += add2
+
+	debugmsg(f"## ASSIGN.V[VH={vid},DELV={id}]=" +
+	         f"{ arrv_minute }min;LOAD={ vcost['primary' ]}",
+	         1, type=vTRC_SCHED)
+
+	debugmsg(f"## ASSIGN.V[VH={vid},DELV={id}]=" +
+	         f"X={x},Y={y},T.ARRV={ arrv_minute }min",
+	         2, type=vTRC_MAP)
+
+			## driving to delivery X,Y
+			## advance time to arrival + handover latency
+
+	arrival[ id ] = arrv_minute
+
+	vcost[ 'stops' ].append([
+		arrv_minute, id, x, y,
+	])
+
+	return arrv_minute
+##
+##	now_min = arrv_minute +vTIME_DELIVER_MIN
+##			## ASAP(vehicle leaving delivery point)
+##	t = minute2timevec(now_min)
+
+
+##--------------------------------------
 ## updates 'vehicles', routing vehicle with ID 'v' to (x, y) with
 ## (changes restricted to 'vehicles[v]')
 ##
@@ -1790,6 +1875,9 @@ def vehicle2secondary(vehicle):
 ## notes time of _arrival_ at position
 ##
 ## returns updated vehicle record only with False 'update'
+##
+## TODO: see vehicle2xy_minimal, which is a closely related subset
+## merge them, once vehicle tracking structs are finalized
 ##
 def vehicle2xy(vehicles, v, minutes, delivery, update=True):
 	"register moving a vehicle (v) to XY at time T"
@@ -2389,6 +2477,7 @@ def vehicle_cost0():
 		'secondary': 0,
 		'd_minutes': [],
 		'distances': [],
+		'stops':     [],
 	}
 
 
@@ -2505,15 +2594,13 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	max_mins = timevec2asap(tmax, minutes=True) +vTIME_UNIT_MINS -1
 					## not actually reachable
 
-	nr_routes = 0                   ## how many routes were evaluated?
-	                                ## (for this vehicle)
-
 	tbactrack0 = time.perf_counter()
 
 					## brute-force plan generation for each
 					## vehicle, based on BFD approximation
 	while not done:
-		t, now_min = tmin, 0
+		t, now_min, nr_routes = tmin, tmin, 0
+					## nr. of routes checked (this vehicle)
 
 		vid   = virtual_vehicle2id(len(vplans))
 		vcost = vehicle_cost0()          ## current vehicle, cost total
@@ -2521,7 +2608,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 		vbit = 1 << len(vplans)
 			## TODO: static vehicle-to-[something] assignment
 
-		vplans[ vid ] = new_vehicle(vid)
+		vplans[ vid ] = vcost
 
 		debugmsg(f'## PLAN.VEH.NR={ len(vplans) }', 2,
 		         type=vTRC_SCHED)
@@ -2545,23 +2632,29 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## may be started in [t .. t+vNEXTUNITS)
 	
 		while ((t <= tmax) and (now_min < max_mins)) or do_backtrack:
+
 			##-----  backtrack:  ---------------------------------
 			if do_backtrack:
 				if backtrack == []:
 					break        ## nothing left to explore
 
 				print(f"## BACKTRACKING [{ len(backtrack) }] "
-				      "level/s")
-				show_backtrack(backtrack, btrack_alt)
+				      f"level/s, {nr_routes} config/s checked")
 
-					## un-assign last assignment
-					##
+
+				if debug_is_active(1) and False:
+					show_backtrack(backtrack, btrack_alt)
+
+						## un-assign last assignment
+						##
 				prev = backtrack.pop(-1)
 				debugmsg(f'## BACKTRACK.UNDO={ prev }',
 				         1, type=vTRC_STACK)
 
 					## sanity check: delivery just
-					## removed MUST be marked as assigned
+					## removed MUST be marked as assigned:
+					## was marked as such when originally
+					## descending
 					##
 				id = prev[0]       ## id(just removed delivery)
 				if not id in arrival:
@@ -2575,24 +2668,69 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 					##
 				vp_delv = vplans[ vid ][ 'stops' ][-1][1]
 				if id != vp_delv:
-					raise ValueError(f"backtrack stack "
+					raise ValueError("backtrack stack " +
 						"disagrees with route list " +
 						f"(delv={ prev[0] }, " +
 						f"list={ vp_delv })")
 					##
 					## also remove last segments from cost
+				rm1 = dels[ id ]['primary'  ]
+				rm2 = dels[ id ]['secondary']
+
+## TODO: this is a 'check that we are removing delivery X, which must be
+## at the end of the current schedule' condition
+
+					## some sanity checks: load
+					## accounting is correct
+					##
+				if vcost[ "primary" ] < rm1:
+					raise ValueError("backtrack stack " +
+						"weight inconsistent " +
+						f"(delv={ prev[0] }, " +
+						f"-=PRIMARY={ rm1 })")
+					##
+				if vcost[ "secondary" ] < rm2:
+					raise ValueError("backtrack stack " +
+						"weight inconsistent " +
+						f"(delv={ prev[0] }, " +
+						f"-=SECONDARY={ rm2 })")
+
+## TODO: this part of replacement is essentially a 'swap delivery X to Y'
+## operation. if we factor it out, it simplifies subsequent
+## delivery-swapping checks
+				debugmsg('## BACKTRACK.V.STOPS.LAST=' +
+				         f'(...{ vplans[vid]["stops"][-2:] })',
+				         1, type=vTRC_STACK)
+
+					## sanity check: last stop MUST
+					## be 
+				if (vplans[ vid ][ 'stops' ] == []):
+					raise ValueError("backtrack stack " +
+						"stop count inconsistent " +
+						f"(delv={ prev[0] })")
+					##
+				ldel = vplans[ vid ][ 'stops' ].pop(-1)
+					## remove last delivery from list
+					## of stops
+					##
+				if (ldel[1] != id):
+					raise ValueError("backtrack stack " +
+						"stops inconsistent " +
+						f"(delv={prev[0]}, d.id={id}, "+
+						f"stop id={ ldel[1] })")
+
 				vcost[ "distances" ].pop(-1)
 				vcost[ "d_minutes" ].pop(-1)
-					##
-				vcost[ "primary"   ] -= dels[ id ]['primary'  ]
-				vcost[ "secondary" ] -= dels[ id ]['secondary']
+				vcost[ "primary"   ] -= rm1
+				vcost[ "secondary" ] -= rm2
 ## TODO: factor out these +- adjustments
 
 					## (1) if no alternatives left, ascend
 					##
 				if (btrack_alt[-1] == []):
-					backtrack.pop(-1)
-					assert(0)
+					btrack_alt.pop(-1)
+					continue
+
 
 					## (2) if there are alternatives,
 					## promote them as taken, continue
@@ -2612,20 +2750,35 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 						"incorrectly registered " +
 					        f"alternate ({ next[0] })")
 
-## RRR
+					## sanity check: next-possible delivery
+					## MUST NOT overload vehicle
+					## would have been filtered out
+					## during alt-candidate search
+					##
+				if (next[1] + vcost['primary'] > MAX1):
+					raise ValueError(f"backtrack did not "
+						"filter out overpacked " +
+					        f"delivery (+{ next[1] })")
 
-				assert(0)
+				id, _, asap = next
+
+				now_min = vehicle2xy_minimal(vcost, arrival,
+						vid, id, asap, dels)
+				t = minute2timevec(now_min)
 
 			do_backtrack = False
 			##-----  /backtrack  ---------------------------------
 
-			me = now_min +vTIME_UNIT_MINS * vNEXTUNITS -1
+			## find feasible candidates, assign them
+
+			me = t +vTIME_UNIT_MINS * vNEXTUNITS -1
 			debugmsg(f'## T.NOW={ minute2wall(now_min) }')
 			debugmsg(f'## T.MAX.NOW={ minute2wall(me) }')
 
 			t0 = timevec2asap(t, minutes=True)
 			te = t0 + vTIME_UNIT_MINS * vNEXTUNITS -1
 			tmask = (t << vNEXTUNITS) -t
+
 						## immediate-future time units,
 						## where we consider deliveries
 
@@ -2662,29 +2815,38 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 			mr = sorted(mr, key=operator.itemgetter(1),
 			            reverse=True)
+
+## TODO: proper heuristic!
+## in the beginning, discard things much lighter than first assignment
+## cuts down branching of early searches
 ##
+			if (len(vplans) < 4) and mr:
+				minprimary = (mr[0][1] * 80) // 100
+
+				mr = list(m  for m in mr
+				          if (m[1] >= minprimary))
+
 ## TODO: filter directly using xy2asap_minute(), which is now
 ## replicated below
-
 ## TODO: formalized representation of intentionally skipped deliveries
 
 			debugmsg('## SCHED.NOW.CANDIDATES0=' +
 			         ','.join(mayreach2str(m) for m in mr),
 			         2, type=vTRC_SCHED)
 
+## TODO: special-case initial route from base to first (X,Y)
+##       needs preferred/fixed/etc. vehicle-to-base assignment
+
 					## turn [ idx, primary ] to
 					## [ index, primary, ASAP(minute) ]
 					## tuples
 
-## TODO: special-case initial route from base to first (X,Y)
-##       needs preferred/fixed/etc. vehicle-to-base assignment
-
 			if x != None:
 				mrn = []
 				for di, add in mr:
+					twindow = tmask & dels[di]['time2vec']
 					asap = xy2asap_minute(x, y, x, y,
-					        arrived,
-					        dels[di][ 'time2vec' ])
+					        arrived, twindow)
 					if asap == None:
 						continue       ## can not reach
 					mrn.append([ di, add, asap ])
@@ -2693,10 +2855,13 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 						## starting new vehicle: can
 						## reach start of window
 						##
-				mrn = list([ di, add,
-					timevec2asap(dels[di][ 'time2vec' ],
-						     minutes=True), ]
-					for di, add in mr)
+				mrn = []
+				for di, add in mr:
+					twindow = tmask & dels[di]['time2vec']
+
+					mrn.append([ di, add,
+					    timevec2asap(twindow, minutes=True),
+					])
 			mr = mrn
 ## TODO: check for return-to-base as an option
 
@@ -2776,52 +2941,24 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 			for cidx, choice in enumerate(mrn):
 				id, pr, asap = choice
 
+## TODO: filtered above: delivery is already scheduled+arrived
+## better check to avoid redundancy
 				if id in arrival:
 					continue
-## TODO: filtered above
-## better check to avoid redundancy
 
-## TODO: base-to-first special-cased
-				px, py = x, y
-				x, y = dels[ id ]['x'], dels[ id ]['y']
-
-				if px == None:
-					px, py = 0.5, 0.5
-## TODO: dummy mid-of-map base coordinate
-				else:
-					px, py = float(px), float(py)
-				dxy  = xy2dist(float(x), float(y), px, py)
-				dmin = xy2minutes(float(x), float(y), px, py)
-
-				vcost[ "distances" ].append(dxy)
-				vcost[ "d_minutes" ].append(dmin)
-
-				vcost[ "primary"   ] += dels[ id ]['primary'  ]
-				vcost[ "secondary" ] += dels[ id ]['secondary']
-
-				debugmsg(f"## ASSIGN.V[VH={vid},DELV={id}]=" +
-				         f"{asap}min;LOAD={vcost['primary']}",
-				         1, type=vTRC_SCHED)
-				debugmsg(f"## ASSIGN.V[VH={vid},DELV={id}]=" +
-				         f"X={x},Y={y},T={asap}min",
-				         2, type=vTRC_MAP)
-
-				## driving to delivery X,Y
-				## advance time to arrival + handover latency
-
-				arrival[ id ] = asap
-## TODO: need cost model
+				asap = vehicle2xy_minimal(vcost, arrival, vid,
+						id, asap, dels)
+					##
+				now_min = asap +vTIME_DELIVER_MIN
+				t = minute2timevec(asap + vTIME_DELIVER_MIN)
+					##
 				backtrack.append([ id, asap, vid, now_min ])
 				btrack_alt.append(mrn[ cidx+1: ])
+					##
 					## descend into current choice
 					## mark alternatives to explore
 					## after return from backtrack below
 
-				vplans[vid][ 'stops' ].append([
-					asap, id, x, y,
-				])
-				now_min = asap +vTIME_DELIVER_MIN
-				t = minute2timevec(asap + vTIME_DELIVER_MIN)
 				descend = True
 				break
 
