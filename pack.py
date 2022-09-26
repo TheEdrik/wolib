@@ -50,6 +50,7 @@
 ##                    sched  any schedule-related parameter
 ##                    pack   details of bin packing
 ##                    stack  details of backtracking
+##                    flow   control/data flow
 ##                    all    any traceable quantity (all of the above)
 ##   TUPLE_N=...  limit the size of element-tuples when attempting to swap
 ##                not-yet-selected and selected elements (see below)
@@ -222,6 +223,12 @@ vNEW_VEHICLE = 'NEW.VEHICLE'
 ## how many units of immediate future to consider, when checking for
 ## next-available candidates
 vNEXTUNITS = 6
+##
+## see also vTIME_UNIT_MINS
+##
+## do not consider more than this many candidates at each
+## position, when BFD-searching for candidates
+vBFD_MAX_CANDITATES = 3
 
 
 ##----------------------------------------------------------
@@ -232,6 +239,7 @@ vTRC_SCHED =    4     ## schedule-related properties: options when
                       ## assigning units to dispatch etc.
 vTRC_STACK =    8     ## details of backtrace stack
 vTRC_PACK  = 0x10     ## details of packing
+vTRC_FLOW  = 0x20     ## control/data flow
 
 ## not a real switch: used when (debuglevel >= X) AND tracing bits are needed
 vTRC__AND  = 0x8000000000000000
@@ -270,6 +278,7 @@ vSOLUTION = {
 ##--------------------------------------
 def terminate(msg):
 	sys.stderr.write(msg +'\n')
+	sys.stderr.flush()
 	sys.exit(-1)
 
 
@@ -289,8 +298,10 @@ tTRACETYPES = {
 	'sched': vTRC_SCHED,
 	'pack':  vTRC_PACK,
 	'stack': vTRC_STACK,
+	'flow':  vTRC_FLOW,
 
-	'all':   vTRC_TIME | vTRC_MAP | vTRC_SCHED | vTRC_PACK | vTRC_STACK,
+	'all':   vTRC_TIME | vTRC_MAP | vTRC_SCHED | vTRC_PACK | \
+			vTRC_STACK | vTRC_FLOW,
 }
 
 
@@ -354,12 +365,30 @@ def debugmsg(msg, lvl=1, type=0):
 ## transform to human-scaled time
 ## start, end must have been supplied by time.perf_counter()
 ##
-def timediff_str(start, end):
-	diff  = end - start
+def timediff_str(tstart, tend):
+	diff  = tend - tstart
 	scale = 1000.0
 	unit  = 'ms'
 
 	return(f"{ diff * scale :.2f}{unit}")
+
+
+##--------------------------------------
+## measures and formats current time, relative to 'tstart',
+## as delta(time)
+##
+## returns current time to allow chaining calls, possible to assign
+## to 'next ref. start time'
+##
+## 'tstart' must have been set by previous perf-counter read
+##
+def timediff_log_now(tstart, descr):
+	curr = time.perf_counter()
+
+	debugmsg(f'## time({ descr })={ timediff_str(tstart, curr) }',
+	         lvl=2, type=vTRC_TIME)
+
+	return curr
 
 
 ##--------------------------------------
@@ -934,7 +963,6 @@ def selection2lines(sel, format='plain'):
 			for s in list( enumerate(sel) ))
 
 	return list(res)
-
 
 
 ##--------------------------------------
@@ -1751,6 +1779,17 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 
 
 ##--------------------------------------
+## Delivery Arrival Status
+##
+## 'delivery ID': {
+##     'vehicle': vehicle ID,
+##     'minute':  ...arrival time...
+## }
+##
+## MUST be consistent with 'stops' of delivering vehicles
+
+
+##--------------------------------------
 ## VRoute Status
 ##   statistics for delivery orders when searching for minimum
 ##
@@ -1764,6 +1803,7 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##    'd_minutes': [ xy travel time1, xy travel time2, ... ]
 ##                  -- net minutes, without delivery overhead
 ##                  -- nr. of elements in 'd_minutes' and 'distances' match
+##    'stops': see V.ID Vehicle Status field
 ## }
 ##
 ## per-search status, not (yet?) landing in global struct -> no V.ID index
@@ -1796,6 +1836,8 @@ def vehicle2secondary(vehicle):
 ## 'arrival'    is delivery-to-minute mapping; unassigned entries are NOT
 ##              present; updated
 ## 'deliveries' is complete delivery struct; read-only access
+##
+## arrival MUST NOT contain entry for 'id' yet
 ##
 def vehicle2xy_minimal(vcost, arrival, vid, id, arrv_minute, deliveries):
 
@@ -1850,20 +1892,19 @@ def vehicle2xy_minimal(vcost, arrival, vid, id, arrv_minute, deliveries):
 	         f"X={x},Y={y},T.ARRV={ arrv_minute }min",
 	         2, type=vTRC_MAP)
 
-			## driving to delivery X,Y
-			## advance time to arrival + handover latency
+				## driving to delivery X,Y
+				## advance time to arrival + handover latency
 
-	arrival[ id ] = arrv_minute
+	if (id in arrival):
+		raise ValueError(f"assigning delivery {id} more than once")
+
+	arrival[ id ] = delv_arrival_status(vid, arrv_minute)
 
 	vcost[ 'stops' ].append([
 		arrv_minute, id, x, y,
 	])
 
 	return arrv_minute
-##
-##	now_min = arrv_minute +vTIME_DELIVER_MIN
-##			## ASAP(vehicle leaving delivery point)
-##	t = minute2timevec(now_min)
 
 
 ##--------------------------------------
@@ -2435,7 +2476,8 @@ def new_vehicle(vid):
 
 ##--------------------------------------
 ## Backtrack Storage:
-##    [ id, arrival of delivery(minutes), vehicle ID, cost(trip), ]
+##    [ id, arrival of delivery(minutes), vehicle ID, cost(trip),
+##      minutes_before ]
 ##
 ## backtrack stack contains one entry per level: this choice was taken.
 ##
@@ -2447,6 +2489,8 @@ def new_vehicle(vid):
 ##--------------------------------------
 ## climb back in backtrack tree, returns next combination to evaluate
 ##
+## sanity-check only, no output, unless asked for
+##
 ## see 'Backtrack Storage' for description of backtrack entries
 ##
 def show_backtrack(backtrack, btrack_alt):
@@ -2455,13 +2499,17 @@ def show_backtrack(backtrack, btrack_alt):
 		          f'depth(stack)={ len(backtrack) }, ' +
 		          f'depth(alternates)={ len(btrack_alt) })')
 
-	if (backtrack == []) or (btrack_alt == []):
+	if (backtrack == []):
+		debugmsg('## BACKTRACK STACK/S EMPTY', 1, type=vTRC_STACK)
 		return False
 
-	print('====  BACKTRACK STACK')
-	for bi, btrck in enumerate(range(len(backtrack) -1, -1, -1)):
-		print(f'## BACKTRACK.CHOICE[{ -1-bi }]={ backtrack[ btrck ] }')
-		print(f'## BTRACK.ALT[{ -1-bi }]={ btrack_alt[ btrck ] }')
+	if debug_is_active(2, vTRC_STACK):
+		print('====  BACKTRACK STACK')
+		for bi, btrck in enumerate(range(len(backtrack) -1, -1, -1)):
+			print(f'## BACKTRACK.CHOICE[{ -1-bi }]=' +
+				f'{ backtrack[ btrck ] }')
+			print(f'## BTRACK.ALT[{ -1-bi }]='
+				f'{ btrack_alt[ btrck ] }')
 
 	return True
 
@@ -2479,6 +2527,395 @@ def vehicle_cost0():
 		'distances': [],
 		'stops':     [],
 	}
+
+
+##--------------------------------------
+## expect at least a skeleton 'VRoute Status' struct
+## returns text describing error, or False if everything is OK (expected)
+##
+## none of these test is ever expected to fail
+##
+def is_invalid_route(vroute):
+	if not (('primary' in vroute) and ('secondary' in vroute) and
+	        ('d_minutes' in vroute) and ('distances' in vroute) and
+	        ('stops' in vroute)):
+		return "Required VRoute field missing"
+
+	if len(vroute['d_minutes']) != len(vroute['stops']):
+		return "inconsistent segment minutes vs. route stops (count)"
+
+	if len(vroute['distances']) != len(vroute['stops']):
+		return "inconsistent route distances vs. route stops (count)"
+
+				## stops' arrival minutes MUST be
+				## chronological, and separated at least
+				## by delivery overhead
+				##
+	arvmins = list(s[0]  for s in vroute['stops'])
+
+	for i, amin in enumerate(arvmins[1:]):
+		if (arvmins[i] + vTIME_DELIVER_MIN >= amin):
+			return("insufficient delivery-to-delivery separation "+
+				f" ({arvmins[i]} -> {amin} minutes)")
+			##
+			## >=; we assume there are no zero-dist deliveries,
+			## so minimal route latency is vTIME_DELIVER_MIN +1
+
+	return False
+
+
+##--------------------------------------
+## return updated 'best' if (1) previous-best was empty or (2) current
+## route is an improvement
+##
+## local solutions only; storing best-current to global is 
+## register_best2global(), called once per vehicle
+##
+## output may be assigned to search-wide 'best' directly
+##
+## 'vroute' is VRoute Status of current solution; it MUST have already
+## initialized all fields
+##
+def maybe_register_best(best, vroute, arrivals):
+	if (not 'primary' in vroute):
+		raise ValueError("unable to evaluate route")
+
+	vprm1 = vroute[ 'primary' ]
+
+	if (best == None) or (best['primary'] == 0):
+		debugmsg(f"initial solution primary={ vprm1} " +
+		         f"[unused: { MAX1 - vprm1 }]", 1, type=vTRC_PACK)
+		return copy.deepcopy(vroute)
+
+	##-----  sanity checks  ----------------------------------------------
+## TODO: pretty-print both routes here
+
+	if vprm1 > MAX1:
+		raise ValueError("alleged route overloads primary " +
+		                 f"limit: { vroute }")
+	if best['primary'] > MAX1:
+		raise ValueError("alleged previous-best route overloads " +
+		                 f"primary limit: { best['primary'] }")
+
+	riv = is_invalid_route(vroute)
+	if riv:
+		print(f"invalid deliveries: { vroute }")
+		raise ValueError("alleged previous-best route is invalid " +
+		                 f"({ riv })")
+
+	##-----  /sanity checks  ---------------------------------------------
+
+			## relative change: primary sum best-so-far/current;
+			## total distance best-so-far/current (%)
+			## note: higher is better
+			##
+	sum1_improve_pct = 100.0 * (vprm1 - best['primary']) / best['primary']
+
+## TODO: cache distances, instead of repeated sum() invocations
+
+	dist_best   = sum(best[ 'distances' ])
+	dist_vroute = sum(vroute[ 'distances' ])
+	dist_improve_pct = 100.0 * (dist_vroute - dist_best) / dist_best
+			##
+			## a populated 'best' already stores at least one
+			## delivery, therefore a path > 0.0: no div-by-zero 
+
+	debugmsg(f"## ? SUM(PRIMARY): {best['primary']} -> " +
+		 f"{ vprm1 } ({ sum1_improve_pct :0.1f}%)?",
+	         3, type=vTRC_PACK)
+			##
+	debugmsg(f"## ? DIST.TOTAL: from {dist_best :.6f} -> " +
+		 f"{ dist_vroute :.6f} ({ dist_improve_pct :.1f}%)?",
+        	 3, type=vTRC_PACK)
+
+	improves = False
+			## add heuristics here as if...else... chain
+			## set to True if current plan is considered better
+
+
+	if (sum1_improve_pct >= 0.5) and (dist_improve_pct > -1.0):
+		debugmsg(f"solution improves primary { best['primary'] }->" +
+		         f"{ vprm1 } [unused: { MAX1 - best['primary'] }->" +
+		         f"{ MAX1 - vprm1 }]", 1, type=vTRC_PACK)
+		improves = True
+
+
+	elif (sum1_improve_pct >= -0.5) and (dist_improve_pct >= 2.5):
+		explain = ''
+		if sum1_improve_pct < 0.0:
+			explain =  ' with modest efficiency loss '
+			explain += f' ({ -sum1_improve_pct :.1f}%)'
+
+		debugmsg(f"solution reduces total distance { dist_best :.6f}->"+
+		         f"{ dist_vroute :.6f}" +explain,
+		         1, type=vTRC_PACK)
+		improves = True
+
+					## .deepcopy() needed:
+					## loop around this vehicle updates
+					## routing cost in 'vroute' struct
+					## in subsequent iterations (if just
+					## copied to 'best', which passes
+					## by reference)
+					##
+					## save+freeze current state
+
+	return copy.deepcopy(vroute)  if improves  else best
+
+
+##--------------------------------------
+def delv_arrival_status(vid, arrival_minute):
+	return {
+		'vehicle': vid,
+		'minute':  arrival_minute,
+	}
+
+
+##--------------------------------------
+## sets Delivery Arrival Status
+##
+def register_arrival(arrivals, id, vid, arrival_minute):
+	assert(arrivals != None)
+
+	arrivals[ id ] = delv_arrival_status(vid, arrival_minute)
+
+
+##--------------------------------------
+def register_best2global(arrivals, best, vid):
+	assert(arrivals != None)
+	assert('stops' in best)
+
+## TODO: check-consistent-best (f.ex. primary <= MAX1)
+
+	unused1 = MAX1 - best[ 'primary' ]
+
+	print(f"## LOAD.PRIMARY.VEH[{ vid }]={ best[ 'primary' ] }")
+	print(f"## LOAD.UNUSED.VEH[{ vid }]={ unused1 }")
+	print(f"## LOAD.UNUSED.VEH[{ vid }].PCT=" +
+		f"{ (100.0 * unused1 / MAX1) :.1f}")
+
+	print(f"## LOAD.SECONDARY.VEH[{ vid }] = { best[ 'secondary' ] }")
+
+
+	for delv in best[ 'stops' ]:
+		minute, id = delv[0], delv[1]
+
+		print(f"## SCHED T={ minute }min,DELV={ id },VEH={ vid }")
+
+## TODO: eval route; times must be increasing
+
+		if (id in arrivals) and (vid != arrivals[id][ 'vehicle' ]):
+			print(f'## ARRIVAL: vehicle ID differs: { vid }->' +
+				f"{ arrivals[id][1] }")
+
+			raise ValueError("assign-to-best ID already set")
+
+		register_arrival(arrivals, id, vid, minute)
+
+
+##--------------------------------------
+## register vehicle at (X,Y), in ASAP minute it can leave,
+## based on the last entry of backtrace stack
+##
+def vehicle_at():
+	pass
+
+
+##--------------------------------------
+## returns ASAP(leave), X, Y of last vehicle stop if present
+##
+## now_min, None, None if no vehicle stops
+## calling code MUST manage cases of no past history
+##
+## 'vroute' is VRoute Status struct
+## 'now_min' is current time, in minutes
+##
+def vehicle_last_at(vroute, now_min):
+	if vroute and vroute[ 'stops' ]:
+## TODO: symbolic veh.history-to-value(index) symbolic constants
+		leave_asap_min =  vroute[ 'stops' ][-1][0]
+		leave_asap_min += vTIME_DELIVER_MIN
+					##
+## TODO: symbolic veh.history-to-value(index) symbolic constants
+		x, y = vroute[ 'stops' ][-1][ -2: ]
+		x, y = float(x), float(y)
+
+		return leave_asap_min, x, y
+
+	return now_min, None, None
+
+
+##--------------------------------------
+## full list of deliveries within near future from 'now_min' time point
+## location determined by last delivery in vroute['stops'] if present
+##
+## now_min 0 is default:
+##   - any time if no deliveries scheduled yet
+##   - earliest leave time from vehicle route if vroute is not empty
+##
+## 'dels' is global delivery-list struct; read-only
+## 'vbit' is bitmask-ID of current vehicle
+##
+def delivery_candidates(vroute, dels, arrivals, vbit, now_min=0,
+                        lookahead_units=vNEXTUNITS):
+	if now_min == 0:
+		if vroute[ 'stops' ]:
+			now_min = vroute[ 'stops' ][-1][0] +vTIME_DELIVER_MIN
+## TODO: remove magic indexes
+		else:
+			pass
+
+	swe_min = now_min +vTIME_UNIT_MINS * lookahead_units -1
+					## search-window-end; minutes
+
+	tmask =  (minute2timevec(swe_min) << 1) -1
+	tmask -= minute2timevec(now_min) - 1
+					## immediate-future time units
+					## where we consider deliveries
+
+	debugmsg(f'## T.NOW={ minute2wall(now_min) }(m={ now_min })',
+	         1, type=vTRC_SCHED)
+	debugmsg(f'## T.MAX.NOW={ minute2wall(swe_min) }(m={ swe_min })',
+	         1, type=vTRC_SCHED)
+	debugmsg(f'## T.MASK=x{ tmask :x}', 2, type=vTRC_SCHED)
+
+					## find which deliveries:
+					## (1) may be delivered in immediate
+					##     future (vNEXTUNITS; tmask)
+					## (2) are not yet assigned
+					## (3) may be assigned to  this vehicle
+					## (4) do not overload vehicle
+					##
+					## also, checked subsequently,
+					## (5) vehicle may actually
+					##     get there within (1)
+					##
+	ds = list(d  for d in dels
+	          if ((tmask & d[ 'time2vec' ])     and                  ## (1)
+	              (not d["index"] in arrivals)  and                  ## (2)
+	              (vbit & d[ 'vehicle_may' ])))                      ## (3)
+
+					## 'may reach'
+					## (index, primary) tuples in
+					## decreasing primary order
+					## which do not overload vehicle
+					##
+	mr = sorted(([ d["index"], d["primary" ], ]
+	 	       for d in ds
+		       if (d["primary"] + vroute["primary"] <= MAX1)))   ## (4)
+
+	mr = sorted(mr, key=operator.itemgetter(1), reverse=True)
+					## decreasing primary order
+
+
+	debugmsg(f'## SCHED.NOW.CANDIDATES0.COUNT={ len(mr) }',
+	         1, type=vTRC_SCHED)
+	debugmsg('## SCHED.NOW.CANDIDATES0=' +
+	         ','.join(mayreach2str(m) for m in mr),
+	         2, type=vTRC_SCHED)
+
+					## turn [ idx, primary ] to
+					## [ index, primary, ASAP(min) ]
+					## tuples
+	if vroute['stops']:
+		leave_asap, x, y = vehicle_last_at(vroute, now_min)
+
+		mrn = []
+		for di, add in mr:
+			twindow = tmask & dels[di]['time2vec']
+			dx, dy = dels[di]['x'], dels[di]['y']
+
+			asap = xy2asap_minute(x, y, dx, dy, leave_asap, twindow)
+
+						## (5) vehicle may actually
+						##     get there to hit (1)
+						## see conditions above
+						##
+			if asap != None:
+				mrn.append([ di, add, asap ])
+	else:
+						## starting new vehicle: can
+						## reach start of window
+		mrn = []
+		for di, add in mr:
+			twindow = tmask & dels[di]['time2vec']
+
+			mrn.append([ di, add,
+			    timevec2asap(twindow, minutes=True),
+			])
+
+## TODO: check for return-to-base as an option
+
+	debugmsg(f'## SCHED.NOW.CANDIDATES.COUNT={ len(mrn) }',
+	         1, type=vTRC_SCHED)
+	debugmsg('## SCHED.NOW.CANDIDATES=' +
+	         ','.join(mayreach2str(m) for m in mrn),
+	         2, type=vTRC_SCHED)
+
+	return mrn
+
+
+##--------------------------------------
+## are there any semi-reasonable deliveries, or is this vehicle
+## out of options?
+##
+## called when no immediate candidates are detected in near-future window
+##
+## 'maxu' is XXX
+##
+def no_feasible_future_delv(delvs, vroute, arrivals, now_min, maxu):
+	debugmsg('## MAIN.LOOP, CHECK FOR FEASIBUTE FUTURE',
+        	 3, type=vTRC_FLOW)
+
+	future = timevec2after(minute2timevec(now_min), maxu)
+
+					## collect [id, primary,] for
+					##   (A) yet-unassigned deliveries
+					##   (B) in any future unit
+	pending_min1 = list(
+			d['primary']  for d in delvs
+			if ((not d['index'] in arrivals) and             ## (A)
+			    (future & d['time2vec']))                    ## (B)
+	)
+
+					## if primary fill + min(remaining
+					## delivery) is > primary.threshold,
+					## this vehicle is full
+					##           -> return to base
+					##
+					## note: we do not check for
+					## reachability; just expect any of
+					## the other checks to trigger
+					## 'at some point' if unreachable
+
+	if pending_min1:
+		pending_min1 = min(pending_min1)
+		debugmsg(f'## PACK.MIN(REMAIN)={ pending_min1 }',
+		         2, type=vTRC_SCHED)
+
+	else:
+		pending_min1 = MAX1 *2
+				## arbitrary value which
+				## triggers 'to much to fit'
+				## below
+
+				## is this a final combination?
+
+	if (pending_min1 + vroute[ "primary" ] > MAX1):
+		debugmsg('## PACK.COMPLETE=no-next-fit',
+		         1, type=vTRC_SCHED)
+## TODO: evaluate return-to-base
+
+		return True
+
+	return False
+
+
+##--------------------------------------
+def assert_backtrack_stacks(backtrack, alt):
+	if len(backtrack) != len(alt):
+		terminate("inconsistent backtrack-stack size: "+
+			f"main { len(backtrack) }, aux. { len(alt) }")
 
 
 ##--------------------------------------
@@ -2557,14 +2994,12 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	bfds = best_fit_decreasing_multiple(tbl)
 	debugmsg(f'## BFD.VEHICLES={ len(bfds) }', 1)
 
-	tend = time.perf_counter()
-	debugmsg(f'## time(BFD.VEHICLES)={ timediff_str(tstart, tend) }',
-	         lvl=2, type=vTRC_TIME)
-	tstart = tend
+	tstart = timediff_log_now(tstart, 'BFD.VEHICLES')
+
 	##-----  tstart is after nr-of-units(BFD) calc  ----------------------
 
 
-	##-----  v1:  --------------------------------------------------------
+	##=====  v1:  ========================================================
 	## greedy-assign routes for one vehicle at a time, in a BFD fashion:
 	##   - pick the next few delivery windows
 	##   - pick yet-unassigned deliveries; decreasing-sort them
@@ -2588,21 +3023,136 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 					## arrival times per ID, minutes, for
 					## already-fixed deliveries
 					## local copy to allow modification
-	arrival = {}
+	arrivals = {}
 					## TODO: pick up already-fixed entries
 
 	max_mins = timevec2asap(tmax, minutes=True) +vTIME_UNIT_MINS -1
 					## not actually reachable
 
-	tbactrack0 = time.perf_counter()
+	tbacktrack0 = time.perf_counter()
+	tstart = tbacktrack0
+
+	##-----  non-recursive backtracking  ---------------------------------
+	## Our implementation tracks a stack of taken+alternative choices,
+	## and descends into a hierarchy of that stack in a non-recursive
+	## main loop.
+	##
+	## The main backtrack stack stores only the last choice taken;
+	## backtrack-alt (balt[] below) stores the possible choices which
+	## were _not_ taken at the same level. The position and path of path
+	## descent depend on the current contents of backtrack[]/balt[] ([-1],
+	## in Python terms), and a counter marking the number of schedules
+	## evaluated for this vehicle, as the loop is entered:
+	##
+	##    1) backtrack[-1] is non-empty; it contains the last choice
+	##       just taken. (We are on our way down the decision tree.)
+	##
+	##       Action:
+	##       Evaluate backtrack[-1] as it has just been taken, descend;
+	##       adding a new level to both bactrack[] and balt[].
+	##       We extend the current-vehicle delivery plan
+	##       with the newly taken choice backtrack[-1].
+	##
+	##       sanity check: backtrack[-1] MUST be a single entry
+	##
+	##    2) backtrack[-1] is empty; balt[-1] is not.
+	##       We are now evaluating the alternatives of the last-removed
+	##       backtrack[-1] entry, evaluating the choices which were
+	##       originally listed as alternatives.
+	##
+	##       Action:
+	##       2.1)
+	##         Promote first entry of balt[-1] as backtrack[-1];
+	##         the search-base entry, which specifies which
+	##         deliveries would be reachable, is X,Y and
+	##         the leave(ASAP(X,Y)) time from the delivery.
+	##         This 'leave()' function is the earliest time,
+	##         in minutes, when one can leave (X,Y) after
+	##         delivering the previous item.
+	##
+	##         We replace the just-removed choice with
+	##         the alternate target from balt[-1] at
+	##         the end of the current-vehicle plan. (By
+	##         construction, the last entry must have been
+	##         the previously taken choice; we are just
+	##         representing the route-to-B-instead-of-A
+	##         alternate route here.
+	##       2.2)
+	##         List all possibilities which can be reached
+	##         if leaving (X,Y) not later than leave(X,Y)
+	##         within a near-future time window (see vNEXTUNITS),
+	##         which would not violate vehicle-packing limits.
+	##       2.3)
+	##         Sort all choices from (2.2); pick the best-looking
+	##         few. (This would, inherited from a BFD background,
+	##         would mainly amount to picking those with the
+	##         highest primary value; possibly also those very
+	##         close to the current delivery.)
+	##       2.4)
+	##         Assume we take the highest-rated choice from (2.3);
+	##         append this to backtrack[].
+	##         Take any remaining choices, register them as
+	##         alternatives, appending (the list of) them
+	##         to balt[].
+	##       2.5)
+	##         Restart the loop. It will get evaluated in the next (1)
+	##         iteration, above, descending into the choice
+	##         we have just marked as taken in (2.4)
+	##
+	##    3) both backtrack[-1] and balt[-1] are empty, and
+	##       the nr. of configurations evaluated is >0. We have
+	##       just processed the last balt[-1] alternative, and
+	##       therefore this entire level of the stack,
+	##       and are traversing up.
+	##
+	##       Action:
+	##       Remove both backtrack[-1] and balt[-1], then:
+	##       3.1) terminate search if this has been the top
+	##         level of the stack.
+	##       3.2) remove the backtrack[-2] element, since all its
+	##         consequences have just been evaluated, and
+	##         restart the loop. It will enter (2) above
+	##         or (3) immediately, when it enters the loop
+	##         (depending on balt[-2] being empty or not).
+	##
+	##    4) both backtrack[-1] and balt[-1] are empty (or
+	##       no entries at all), and the nr. of configurations
+	##       evaluated is 0. We are just entering the loop.
+	##
+	##       Action:
+	##       List all deliveries which may be delivered in the first
+	##       vNEXTUNITS time window. Since none of the vehicles have
+	##       been scheduled yet, we associate a virtual (X,Y) which is
+	##       special-cased: assume all deliveries from this (X,Y)
+	##       are reachable (we just turn the required latencies
+	##       into earlier departure from the base for the first
+	##       delivery of the day/shift/...)
+	##
+	##       Given a list of earliest-next-units deliveries, just as if
+	##       they had been output by (2.2), and enter (2.3) above.
+	##
+	## We expect to detect the absence of configurations entirely
+	## before attempting config enumeration, so config >0 vs. ==0
+	## is unambigous.
+	##-----  /non-recursive backtracking  --------------------------------
+
+	nr_routes_all = 0
+					## total nr. of configurations tested,
+					## for all vehicles
 
 					## brute-force plan generation for each
 					## vehicle, based on BFD approximation
 	while not done:
-		t, now_min, nr_routes = tmin, tmin, 0
+		t, nr_routes = tmin, 0
 					## nr. of routes checked (this vehicle)
 
-		vid   = virtual_vehicle2id(len(vplans))
+		now_min = timevec2asap(t, minutes=True)
+					## time(current vehicle), in minutes
+					##
+					## backtracking may roll this back
+					## to a past value
+
+		vid   = virtual_vehicle2id( len(vplans) )
 		vcost = vehicle_cost0()          ## current vehicle, cost total
 
 		vbit = 1 << len(vplans)
@@ -2616,7 +3166,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 			## redundant copies of vplans[] fields
 		x, y = None, None
 
-			## best seen solution in current search
+				## best seen solution in current search
+				## [ sum(primary); [ ...delivery list... ] ]
 		best = None
 
 		backtrack, btrack_alt = [], []
@@ -2628,20 +3179,161 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## set to True and 'continue' from loop below
 				## to force backtrack (just below loop)
 
+		tstart_this_vehicle = time.perf_counter()
+
 				## scan yet-unassigned deliveries which
 				## may be started in [t .. t+vNEXTUNITS)
-	
-		while ((t <= tmax) and (now_min < max_mins)) or do_backtrack:
+
+		while (now_min < max_mins):
+				## keep conditions below redundant, not
+				## stack them: without factoring out,
+				## we would be too deeply nested.
+
+			show_backtrack(backtrack, btrack_alt)
+			debugmsg(f'## MAIN.LOOP.NOW={ minute2wall(now_min) }',
+			         1, type=vTRC_SCHED | vTRC_FLOW)
+
+			assert_backtrack_stacks(backtrack, btrack_alt)
+
+			##-----  backtrack paths:  ---------------------------
+
+				## see case numbers in flow description above
+				##
+				## loop restart/terminate steps are highlighted
+				## to simplify control flow tracing
+
+			if (backtrack == []) and (nr_routes > 0):
+					## (3.1), checked all routes; exit
+
+				debugmsg('## MAIN.LOOP.END', 1, type=vTRC_FLOW)
+				debugmsg('## MAIN.LOOP.VEH.ROUTES.TOTAL' +
+				         f'={ nr_routes }',
+				         3, type=vTRC_FLOW)
+				break        
+				##-----  terminate loop  ---------------------
+
+			next = None
+						## 'next' set to non-None
+						## if it is a known next move
+						## first candidate otherwise
+
+			print('xxx.B ...', backtrack[-3:])
+			print('xxx.B-1 ...', btrack_alt[-3:])
+
+						## no past history, empty
+						## stack: pick up first entries
+						##
+						## entering loop for the
+						## first time               (4)
+			if (backtrack == []) and (nr_routes == 0):
+				pass            ## (4) -> fall through to (2.2)
+
+			##-----  after this point: backtrack[-1] exists
+
+			elif backtrack[-1] != []:    ## choice was taken
+			                             ## (1) -> (2.2)
+				next = backtrack[-1]
+				debugmsg('## MAIN.LOOP.CHOICE(STACK)',
+				         1, type=vTRC_FLOW)
+
+			elif (btrack_alt[-1] != []):
+						## choice emptied, alternates
+						## still exist. Promote first
+						## alternate as next move,
+						## then process it (as 2.1)
+						##
+				debugmsg('## MAIN.LOOP.ALTERNATE(1-of-' +
+				         f'{ len(btrack_alt[-1]) })',
+				         1, type=vTRC_FLOW)
+					##
+				next = btrack_alt[-1].pop(-1)
+				backtrack.append(next)
+
+			else:            ## processed both main and alternates,
+			                 ## backtrack to previous choice
+			                 ## (above this one in stack)       (3)
+				backtrack.pop(-1)
+				btrack_alt.pop(-1)
+
+				debugmsg('## MAIN.LOOP.UP', 1, type=vTRC_FLOW)
+				continue
+				##-----  restart loop  -----------------------
+
+			##-----  administer new entries (2.1, 2.2)
+			## (1) one has been picked from backtrack stack;
+			##     it is in 'next' if non-None
+			## (2) find initial candidates if 'next' is None
+
+			mr = delivery_candidates(vcost, dels, arrivals,
+			                         vbit, now_min)
+
+			##-----  branch-trim heuristics would come here  -----
+## TODO: proper branch-trim heuristic!
+## in the beginning, discard things much lighter than first assignment
+## cuts down branching of early searches
+
+## heuristic: take heaviest few possibilities
+## reasonable, since BFD would prefer those anyway
+
+			mr = mr[ : vBFD_MAX_CANDITATES ]
+
+			##-----  /branch-trim heuristics  --------------------
+
+			debugmsg(f'## SCHED.FINAL.CANDIDATES.COUNT={ len(mr) }',
+			         1, type=vTRC_SCHED)
+			debugmsg('## SCHED.FINAL.CANDIDATES=' +
+			         ','.join(mayreach2str(m) for m in mr),
+			         1, type=vTRC_SCHED)
+
+			if mr == []:           ## no candidates left? backtrack
+				if backtrack != []:
+					now_min = backtrack[-1][3]
+					backtrack[ -1 ] = []       ## processed
+				else:
+					now_min = 1   ## arbitrary valid time
+					              ## loop restart terminates
+				continue
+					##-----  end of search, backtrack
+## TODO: delay until a later delivery window would come here
+
+					## accept 1st candidate
+					## store others as alternates
+			id, _, asap = mr.pop(0)
+
+##    [ id, arrival of delivery(minutes), vehicle ID, cost(trip), ]
+## TODO: 666: cost(trip)
+			backtrack.append([ id, asap, vid, 666, now_min ])
+			btrack_alt.append(mr[ 1: ])
+					##
+					## descend into current choice
+					## mark alternatives to explore
+					## after return from backtrack below
+
+			print('xxx arr', arrivals)
+			print('xxx stop', vid, id, vcost)
+			now_min = vehicle2xy_minimal(vcost, arrivals,
+			                     vid, id, asap, dels)
+			register_arrival(arrivals, id, vid, asap)
+
+			print('xxx veh', vcost)
+			best = maybe_register_best(best, vcost, arrivals)
+
+			continue
+## RRR
+##============================================================================
 
 			##-----  backtrack:  ---------------------------------
 			if do_backtrack:
 				if backtrack == []:
+					tstart = timediff_log_now(
+						tstart_this_vehicle,
+						'BFD.ASSIGN.CURRENT')
 					break        ## nothing left to explore
 
 				print(f"## BACKTRACKING [{ len(backtrack) }] "
 				      f"level/s, {nr_routes} config/s checked")
 
-
+## TODO: proper debug-control
 				if debug_is_active(1) and False:
 					show_backtrack(backtrack, btrack_alt)
 
@@ -2656,29 +3348,30 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 					## was marked as such when originally
 					## descending
 					##
-				id = prev[0]       ## id(just removed delivery)
-				if not id in arrival:
+				rmid = prev[0]      ## id(just removed delivery)
+				if not rmid in arrivals:
 					raise ValueError(f"backtracking with "
 						"incorrectly registered " +
 					        f"delivery ({ prev[0] })")
-				del(arrival[ id ])
+
+				del(arrivals[ rmid ])
 					##
 					## backtracked entry MUST also be
 					## last delivery in vehicle plan
 					##
 				vp_delv = vplans[ vid ][ 'stops' ][-1][1]
-				if id != vp_delv:
+				if rmid != vp_delv:
 					raise ValueError("backtrack stack " +
 						"disagrees with route list " +
 						f"(delv={ prev[0] }, " +
 						f"list={ vp_delv })")
 					##
-					## also remove last segments from cost
-				rm1 = dels[ id ]['primary'  ]
-				rm2 = dels[ id ]['secondary']
-
+					## also remove last segment from cost
+					##
+				rm1 = dels[ rmid ][ 'primary'   ]
+				rm2 = dels[ rmid ][ 'secondary' ]
 ## TODO: this is a 'check that we are removing delivery X, which must be
-## at the end of the current schedule' condition
+## at the end of the current schedule' condition; to be centralized
 
 					## some sanity checks: load
 					## accounting is correct
@@ -2698,60 +3391,78 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## TODO: this part of replacement is essentially a 'swap delivery X to Y'
 ## operation. if we factor it out, it simplifies subsequent
 ## delivery-swapping checks
-				debugmsg('## BACKTRACK.V.STOPS.LAST=' +
-				         f'(...{ vplans[vid]["stops"][-2:] })',
-				         1, type=vTRC_STACK)
 
-					## sanity check: last stop MUST
-					## be 
+## TODO: elem-count conditional
+## XXX roll back vehicle
+					## sanity check: last stop MUST be
+					## identical to what we are removing
+					##
 				if (vplans[ vid ][ 'stops' ] == []):
 					raise ValueError("backtrack stack " +
 						"stop count inconsistent " +
 						f"(delv={ prev[0] })")
-					##
-				ldel = vplans[ vid ][ 'stops' ].pop(-1)
-					## remove last delivery from list
-					## of stops
-					##
-				if (ldel[1] != id):
-					raise ValueError("backtrack stack " +
-						"stops inconsistent " +
-						f"(delv={prev[0]}, d.id={id}, "+
-						f"stop id={ ldel[1] })")
 
+## TODO: factor out these +- adjustments
 				vcost[ "distances" ].pop(-1)
 				vcost[ "d_minutes" ].pop(-1)
 				vcost[ "primary"   ] -= rm1
 				vcost[ "secondary" ] -= rm2
-## TODO: factor out these +- adjustments
+
+				if (len(vcost[ 'stops' ]) >= 2):
+					debugmsg('## BACKTRACK.V.STOPS.LAST=' +
+					   f'(..{ vcost[ "stops" ][-2:] })',
+				       	   1, type=vTRC_STACK)
+
+				ldel = vplans[ vid ][ 'stops' ].pop(-1)
+					## remove last delivery from list(stops)
+					##
+				if (ldel[1] != rmid):
+					raise ValueError("backtrack stack " +
+					    "stops inconsistent " +
+					    f"(delv={prev[0]}, d.id={rmid}, "+
+					    f"stop id={ ldel[1] })")
+
+				print(f'xxx v.cost.levels = { len(vcost["stops"]) }')
+				print(f'xxx v.cost = { vcost }')
+					## roll back now_min to leave(last.del)
+					## or 'no past time', depending on
+					## whether backtracked to empty list
+					##
+				if vcost[ "stops" ]:
+					now_min =  vcost[ "stops" ][-1][0]
+					now_min += vTIME_DELIVER_MIN
+				else:
+					now_min = tmin
+				t = minute2timevec(now_min)
+				print(f'xxx t.min := { now_min }')
 
 					## (1) if no alternatives left, ascend
-					##
+## TODO: protection against [-1] above?
 				if (btrack_alt[-1] == []):
 					btrack_alt.pop(-1)
 					continue
 
-
 					## (2) if there are alternatives,
-					## promote them as taken, continue
+					## promote next one as taken, continue
 					## -> nr. of backtrack levels unchanged
+## TODO: check that [-1] -> 'next' traversal is possible
 					##
 				next = btrack_alt[-1].pop(0)
 				backtrack.append(next)
-
+					##
 				debugmsg(f'## BACKTRACK.TAKE.ALTERNATE={next}',
 				         1, type=vTRC_STACK)
 
 					## sanity check: delivery just removed
 					## MUST NOT be marked as assigned
 					##
-				if next[0] in arrival:
+				if next[0] in arrivals:
 					raise ValueError(f"backtracking with "
 						"incorrectly registered " +
 					        f"alternate ({ next[0] })")
 
 					## sanity check: next-possible delivery
-					## MUST NOT overload vehicle
+					## MUST NOT overload vehicle;
 					## would have been filtered out
 					## during alt-candidate search
 					##
@@ -2762,69 +3473,82 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 				id, _, asap = next
 
-				now_min = vehicle2xy_minimal(vcost, arrival,
+					## advance vehicle to now-taken
+					## alternative delivery
+					##
+				now_min = vehicle2xy_minimal(vcost, arrivals,
 						vid, id, asap, dels)
 				t = minute2timevec(now_min)
+				print(f'xxx -> next={ next } mt={ now_min }')
 
+			print('xxx no backtrack')
 			do_backtrack = False
 			##-----  /backtrack  ---------------------------------
 
+			debugmsg('## MAIN.LOOP, AFTER BACKTRACK',
+			         3, type=vTRC_FLOW)
+
+			show_backtrack(backtrack, btrack_alt)
+
 			## find feasible candidates, assign them
-
 			me = t +vTIME_UNIT_MINS * vNEXTUNITS -1
-			debugmsg(f'## T.NOW={ minute2wall(now_min) }')
-			debugmsg(f'## T.MAX.NOW={ minute2wall(me) }')
-
+			debugmsg(f'## T.NOW={ minute2wall(now_min) }' +
+				f'({ now_min })')
+			debugmsg(f'## T.MAX.NOW={ minute2wall(me) }({ me })')
+				##
 			t0 = timevec2asap(t, minutes=True)
 			te = t0 + vTIME_UNIT_MINS * vNEXTUNITS -1
 			tmask = (t << vNEXTUNITS) -t
-
 						## immediate-future time units,
 						## where we consider deliveries
 
 						## minute of previous arrival,
-						## excluding delivery overhead
-			if (x == None) or (vplans[vid]['stops'] == []):
+						## incl. any previous-delivery
+						## overhead
+						##
+			if (x == None) and (vcost['stops'] == []):
 				arrived = now_min      ## newly started vehicle
 			else:
-				arrived = vplans[vid][ 'stops' ][-1][0]
+				arrived =  vcost[ 'stops' ][-1][0]
+				arrived += vTIME_DELIVER_MIN
+					##
+				x, y = vcost[ 'stops' ][-1][ -2: ]
+				x, y = float(x), float(y)
+
 ## TODO: symbolic const for [0] -> index-of-minutes
 
 			debugmsg(f'## T.WINDOW={ minute2wall(t0) }..' +
 				 f'{ minute2wall(te) }', 1)
 			debugmsg(f'## T.WINDOW.X=x{ tmask :x}', 1)
 
-						## which deliveries
-						## (1) may be scheduled here?
-						## (2) are not yet assigned
-						## (3) may be assigned to
-						##     this vehicle
-						## (4) does not overload vehicle
+					## find which deliveries:
+					## (1) may be delivered in immediate
+					##     future (vNEXTUNITS)
+					## (2) are not yet assigned
+					## (3) may be assigned to  this vehicle
+					## (4) do not overload vehicle
+					##
+					## also, checked subsequently,
+					## (5) vehicle may actually
+					##     get there within (1)
+					##
 			ds = list(d  for d in dels
 				if ((tmask & d[ 'time2vec' ])     and    ## (1)
-				    (not d["index"] in arrival)   and    ## (2)
+				    (not d["index"] in arrivals)  and    ## (2)
 				    (vbit & d[ 'vehicle_may' ])))        ## (3)
 
-						## 'may reach'
-						## (index, primary) tuples in
-						## decreasing primary order
-						##
+					## 'may reach'
+					## (index, primary) tuples
+					##
 			mr = sorted(([ d["index"], d["primary" ], ]
 		 	       for d in ds
-			       if (d["primary"] +vcost["primary"] <= MAX1)))  #4
+			       if (d["primary"]+vcost["primary"] <= MAX1))) #(4)
 
 			mr = sorted(mr, key=operator.itemgetter(1),
 			            reverse=True)
+					## in decreasing primary order
 
-## TODO: proper heuristic!
-## in the beginning, discard things much lighter than first assignment
-## cuts down branching of early searches
-##
-			if (len(vplans) < 4) and mr:
-				minprimary = (mr[0][1] * 80) // 100
-
-				mr = list(m  for m in mr
-				          if (m[1] >= minprimary))
+			## note: not yet looked at XY-to-XY latencies
 
 ## TODO: filter directly using xy2asap_minute(), which is now
 ## replicated below
@@ -2838,72 +3562,124 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ##       needs preferred/fixed/etc. vehicle-to-base assignment
 
 					## turn [ idx, primary ] to
-					## [ index, primary, ASAP(minute) ]
+					## [ index, primary, ASAP(min) ]
 					## tuples
-
 			if x != None:
 				mrn = []
 				for di, add in mr:
 					twindow = tmask & dels[di]['time2vec']
-					asap = xy2asap_minute(x, y, x, y,
-					        arrived, twindow)
-					if asap == None:
-						continue       ## can not reach
-					mrn.append([ di, add, asap ])
+					dx, dy = dels[di]['x'], dels[di]['y']
 
+					asap = xy2asap_minute(x, y, dx, dy,
+					               arrived, twindow)
+
+						## (5) vehicle may actually
+						##     get there to hit (1)
+						## see conditions above
+						##
+					if asap != None:
+						mrn.append([ di, add, asap,
+						             now_min, ])
 			else:
 						## starting new vehicle: can
 						## reach start of window
-						##
 				mrn = []
 				for di, add in mr:
 					twindow = tmask & dels[di]['time2vec']
 
 					mrn.append([ di, add,
 					    timevec2asap(twindow, minutes=True),
+					    now_min,
 					])
 			mr = mrn
 ## TODO: check for return-to-base as an option
 
+			##-----  branch-trim heuristics would come here  -----
+## TODO: proper branch-trim heuristic!
+## in the beginning, discard things much lighter than first assignment
+## cuts down branching of early searches
+
+## heuristic: take heaviest few possibilities
+## reasonable, since BFD would prefer those anyway
+
+			mr = mr[0:3]
+
+			##-----  /branch-trim heuristics  --------------------
+
 						## no candidates?
 			if mr == []:
-				future = timevec2after(t, maxu)
+				if no_feasible_future_delv(dels, vcost,
+				               arrivals, now_min, maxu):
+					assert(0)
 
-						## (1) already close to full?
-						## definitely so if no other
-						## (A) yet-unassigned delivery
-						## (B) in any future unit
-						##           ->
-						## return to base
-						##
-						## note: we do not check for
-						## reachability; just expect
-						## any of the other checks
-						## to trigger at some point
-						##
-				mn_undel_primary = min(
-					d['primary']  for d in dels
-					if ((not d['index'] in arrival) and # A
-					    (future & d['time2vec']))       # B
-				)
-				debugmsg('## PACK.MIN(REMAIN)=' +
-					f'{mn_undel_primary}',
-					2, type=vTRC_SCHED)
+## 				debugmsg('## MAIN.LOOP, NO NEW CANDIDATES',
+## 			        	 3, type=vTRC_FLOW)
+## 
+## 				future = timevec2after(t, maxu)
+## 
+## 					## collect [id, primary,] for
+## 					##   (A) yet-unassigned deliveries
+## 					##   (B) in any future unit
+## 					##
+## 				pending_min1 = list(
+## 					d['primary']  for d in dels
+## 					if ((not d['index'] in arrivals) and # A
+## 					    (future & d['time2vec']))        # B
+## 				)
+## 
+## 					## if primary fill + min(remaining
+## 					## delivery) is > primary.threshold,
+## 					## this vehicle is full
+## 					##           -> return to base
+## 					##
+## 					## note: we do not check for
+## 					## reachability; just expect any of
+## 					## the other checks to trigger
+## 					## 'at some point' if unreachable
+## 					##
+## 				if pending_min1:
+## 					pending_min1 = min(pending_min1)
+## 					debugmsg('## PACK.MIN(REMAIN)=' +
+## 						f'{ pending_min1 }',
+## 						2, type=vTRC_SCHED)
+## 				else:
+## 					pending_min1 = MAX1 *2
+## 						## arbitrary value which
+## 						## triggers 'to much to fit'
+## 						## below
+## 
+## 				shown_btrack = False
+## 				try_register = False
+## 					##
+## 					## is this a final combination?
+## 
+## 				if (pending_min1 + vcost[ "primary" ] > MAX1):
+## 					debugmsg('## PACK.COMPLETE=no-next-fit',
+## 					         1, type=vTRC_SCHED)
+## 					try_register = True
+## ## TODO: evaluate return-to-base
+## 					## anything else to explore?
+## 				elif len(backtrack) >1:
+## 					try_register = True
 
-				shown_btrack = False
+## TODO: other terminate-and-backtrack conditions
 
-				if (mn_undel_primary + vcost["primary"] > MAX1):
-					debugmsg('## PACK.COMPLETE=no-next-fit',
-					         1, type=vTRC_SCHED)
+				##-----  consider current state as solution
+
+				if try_register:
 					shown_btrack = show_backtrack(backtrack,
 					                    btrack_alt)
 					do_backtrack = True
 					nr_routes += 1
+					tstart = timediff_log_now(tstart,
+						'BFD.VEHICLE.FULL')
+
 					continue
-## TODO: evaluate return-to-base
+
 
 						## nothing visible in
 						## current prediction window
+						## we still have time to check
 						##
 				if (t < tmax) and (now_min < max_mins):
 					t <<= vNEXTUNITS
@@ -2927,14 +3703,19 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 					",".join(mayreach2str(b)
 				                 for b in btrack_alt[-1]) +"]",
 				         2, type=vTRC_SCHED)
-## TODO: backtrack-alternatives stack
+
+## TODO: backtrack-alternatives stack: pretty print etc. in one spot
 			debugmsg('## SCHED.NOW.CANDIDATES=' +
 			         ','.join(mayreach2str(m) for m in mr),
 			         2, type=vTRC_SCHED)
 
+			debugmsg('## MAIN.LOOP, AFTER NEW CANDIDATES',
+			       	 3, type=vTRC_FLOW)
+
 			if mrn == []:
 				assert(0)
-
+						## nothing to process; MUST
+						## have been processed above
 			descend = False
 
 			##-----  descend into each option in turn
@@ -2943,14 +3724,17 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 ## TODO: filtered above: delivery is already scheduled+arrived
 ## better check to avoid redundancy
-				if id in arrival:
+				if id in arrivals:
 					continue
 
-				asap = vehicle2xy_minimal(vcost, arrival, vid,
+				asap = vehicle2xy_minimal(vcost, arrivals, vid,
 						id, asap, dels)
-					##
+				if asap == None:
+					continue            ## can not reach in
+					                    ## reasonable time
+
 				now_min = asap +vTIME_DELIVER_MIN
-				t = minute2timevec(asap + vTIME_DELIVER_MIN)
+				t = minute2timevec(now_min)
 					##
 				backtrack.append([ id, asap, vid, now_min ])
 				btrack_alt.append(mrn[ cidx+1: ])
@@ -2959,6 +3743,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 					## mark alternatives to explore
 					## after return from backtrack below
 
+				register_arrival(arrivals, id, vid, asap)
+				best = maybe_register_best(best, vcost,
+				                           arrivals)
 				descend = True
 				break
 
@@ -2983,7 +3770,24 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## backtrack
 			assert(0)
 
+		timediff_log_now(tstart_this_vehicle, 'BFD.ASSIGN.CURR')
+
+				## since we backtracked to the top, 'arrivals'
+				## has removed all deliveries;
+				## register them for best solution
+				##
+		if best == None:
+			raise ValueError("did not find a solution?")
+
+		register_best2global(arrivals, best, vid)
+
+		nr_routes_all += nr_routes
+
 		done = True
+
+	tstart = timediff_log_now(tbacktrack0, 'BFD.ASSIGN.ALL')
+	print('')
+	##=====  /v1  ========================================================
 
 
 	##-----  v2:  --------------------------------------------------------
@@ -3049,7 +3853,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 					##
 		ddelay_now = list(sorted(ddelay_now))
 
-		if debug_is_active(3, vTRC_SCHED):
+		if debug_is_active(3, vTRC_SCHED | vTRC_STACK):
 			print('## BACKTRACK.TAKEN ', backtrack)
 			print('## BACKTRACK.ALT   ', btrack_alt)
 					## backtrack stack at entry
@@ -3466,10 +4270,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ##			debugmsg(f'## D.DELV.V.ASAP[{didx}]=' +
 ##			         ",".join(f"{v[1]}" for v in vids), 2)
 
-	tend = time.perf_counter()
-	debugmsg(f'## time(PACK.ROUTE.ASSIGN0)={ timediff_str(tstart, tend) }',
-	         lvl=2, type=vTRC_TIME)
-	tstart = tend
+	tstart = timediff_log_now(tstart, 'PACK.ROUTE.ASSIGN0')
+
 	##-----  tstart is after initial greedy assignment  ------------------
 
 	vpos = vpos0
@@ -4046,10 +4848,7 @@ if __name__ == '__main__':
 
 	report_env()
 	sel, nsel = best_fit_decreasing(tbl, MAX_ELEMS)
-
-	tend   = time.perf_counter()
-	print(f"## time(BFD)={ (tend - tstart) *1E6 :.2f}us")
-	tstrt  = tend
+	tstart = timediff_log_now(tstart, 'BFD')
 
 	report(sel, nsel, msg='best-fit decreasing raw output:')
 	if sock:
