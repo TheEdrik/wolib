@@ -54,4 +54,6 @@ MAX1=99999999 XY2TABLE=1 TO_C=1 ./pack.py $DELIVERIES > $DIST.c
 ## pack-and-route, using base from 'bases1.txt', and above generated
 ## XY-to-distance lookup table
 ##
+MAX1=8542700000 BASE=$( tr '\t' , < bases1.txt ) DIST=distance.json \
+	./pack.py orders.txt > $DIST.log
 
