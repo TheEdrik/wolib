@@ -1803,8 +1803,24 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##
 ##    'd_minutes': [ xy travel time1, xy travel time2, ... ]
 ##                  -- net minutes, without delivery overhead
-##                  -- nr. of elements in 'd_minutes' and 'distances' match
 ##    'stops': see V.ID Vehicle Status field
+##                  -- nr. of elements in 'd_minutes', 'distances',
+##                  -- and 'stops' match
+##    'deliveries': { ID of delivery: arrival time }
+##                  -- additional detail
+##                  -- redundant, same info present in 'stops' array,
+##                  -- kept for simplified lookups
+##    'arrivals':   [ [ arrival time, delivery ID, ] [ arrival 2, ... ] ]
+##                  -- entries are in increasing arrival-time order
+## TODO: stops/deliveries/arrivals together are redundant
+##       (they evolved from different sub-functions, and converged)
+##       when we finalize sorting code, remove the then-unused one
+##       note: time-based sorting 
+##
+##    'checked':    -- dictionary of new routes (ID+time strings);
+##                  -- appended when new route is being explored
+##                  -- TODO: redundant: remove once exploration
+##                  -- is completely tracked + protected against recursion
 ## }
 ##
 ## per-search status, not (yet?) landing in global struct -> no V.ID index
@@ -1822,6 +1838,36 @@ def vehicle2primary(vehicle):
 ##
 def vehicle2secondary(vehicle):
 	return  vehicle[ 'secondary' ]  if ('secondary' in vehicle)  else 0
+
+
+##--------------------------------------
+## returns 'allegedly unique' normalized string form summarizing route
+##
+## non-None 'delv' (delivery ID) and 'arrive' is mixed into route, if both
+## are present. (TODO: this 'mixed into' MUST be an append-to-schedule)
+##
+## 'arrive' is in minutes; 'delv' is delivery ID
+##
+## since most checks are expected to check route only, they
+## are special-cased to skip array creation/append/etc.
+##
+## not cross-checking for 'delv' present in route, or other consistency
+##
+## DO NOT EXPECT NORMALIZED FORMAT TO REMAIN STABLE ACROSS VERSIONS
+##
+def vroute2normalized(vroute, delv=None, arrive=None):
+	"normalized description of route (from VRoute)"
+
+	if ((not vroute) or (not 'deliveries' in vroute) or
+	    (not 'arrivals' in vroute)):
+		return ''
+
+	r = list(f'{ a[0] }>{ a[1] }'  for a in vroute['arrivals'])
+
+	if (arrive != None) and (delv != None):
+		r.append(f'{ arrive }>{ delv }')
+
+	return "__".join(r)
 
 
 ##--------------------------------------
@@ -1856,6 +1902,8 @@ def vehicle2xy_minimal(vcost, arrival, vid, id, arrv_minute, deliveries):
 	else:
 		px, py = vcost[ 'stops' ][-1][2], vcost[ 'stops' ][-1][3]
 							## previous x, y
+
+## TODO: assert_vroute_is_sane(), now that it is centralized
 
 	x, y = deliveries[ id ]['x'], deliveries[ id ]['y']
 
@@ -1901,9 +1949,13 @@ def vehicle2xy_minimal(vcost, arrival, vid, id, arrv_minute, deliveries):
 
 	arrival[ id ] = delv_arrival_status(vid, arrv_minute)
 
+	vcost[ "arrivals" ].append([ arrv_minute, id ])
+
+## TODO: struc spec
 	vcost[ 'stops' ].append([
 		arrv_minute, id, x, y,
 	])
+	vcost[ 'deliveries' ][ id ] = arrv_minute
 
 	return arrv_minute
 
@@ -2414,15 +2466,15 @@ def is_special_vehicle(v):
 	return False
 
 
-##--------------------------------------
-## human-readable form for special assignments
+## ##--------------------------------------
+## ## human-readable form for special assignments
+## ##
+## def delvtuple2str(v, asap):
+## 	"pretty-print [ vehicle, time(ASAP), ] tuples"
 ##
-def delvtuple2str(v, asap):
-	"pretty-print [ vehicle, time(ASAP), ] tuples"
-
-	vs = is_special_vehicle(v)
-
-	return f'V[,ASAP={ asap }min]'  if not vs  else vs
+##	vs = is_special_vehicle(v)
+##
+##	return f'V[,ASAP={ asap }min]'  if not vs  else vs
 
 
 ##--------------------------------------
@@ -2453,13 +2505,15 @@ def virtual_vehicle2id(nr):
 
 
 ##--------------------------------------
+## TODO: centralize deparsing/indexing
+##
 def mayreach2str(t):
 	"pretty-print vehicle ID, primary, ASAP tuples"
 
 	if len(t) == 2:
 		return f'[id={ t[0] },primary={ t[1] }]'
 
-	return f'[id={ t[0] },primary={ t[1] },ASAP={ t[2] }min]'
+	return f'[id={ t[0] },primary={ t[1] },ASAP={ t[3] }min]'
 
 
 ##--------------------------------------
@@ -2470,6 +2524,7 @@ def new_vehicle(vid):
 		'primary':   0,
 		'secondary': 0,
 		'deliveries': {},
+		'arrivals':   [],
 		'refills':    [],
 		'stops':      [],     ## schedule form of deliveries{}
 	}
@@ -2494,7 +2549,7 @@ def new_vehicle(vid):
 ##
 ## see 'Backtrack Storage' for description of backtrack entries
 ##
-def show_backtrack(backtrack, btrack_alt):
+def show_backtrack(backtrack, btrack_alt, where=None):
 	if len(backtrack) != len(btrack_alt):
 		terminate('mismatched backtrack/alternatives depth (' +
 		          f'depth(stack)={ len(backtrack) }, ' +
@@ -2506,6 +2561,8 @@ def show_backtrack(backtrack, btrack_alt):
 
 	if debug_is_active(2, vTRC_STACK):
 		print('====  BACKTRACK STACK')
+		debugmsg(f"## BACKTRACK.STACK.DEPTH={ len(backtrack) }",
+		         1, type=vTRC_SCHED | vTRC_STACK)
 		for bi, btrck in enumerate(range(len(backtrack) -1, -1, -1)):
 			print(f'## BACKTRACK.CHOICE[{ -1-bi }]=' +
 				f'{ backtrack[ btrck ] }')
@@ -2523,12 +2580,24 @@ def vehicle_cost0():
 	"initial, all-empty state of per-vehicle route statistics"
 
 	return {
-		'primary':   0,
-		'secondary': 0,
-		'd_minutes': [],
-		'distances': [],
-		'stops':     [],
+		'primary':    0,
+		'secondary':  0,
+		'd_minutes':  [],
+		'distances':  [],
+		'stops':      [],
+		'arrivals':   [],
+		'deliveries': {},
+		'checked':    {},
 	}
+
+
+##--------------------------------------
+def dict_has_all_keys(d, k):
+	if not d:
+		return False
+
+	k = list(dk  for dk in k  if (not dk in d))
+	return k == []
 
 
 ##--------------------------------------
@@ -2538,9 +2607,9 @@ def vehicle_cost0():
 ## none of these test is ever expected to fail
 ##
 def is_invalid_route(vroute):
-	if not (('primary' in vroute) and ('secondary' in vroute) and
-	        ('d_minutes' in vroute) and ('distances' in vroute) and
-	        ('stops' in vroute)):
+	if not (dict_has_all_keys(vroute, ['primary', 'secondary', 'stops',
+	                                   'd_minutes', 'distances',
+	                                   'deliveries', 'arrivals', ])):
 		return "Required VRoute field missing"
 
 	if len(vroute['d_minutes']) != len(vroute['stops']):
@@ -2570,7 +2639,7 @@ def is_invalid_route(vroute):
 ## return updated 'best' if (1) previous-best was empty or (2) current
 ## route is an improvement
 ##
-## local solutions only; storing best-current to global is 
+## local solutions only; storing best-current to global is
 ## register_best2global(), called once per vehicle
 ##
 ## output may be assigned to search-wide 'best' directly
@@ -2620,7 +2689,7 @@ def maybe_register_best(best, vroute, arrivals):
 	dist_improve_pct = 100.0 * (dist_vroute - dist_best) / dist_best
 			##
 			## a populated 'best' already stores at least one
-			## delivery, therefore a path > 0.0: no div-by-zero 
+			## delivery, therefore a path > 0.0: no div-by-zero
 
 	debugmsg(f"## ? SUM(PRIMARY): {best['primary']} -> " +
 		 f"{ vprm1 } ({ sum1_improve_pct :0.1f}%)?",
@@ -2648,7 +2717,12 @@ def maybe_register_best(best, vroute, arrivals):
 			explain =  ' with modest efficiency loss '
 			explain += f' ({ -sum1_improve_pct :.1f}%)'
 
-		debugmsg(f"solution reduces total distance { dist_best :.6f}->"+
+		if (dist_improve_pct > 0.0):
+			dchg = 'changes'
+		else:
+			dchg = 'reduces'
+
+		debugmsg(f"solution {dchg} total distance { dist_best :.6f}->"+
 		         f"{ dist_vroute :.6f}" +explain,
 		         1, type=vTRC_PACK)
 		improves = True
@@ -2683,6 +2757,14 @@ def register_arrival(arrivals, id, vid, arrival_minute):
 
 
 ##--------------------------------------
+## mark route in 'best' as taken, sanity-checking its constituents
+##   1) none of the deliveries in 'best' may have already been
+##      assigned to other vehicles
+##   2) delivery times are non-decreasing, compatible with layout
+##      plus overhead times
+##
+## TODO: remaining sanity checks
+##
 def register_best2global(arrivals, best, vid):
 	assert(arrivals != None)
 	assert('stops' in best)
@@ -2691,13 +2773,12 @@ def register_best2global(arrivals, best, vid):
 
 	unused1 = MAX1 - best[ 'primary' ]
 
-	print(f"## LOAD.PRIMARY.VEH[{ vid }]={ best[ 'primary' ] }")
-	print(f"## LOAD.UNUSED.VEH[{ vid }]={ unused1 }")
-	print(f"## LOAD.UNUSED.VEH[{ vid }].PCT=" +
+	print(f"## BEST.LOAD.PRIMARY.VEH[{ vid }]={ best[ 'primary' ] }")
+	print(f"## BEST.LOAD.UNUSED.VEH[{ vid }]={ unused1 }")
+	print(f"## BEST.LOAD.UNUSED.VEH[{ vid }].PCT=" +
 		f"{ (100.0 * unused1 / MAX1) :.1f}")
 
 	print(f"## LOAD.SECONDARY.VEH[{ vid }] = { best[ 'secondary' ] }")
-
 
 	for delv in best[ 'stops' ]:
 		minute, id = delv[0], delv[1]
@@ -2745,6 +2826,69 @@ def vehicle_last_at(vroute, now_min):
 		return leave_asap_min, x, y
 
 	return now_min, None, None
+
+
+##--------------------------------------
+## return >0  if existing assignments prevent delivery
+##        0   if delivery does 
+##
+## specific error codes:
+##     (1) may not be delivered in immediate future (vNEXTUNITS; tmask)
+##     (2) delivery is already assigned
+##
+## 'd'     is delivery being checked
+## 'dels'  is auxiliary delivery struct
+## 'tmask' is time window of possible delivery to consider
+## 'vbit'  is bitmask of current vehicle; cross-checked against vehicle
+##         bitmask of deliveries
+##
+def unsuitable_delivery(d, dels, vroute, arrivals, tmask, vbit):
+	if (d == None) or not dels:
+		return 666              ## required params missing completely
+
+	if ((tmask & d[ 'time2vec' ]) == 0):
+		return 1                ## no common time
+
+## TODO: centralized timevectors-intersection which can
+## deal with multiple ASAP times
+##
+## example:
+##       ----1111-----1111-----   time vector
+##       ------1111111111111111   "may arrive"  ->
+##       ------1------1--------   both are 'ASAP', one for each vector
+## (obv never an issue if time vectors are without holes)
+##
+## counterexample:
+##       ----1111-----1111-----   time vector
+##       ----------11----------   "may arrive" ->
+##                                no suitable arrival, even if
+##                                min(t.vector) <= arrival <= max(t.vector)
+
+	if (d["index"] in arrivals):
+		return 2                ## delivery is already assigned
+		                        ## (not to current vehicle)
+
+	if (d["index"] in vroute["deliveries"]):
+		return 3                ## already assigned, to current
+		                        ## vehicle
+
+	if (not 'vehicle_may' in d) or ((vbit & d[ 'vehicle_may' ]) == 0):
+		return 4                ## this vehicle can not deliver
+
+	return 0
+## TODO: original, inline version
+					## find which deliveries:
+					## (2) are not yet assigned,
+					##     either by other vehicles (2.1)
+					##     or already in the current
+					##     vehicle route (2.2)
+					## (3) may be assigned to  this vehicle
+					## (4) do not overload vehicle
+					##
+					## also, checked subsequently,
+					## (5) vehicle may actually
+					##     get there within (1)
+					##
 
 
 ##--------------------------------------
@@ -2799,7 +2943,10 @@ def delivery_candidates(vroute, dels, arrivals, vbit, vehicle_id, now_min=0,
 					## find which deliveries:
 					## (1) may be delivered in immediate
 					##     future (vNEXTUNITS; tmask)
-					## (2) are not yet assigned
+					## (2) are not yet assigned,
+					##     either by other vehicles (2.1)
+					##     or already in the current
+					##     vehicle route (2.2)
 					## (3) may be assigned to  this vehicle
 					## (4) do not overload vehicle
 					##
@@ -2808,9 +2955,13 @@ def delivery_candidates(vroute, dels, arrivals, vbit, vehicle_id, now_min=0,
 					##     get there within (1)
 					##
 	ds = list(d  for d in dels
-	          if ((tmask & d[ 'time2vec' ])     and                  ## (1)
-	              (not d["index"] in arrivals)  and                  ## (2)
-	              (vbit & d[ 'vehicle_may' ])))                      ## (3)
+	          if not unsuitable_delivery(d, dels, vroute, arrivals,
+	                                     tmask, vbit))
+
+##	          if ((tmask & d[ 'time2vec' ])                 and    ## (1)
+##	              (not d["index"] in arrivals)              and    ## (2.1)
+##	              (not d["index"] in vroute["deliveries"])  and    ## (2.2)
+##	              (vbit & d[ 'vehicle_may' ])))                    ## (3)
 
 					## 'may reach'
 					## (index, primary) tuples in
@@ -2820,6 +2971,9 @@ def delivery_candidates(vroute, dels, arrivals, vbit, vehicle_id, now_min=0,
 	mr = sorted(([ d["index"], d["primary" ], ]
 	 	       for d in ds
 		       if (d["primary"] + vroute["primary"] <= MAX1)))   ## (4)
+##
+## TODO: anything changing here with multiple ASAP minutes?
+## see unsuitable_delivery() for example
 
 	mr = sorted(mr, key=operator.itemgetter(1), reverse=True)
 					## decreasing primary order
@@ -2845,11 +2999,23 @@ def delivery_candidates(vroute, dels, arrivals, vbit, vehicle_id, now_min=0,
 			asap = xy2asap_minute(x, y, dx, dy, leave_asap, twindow)
 ## TODO: multi-valued; returns list of ASAP minutes
 
+			nroute = ''
+					## did we already consider the current
+					## route + (newly tested delivery)
+					## as an option? if so, skip it
+			if asap != None:
+				nroute = vroute2normalized(vroute, di, asap)
+				if nroute in vroute[ 'checked' ]:
+					debugmsg(f'## SCHED.WAS.SEEN={nroute}',
+	         			         2, type=vTRC_SCHED)
+					asap = None
+
 						## (5) vehicle may actually
 						##     get there to hit (1)
 						## see conditions above
-						##
 			if asap != None:
+				debugmsg(f'## SCHED.FULL.NEW={nroute}',
+				         2, type=vTRC_SCHED)
 				mrn.append([ di, add, vehicle_id, asap,
 				             now_min, ])
 	else:
@@ -2935,6 +3101,86 @@ def assert_backtrack_stacks(backtrack, alt):
 	if len(backtrack) != len(alt):
 		terminate("inconsistent backtrack-stack size: "+
 			f"main { len(backtrack) }, aux. { len(alt) }")
+
+
+##--------------------------------------
+## raise exception, returning False, if anything inconsistent
+## silently tolerates None 'vcost'
+##
+def assert_vroute_is_sane(vcost):
+	if vcost == None:
+		return True
+
+## TODO: now we have dict_has_all_keys(d, k)
+##
+	if ((not 'stops' in vcost) or (not 'distances' in vcost) or
+	    (not 'd_minutes' in vcost) or (not 'deliveries' in vcost) or
+	    (not 'arrivals' in vcost)):
+		raise ValueError(f'missing route-related fields (r={vcost})')
+
+	if len(vcost[ 'd_minutes' ]) != len(vcost[ 'distances' ]):
+		raise ValueError('inconsistent duration/distance data' +
+		                 f'(r={vcost}')
+
+	if len(vcost[ 'stops' ]) != len(vcost[ 'distances' ]):
+		raise ValueError('inconsistent duration/stop-list ' +
+		                 f'(r={vcost}')
+
+	if len(vcost[ 'stops' ]) != len(vcost[ 'deliveries' ]):
+		raise ValueError('inconsistent duration/stop-list ' +
+		                 f'(r={vcost}')
+
+	if len(vcost[ 'd_minutes' ]) != len(vcost[ 'arrivals' ]):
+		raise ValueError('inconsistent arrivals/inverted.index' +
+		                 f'(r={vcost}')
+
+## TODO: conditional: check sum() for primary and secondary
+
+	return True
+
+
+##--------------------------------------
+## roll back VRoute Status, when backtracking one level
+## update 'vcost' in place
+## removes entry from 'arrivals' if non-None
+##
+def vroute_backtrack1(vcost, dels, arrivals=None):
+	if vcost == None:
+		return
+
+	assert_vroute_is_sane(vcost)
+
+	curr = vcost[ 'stops' ].pop(-1)         ## delivery we are undoing
+	                                        ## that in 'curr' etc.
+
+	arrv_minute, id, x, y = curr
+
+	if arrivals:
+		if not id in arrivals:
+			raise ValueError(f"undoing yet-unseen delivery {id}")
+		del(arrivals[ id ])
+
+	assert(len(dels) > id)
+## TODO: centralized consistency checking
+
+	rm1, rm2 = dels[id][ 'primary' ], dels[id][ 'secondary' ]
+		##
+	if vcost[ 'primary' ] < rm1:
+		raise ValueError('inconsistent delivery queue (primary)')
+	vcost[ 'primary' ] -= rm1
+
+	if vcost[ 'secondary' ] < rm2:
+		raise ValueError('inconsistent delivery queue (secondary)')
+	vcost[ 'secondary' ] -= rm2
+
+## TODO: ensure ID is present and matches expected
+	del(vcost[ 'deliveries' ][ id ])
+
+## TODO: final check: route is empty with all-0 sums etc.
+
+	vcost[ 'distances' ].pop(-1)
+	vcost[ 'd_minutes' ].pop(-1)
+	vcost[ 'arrivals'  ].pop(-1)
 
 
 ##--------------------------------------
@@ -3035,7 +3281,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
 	mins_min, mins_max = dels[0]['MIN_TIME_ALL'], dels[0]['MAX_TIME_ALL']
- 
+
 				## vplans: v.route info, see 'Vehicle Status'
 	vplans, done = {}, False
 
@@ -3068,7 +3314,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	##
 	##       Action:
 	##       Evaluate backtrack[-1] as it has just been taken, descend;
-	##       adding a new level to both bactrack[] and balt[].
+	##       adding a new level to both backtrack[] and balt[].
 	##       We extend the current-vehicle delivery plan
 	##       with the newly taken choice backtrack[-1].
 	##
@@ -3076,7 +3322,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	##
 	##    2) backtrack[-1] is empty; balt[-1] is not.
 	##       We are now evaluating the alternatives of the last-removed
-	##       backtrack[-1] entry, evaluating the choices which were
+	##       backtrack[-1] entry, checking choices which were
 	##       originally listed as alternatives.
 	##
 	##       Action:
@@ -3208,6 +3454,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## stack them: without factoring out,
 				## we would be too deeply nested.
 
+			print(f"## ARRIVALS.RESVD.COUNT=[{ len(arrivals) }]")
+
 			show_backtrack(backtrack, btrack_alt)
 			debugmsg(f'## MAIN.LOOP.NOW={ minute2wall(now_min) }',
 			         1, type=vTRC_SCHED | vTRC_FLOW)
@@ -3228,7 +3476,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				debugmsg('## MAIN.LOOP.VEH.ROUTES.TOTAL' +
 				         f'={ nr_routes }',
 				         3, type=vTRC_FLOW)
-				break        
+				break
 				##-----  terminate loop  ---------------------
 
 			next = None
@@ -3241,16 +3489,23 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 						##
 						## entering loop for the
 						## first time               (4)
+						##
 			if (backtrack == []) and (nr_routes == 0):
+				debugmsg('## MAIN.LOOP.ENTER(FIRST)',
+				         2, type=vTRC_FLOW)
 				pass            ## (4) -> fall through to (2.2)
-
-			##-----  after this point: backtrack[-1] exists
 
 			elif backtrack[-1] != []:    ## choice was taken
 			                             ## (1) -> (2.2)
 				next = backtrack[-1]
 				debugmsg('## MAIN.LOOP.CHOICE(STACK)',
 				         1, type=vTRC_FLOW)
+						##
+
+				nroute = vroute2normalized(vcost)
+				debugmsg(f'## MAIN.NEW.ROUTE.NORM={ nroute }',
+				         2, type=vTRC_FLOW)
+				vcost[ 'checked' ][ nroute ] = 1
 
 			elif (btrack_alt[-1] != []):
 						## choice emptied, alternates
@@ -3262,28 +3517,37 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				         f'{ len(btrack_alt[-1]) })',
 				         1, type=vTRC_FLOW)
 					##
-				next = btrack_alt[-1].pop(-1)
-				backtrack.append(next)
+				next = btrack_alt[-1].pop(0)
+				backtrack[-1] = next
 
 			else:            ## processed both main and alternates,
 			                 ## backtrack to previous choice
 			                 ## (above this one in stack)       (3)
 				backtrack.pop(-1)
 				btrack_alt.pop(-1)
+				vroute_backtrack1(vcost, dels, arrivals)
 
-				debugmsg('## MAIN.LOOP.UP', 1, type=vTRC_FLOW)
+				debugmsg('## MAIN.LOOP.BACKTRACK.UP',
+				         1, type=vTRC_FLOW | vTRC_STACK)
 				continue
 				##-----  restart loop  -----------------------
 
 			##-----  administer new entries (2.1, 2.2)  ----------
 			## (1) one has been picked from backtrack stack;
-			##     it is in 'next' if non-None
+			##     it is in 'next' if non-None; that entry
+			##     has already been removed from stack.
+			##     find candidates reachable after delivering
+			##     the 'next' entry.
 			## (2) find initial candidates if 'next' is None
+
+			if next:
+				pass
 
 			mr = delivery_candidates(vcost, dels, arrivals,
 			                         vbit, vid, now_min)
 
 			##-----  branch-trim heuristics would come here  -----
+
 ## TODO: proper branch-trim heuristic!
 ## in the beginning, discard things much lighter than first assignment
 ## cuts down branching of early searches
@@ -3317,6 +3581,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 					##-----  end of search, backtrack
 ## TODO: delay until a later delivery window would come here
 
+			nr_routes += 1
 					## accept 1st candidate
 					## store others as alternates
 			id, sum1, _, asap, now_min = mr.pop(0)
@@ -3332,7 +3597,12 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 			                     vid, id, asap, dels)
 			register_arrival(arrivals, id, vid, asap)
 
-			best = maybe_register_best(best, vcost, arrivals)
+			best0 = best
+			best  = maybe_register_best(best, vcost, arrivals)
+			if (best != best0):
+## ...log here...
+				sys.stdout.flush()
+
 
 			continue
 ## RRR
@@ -3421,6 +3691,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## TODO: factor out these +- adjustments
 				vcost[ "distances" ].pop(-1)
 				vcost[ "d_minutes" ].pop(-1)
+				vcost[ "arrivals"  ].pop(-1)
 				vcost[ "primary"   ] -= rm1
 				vcost[ "secondary" ] -= rm2
 
@@ -3629,9 +3900,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 ## 				debugmsg('## MAIN.LOOP, NO NEW CANDIDATES',
 ## 			        	 3, type=vTRC_FLOW)
-## 
+##
 ## 				future = timevec2after(t, maxu)
-## 
+##
 ## 					## collect [id, primary,] for
 ## 					##   (A) yet-unassigned deliveries
 ## 					##   (B) in any future unit
@@ -3641,7 +3912,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 					if ((not d['index'] in arrivals) and # A
 ## 					    (future & d['time2vec']))        # B
 ## 				)
-## 
+##
 ## 					## if primary fill + min(remaining
 ## 					## delivery) is > primary.threshold,
 ## 					## this vehicle is full
@@ -3662,12 +3933,12 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 						## arbitrary value which
 ## 						## triggers 'to much to fit'
 ## 						## below
-## 
+##
 ## 				shown_btrack = False
 ## 				try_register = False
 ## 					##
 ## 					## is this a final combination?
-## 
+##
 ## 				if (pending_min1 + vcost[ "primary" ] > MAX1):
 ## 					debugmsg('## PACK.COMPLETE=no-next-fit',
 ## 					         1, type=vTRC_SCHED)
@@ -3680,16 +3951,14 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## TODO: other terminate-and-backtrack conditions
 
 				##-----  consider current state as solution
-
-				if try_register:
-					shown_btrack = show_backtrack(backtrack,
-					                    btrack_alt)
-					do_backtrack = True
-					nr_routes += 1
-					tstart = timediff_log_now(tstart,
-						'BFD.VEHICLE.FULL')
-
-					continue
+##
+##				shown_btrack = show_backtrack(backtrack,
+##				                    btrack_alt)
+##				do_backtrack = True
+##				nr_routes += 1
+##				tstart = timediff_log_now(tstart,
+##						'BFD.VEHICLE.FULL')
+##					continue
 
 
 						## nothing visible in
@@ -3712,7 +3981,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				assert(0)
 
 			debugmsg(f"## BACKTRACK.STACK={ backtrack }",
-			         2, type=vTRC_SCHED)
+			         2, type=vTRC_SCHED | vTRC_STACK)
 			if btrack_alt:
 				debugmsg("## BACKTRACK.CURR.ALTERNATES=[" +
 					",".join(mayreach2str(b)
@@ -3798,6 +4067,10 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 		nr_routes_all += nr_routes
 
+		debugmsg('## MAIN.LOOP.ROUTES.TOTAL' +
+		         f'={ nr_routes_all }(+{ nr_routes })',
+		         2, type=vTRC_FLOW)
+
 		done = True
 
 	tstart = timediff_log_now(tbacktrack0, 'BFD.ASSIGN.ALL')
@@ -3808,11 +4081,11 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 
 ## 	##-----  v2:  --------------------------------------------------------
-## 
+##
 ## 				## pick "reasonably spaced" start times for
 ## 				## all deliveries
 ## 	dels = copy.deepcopy(aux)
-## 
+##
 ## 	tstart = time.perf_counter()
 ## 	starttimes(dels)
 ## 	tend = time.perf_counter()
@@ -3821,46 +4094,46 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 	         lvl=2, type=vTRC_TIME)
 ## 	tstart = tend
 ## 	##-----  tstart is after initial delivery assignments  ---------------
-## 
-## 
+##
+##
 ## 	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
 ## 	t = tmin
-## 
+##
 ## 	backtrack  = []         ## assigned in each turn
 ## 	btrack_alt = []         ## alternates to those assigned in each turn
 ## 	                        ## MUST evolve in matched pairs
-## 
+##
 ## 	avail   = len(vpos)     ## number of new vehicles one may assign
 ## 	delayed = {}            ## anything pushed back in current schedule
-## 
+##
 ## 	vpos0 = copy.deepcopy(vpos)
-## 
+##
 ## 				## enumerate delivery windows (bits in mask)
 ## 				## in chronological order
 ## 	while (t <= tmax):
 ## 		assert(len(backtrack) == len(btrack_alt))      ## matched pairs
-## 
+##
 ## 		t0 = timevec2asap(t, minutes=True)
 ## 		te = t0 + vTIME_UNIT_MINS -1
 ## 		tunit = t.bit_length()-1               ## 0-based, from tmin...
 ## 		t += t             ## current t is t/2; allow simple continue
-## 
+##
 ## 		debugmsg(f'## T.WINDOW={ minute2wall(t0) }..' +
 ## 			 f'{ minute2wall(te) }', 1)
-## 
+##
 ## 		##---  enumerate all possible (delivery, vehicle) pairs  -----
 ## 		## (1) 'new vehicle' assignment appear, once, if new vehicles
 ## 		##     may still be added/assigned
 ## 		## (2) delay listed as 'vehicle' if still possible
-## 
+##
 ## 						## which deliveries have
 ## 						## been pre-scheduled here?
 ## 		ds = list(d  for d in dels
 ## 			if (('window' in d) and (t & d['window']) and
 ## 			    (not is_delivery_frozen(d))))
-## 
+##
 ## 		didxs = list(sorted(d[ "index" ] for d in (ds)))
-## 
+##
 ## 					## which one of the delayed deliveries
 ## 					## may be considered in this time unit?
 ## 					##
@@ -3869,34 +4142,34 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 		                      not is_delivery_frozen(dels[d]))))
 ## 					##
 ## 		ddelay_now = list(sorted(ddelay_now))
-## 
+##
 ## 		if debug_is_active(3, vTRC_SCHED | vTRC_STACK):
 ## 			print('## BACKTRACK.TAKEN ', backtrack)
 ## 			print('## BACKTRACK.ALT   ', btrack_alt)
 ## 					## backtrack stack at entry
-## 
+##
 ## 		if debug_is_active(2, vTRC_SCHED):
 ## 			print('## SCHED.INIT0.NOW    ', didxs)
 ## 			if ddelay_now:
 ## 				print('## +BACKTRACK.DELAYED ',
 ## 				      ",".join(str(di)
 ## 				          for di in sorted(ddelay_now)))
-## 
+##
 ## 		didxs.extend(ddelay_now)
 ## 		didxs = list(sorted(didxs))   ## anything possibly starting now
-## 
+##
 ## 		if debug_is_active(2, vTRC_SCHED):
 ## 			print('## SCHED.NOW.CHECK    ', didxs)
-## 
+##
 ## 				## plus anything delayed to now, IF they
 ## 				## may be delivered in this window
-## 
+##
 ## 		debugmsg(f'## T.START0.COUNT={ len(didxs) }', 1,
 ## 		         type=vTRC_SCHED)
 ## 		if ds:
 ## 			debugmsg('## T.DELVS.NOW=' +
 ## 				f'{ ",".join(str(di)  for di in didxs) }', 1)
-## 
+##
 ## 				## time assignments in current round
 ## 				## nr. of possible pairs (total)
 ## 				## does this combination break/backtrack?
@@ -3914,7 +4187,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 				##
 ## 		spec_sched = {} ## number of special schedule options,
 ## 				## indexed by delivery index
-## 
+##
 ## 				## delivery indexes which may be delayed
 ## 				## or may be assigned a new vehicle,
 ## 				## respectively
@@ -3922,21 +4195,21 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 				##
 ## 				## note: redundant; consolidate, see
 ## 				## vDELAY_DELIVERY and vNEW_VEHICLE
-## 
+##
 ## 		ds = list(sorted(ds, key=del_unit2sort))
 ## 		for d in ds:
 ## 			didx     = d[ 'index' ]
 ## 			x, y     = d['x'], d['y']
 ## 			new_load = [ d['primary'], d['secondary'] ]
 ## 			                 ## assigning new vehicle or delaying
-## 
+##
 ## 			debugmsg(f'## T.DELV.IDX={ didx }', 1)
 ## 			debugmsg(f'## T.DELV.WINDOW={ d["time"] }', 1)
 ## 			debugmsg(f'## T.DELV.XY={ x },{ y }', 2,
 ## 			         type=vTRC_MAP)
-## 
+##
 ## 			spec_sched[ didx ] = 0
-## 
+##
 ## 			vs   = vehicle_may_reach(x, y, t, vpos, xy2d, d,
 ## 			                         assign_new=False)
 ## 			vids = vehicles_which_may_deliver(new_load, vs,
@@ -3945,12 +4218,12 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 			if (avail > 0):
 ## 				may_assign_new[ didx ] = 1
 ## 				spec_sched[ didx ] += 1
-## 
+##
 ## 			if has_time_after(d, t):
 ## 				may_delay[ didx ] = 1
 ## 				spec_sched[ didx ] += 1
 ## 				curr[ didx ].append([ vDELAY_DELIVERY, t0, ])
-## 
+##
 ## 				## categorize all possibilities; pick option
 ## 				## to descend into.  split option tuples into
 ## 				## (1) assigned (2) alternate groups; first
@@ -3959,34 +4232,34 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 				##
 ## 				## each delivery has only one option assigned
 ## 				## to it; if out of options, backtrack.
-## 
+##
 ## 			if (vids == []) and (spec_sched[didx] == 0):
 ## 				btrack = True
 ## 				break
-## 
+##
 ## 			pairs += len(curr[ didx ]) + spec_sched[didx]
-## 
+##
 ## 		if btrack:
 ## 			assert(0)
 ## 			pass
-## 
+##
 ## 		if debug_is_active(1, vTRC_SCHED):
 ## 			print('## DELV.SCHED.TUPLES[time.w=' +
 ## 				f'{ tunit }].COUNT={ pairs }')
 ## 			print(f'## VEH.AVAIL={ avail }')
-## 
+##
 ## 			for d in sorted(curr.keys()):
 ## 				dstr = ",".join(delvtuple2str(v, asap)
 ## 				                for v, asap in curr[d])
 ## 					##
 ## 				print(f'## DELV[{ d }]={ dstr }')
-## 
+##
 ## 		if curr == {}:     ## no delivery to schedule in this time unit
 ## 			backtrack.append([])
 ## 			btrack_alt.append([])
 ## 			continue
 ## 				## already backtracked above w/o valid schedule
-## 
+##
 ## 					##------------------------------------
 ## 					## nr. of options for each delivery
 ## 					## incl. delay or new vehicles
@@ -3994,20 +4267,20 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 		for d in curr.keys():
 ## 			nro[d] =  len(curr[d]) + (1 if (d in may_delay) else 0)
 ## 			nro[d] += (1  if (d in may_assign_new)  else 0)
-## 
+##
 ## 		assert(0 < min(nro.values()))
 ## 					##
 ## 					## if delivery exists with no options,
 ## 					## MUST have already backtracked above
-## 
+##
 ## 		##----------------------------------------------------
 ## 		## split [delivery: vehicle, ASAP] tuples' list
 ## 		## to 'taken', 'not taken' list of options
 ## 		##
 ## 		## one option per delivery; rest go to
 ## 		## alternates for backtrack-alternate stack
-## 
-## 
+##
+##
 ## 		##====================================================
 ## 		## this is where choice-enumeration magic happens
 ## 		##
@@ -4020,7 +4293,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 		## currently-selected assignments
 ## 		##
 ## 		now, alt = [], []
-## 
+##
 ## 				## (1) index of deliveries with (A) only one
 ## 				##     option, excluding new vehicles (which
 ## 				##     are capacity-limited, and counted below)
@@ -4029,55 +4302,55 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 		didxs_1choice = list(sorted(di  for di in curr.keys()
 ## 		                     if ((nro[di] == 1) and              ## (A)
 ## 		                         (not di in may_assign_new))))
-## 
+##
 ## 		if didxs_1choice and debug_is_active(2, vTRC_SCHED):
 ## 			print('## DELV.FIXED=', didxs_1choice)
 ## 							## TODO: pretty-print
-## 
+##
 ## 		for di in didxs_1choice:
 ## 			if di in may_delay:
 ## 				now.extend([ di, vDELAY_DELIVERY, minute0, ])
 ## 			else:
 ## 				now.extend([ di, curr[di][0][0],
 ## 				             curr[di][0][1], ])
-## 
+##
 ## 				## (2) trim current-index list to anything
 ## 				##     remaining with multiple choices
 ## 				##
 ## 		didxs = list(di  for di in didxs  if (not di in didxs_1choice))
-## 
+##
 ## 				## (3) enumerate delivery-vehicle assignments
 ## 				##     considers number of available ones
 ## 				##
 ## 		vas = list(vehicle_assignments(didxs, curr, t0, avail,
 ## 		                               may_delay))
-## 
+##
 ## 				## are there enough unassigned vehicles
 ## 				## to try all the single-option ones?
 ## 				##
 ## 				## if not, we need to backtrack: previous
 ## 				## choices do not leave us enough unassigned
 ## 				## vehicles which SHOULD be assigned now
-## 
+##
 ## 				## (3) choices (tuples) for each
 ## 				##     still-unassigned delivery
 ## 				##
 ## 				## TODO: 'allow new vehicle' strategy
 ## 		for di in didxs:
 ## 			v, asap = curr[di].pop(0)
-## 
+##
 ## #			if (di in may_assign_new):
 ## #				avail -= 1
-## 
+##
 ## 			now.append([ di, v, asap, ])
 ## #			if (v == vDELAY_DELIVERY):
 ## #				maydelay[di] = 1
-## 
+##
 ## 			for v, asap in curr[di]:
 ## 				alt.append([ di, v, asap, ])
-## 
+##
 ## 			continue   ## XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-## 
+##
 ## 			vchoices = list([v, asap]  for v,asap in curr[di]
 ## 			                if not is_special_vehicle(v))
 ## 				##
@@ -4086,7 +4359,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 				## try them in increasing distance order,
 ## 				## which SHOULD be the case by now
 ## 				## (after vehicle_may_reach())
-## 
+##
 ## 				## no newly assigned vehicle would
 ## 				## arrive later than an existing one,
 ## 				## since we assume the former will be
@@ -4098,81 +4371,81 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 				## arrival would have been in a preceding
 ## 				## time unit, when this delivery would not
 ## 				## have been possible.
-## 
+##
 ## 			while True:         ## first suitable case breaks
 ## 				newv = []
 ## 				if di in may_assign_new:
 ## 					newv = [ di, vNEW_VEHICLE,
 ## 					         timevec2asap(t, minutes=True),
 ## 					]
-## 
+##
 ## 				if asap:
 ## 					if newv:
 ## 						now.append(newv)
-## 
+##
 ## 					elif vchoices:
 ## 						va = vchoices.pop(0)
 ## 						now.append([ di, va[0], va[1], ])
-## 
+##
 ## 					if vchoices:
 ## 						alt.extend([ di, v, asap, ]
 ## 						       for v,asap in vchoices)
 ## 					break
-## 
+##
 ## 				if alap:
 ## 					vchoices = list(reversed(vchoices,
 ## 				                key=operator.itemgetter(2)))
 ## 					##
 ## 					## prefer later-to-earlier deliveries
 ## 					## input list was chronological
-## 
+##
 ## TODO: recurring primitive, factor out
 ## (will be simplified once this is simplified to a Karnaugh map)
-## 
+##
 ## 					if vchoices:
 ## 						va = vchoices.pop(0)
 ## 						now.append([ di, va[0], va[1], ])
 ## 						alt.extend([ di, v, asap, ]
 ## 						       for v,asap in vchoices)
 ## 					break
-## 
+##
 ## 				if newv:
 ## 					now.append(newv)
-## 
+##
 ## 				if vchoices:
 ## 					va = vchoices.pop(0)
 ## 					now.append([ di, va[0], va[1], ])
 ## 					alt.extend([ di, v, asap, ]
 ## 					           for v,asap in vchoices)
-## 
+##
 ## 				break
 ## 			##-----  end of assign-one-delivery loop
-## 
+##
 ## 		newvhs = list(di  for di in didxs_1choice
 ## 		              if (v == vNEW_VEHICLE))
 ## 				##
 ## 		newvhs.extend(di  for di,v,asap in now  if (v == vNEW_VEHICLE))
-## 
+##
 ## 		##-----  now[]
-## 
+##
 ## 					## ASAP/ALAP? clear preference for
 ## 					## immediate assignment or delay
-## 
+##
 ## 		##=====  end of choice-enumeration magic  ====================
-## 
+##
 ## 		backtrack.append(now)
 ## 		btrack_alt.append(alt)
-## 
+##
 ## 		debugmsg('##', 1)
 ## 		continue
-## 
+##
 ## 		ds = list(d  for d in dels
 ## 		          if ((t & d['time2vec']) and
 ## 		              (not is_delivery_frozen(d))))     ## 1
 ## 					##
 ## 					## deliveries (1) not yet scheduled
 ## 					## (2) can be delivered in this window
-## 
+##
 ## 				## build (delivery, vehicle) pairs, listing
 ## 				## all vehicles which may hit this delivery
 ## 				##
@@ -4197,25 +4470,25 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 				##   delayed, is not reachable, and we are
 ## 				##   out of unassigned vehicles,
 ## 				##   we must backtrack.
-## 
+##
 ## 		ds = list(sorted(ds, key=del_unit2sort))
 ## 		for d in ds:
 ## 			didx = d[ "index" ]
-## 
+##
 ## 			debugmsg(f'## T.DELV.IDX={ didx }', 1)
 ## 			debugmsg(f'## T.DELV.WINDOW={ d["time"] }', 1)
-## 
+##
 ## 			x, y = d['x'], d['y']
 ## 			new_load = [ d['primary'], d['secondary'] ]
-## 
+##
 ## 			vs   = vehicle_may_reach(x, y, t, vpos, xy2d, d)
 ## 			vids = vehicles_which_may_deliver(new_load, vs, vpos)
-## 
+##
 ## 			curr[ didx ] = vids
-## 
+##
 ## 			if has_time_after(d, t) and (not asap):
 ## 				curr[ didx ].append([ vDELAY_DELIVERY, 0, ])
-## 
+##
 ## 			if vids == []:
 ## 				if has_time_after(d, t):
 ## 					backtrack.append(
@@ -4223,41 +4496,41 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 					print(f'## DELAY[{ didx }]')
 ## 					continue
 ## 				vids = [ vDELAY_DELIVERY, ]
-## 
+##
 ## 				raise ValueError("no suitable delivery")
 ## 							## backtrack
-## 
+##
 ## 			backtrack.append( btrack_delivery(d) )
-## 
+##
 ## 				## descend into all (this.delivery, vehicle)
 ## 				## options
-## 
+##
 ## 			debugmsg(f'## D.DELV.V[{didx}]=' +
 ## 			         f'{ ",".join(v[0] for v in vids) }', 2)
 ## 			debugmsg(f'## D.DELV.V.ASAP[{didx}]=' +
 ## 			         ",".join(f"{v[1]}" for v in vids), 2)
-## 
+##
 ## 			continue
-## 
+##
 ## 			if len(vids) > 1:
 ## 				pass
-## 
+##
 ## 			for vid, asap in vids:
 ## 				backtrack.append(
 ## 					btrack_vehicle(vpos[vid], vid, d))
-## 
+##
 ## 				debugmsg(f'## V.ASSIGN[{ didx }].ARRV=[{vid}]',
 ## 				         2, vTRC_SCHED)
-## 
+##
 ## 				upd = vehicle2xy(vpos, vid, asap, d,
 ## 				                 update=True)
 ## 				d[ 'minutes' ] = asap
-## 
+##
 ## 			if debug_is_active(2):
 ## 				list_backtrack(backtrack)
-## 
+##
 ## 		debugmsg('##', 1)
-## 
+##
 ## ##			if vids == []:
 ## ##				if has_time_after(d, t):
 ## ##					backtrack.append(
@@ -4287,72 +4560,72 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## ##			         f'{ ",".join(v[0] for v in vids) }', 2)
 ## ##			debugmsg(f'## D.DELV.V.ASAP[{didx}]=' +
 ## ##			         ",".join(f"{v[1]}" for v in vids), 2)
-## 
+##
 ## 	tstart = timediff_log_now(tstart, 'PACK.ROUTE.ASSIGN0')
-## 
+##
 ## 	##-----  tstart is after initial greedy assignment  ------------------
-## 
+##
 ## 	vpos = vpos0
-## 
+##
 ## 	##-----  v3:  --------------------------------------------------------
-## 
+##
 ## 	dlist = copy.deepcopy(aux)
-## 
+##
 ## 				## all entries, replicated from aux
 ## 				## sorted in increasing urgency order
 ## 				##
 ## key=del_timesort -> increasing urgency
 ## ##	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
-## 
+##
 ## 	dlist = list(sorted(list(dlist), key=del_unit2sort))
-## 
+##
 ## 	for d in dlist:
 ## 		idx = d[ 'index' ]
 ## 		if not 'start' in d:
 ## 			continue
-## 
+##
 ## ##		tvec, x, y = d['time2vec'], d['x'], d['y']
 ## 		tvec, x, y = d['start'], d['x'], d['y']
 ## 		if tvec == 0:
 ## 			continue
-## 
+##
 ## 		assert('start' in d)       ## must have initial-assigned by now
-## 
+##
 ## 		print(f"##   DELIVERY={ len(place) +1 }/{ len(dlist) }")
 ## 		print(f"## T={ d['time'] }  [t.vec=x{ tvec :0x}]")
 ## 		print(f"##   START={ d['start'] }u")
 ## 		print("##   TW=" +timevec2utilstr(tvec, maxu, sep='',
 ## 		                                  unitcols=1))
-## 
+##
 ## 		vs = vehicle_may_reach(x, y, tvec, vpos, xy2d, d)
 ## 		if vs == []:
 ## 			raise ValueError("no suitable delivery")
-## 
+##
 ## 		primary, secondary = d['primary'], d['secondary']
 ## 		vid_picked, arrival = None, vTIME_UNDEF
-## 
+##
 ## RRR
 ## 		for v in vs:
 ## 			vid = v[0]
 ## 			v1  = vehicle2primary  (vpos[ vid ])
 ## 			v2  = vehicle2secondary(vpos[ vid ])
-## 
+##
 ## 			if (primary +v1) > MAX1:
 ## 				print(f"##   OVERLOAD[{ vid }]: " +
 ## 				      f"{ primary + v1 }")
 ## 				continue
-## 
+##
 ## 			if MAX2 and ((secondary +v2) > MAX2):
 ## 				print(f"##   OVERLOAD.SECONDARY[{ vid }]: " +
 ## 				      f"{ secondary + v2 }")
 ## 				continue
-## 
+##
 ## 			if (vid_picked == None) or (v[2] < arrival):
 ## 				vid_picked, arrival = vid, v[2]
-## 
+##
 ## 		if vid_picked == None:
 ## 			raise ValueError("no suitable vehicle")
-## 
+##
 ## 		print("##  del=" +timevec2utilstr(minute2timevec(arrival),
 ## 		                                  maxu, sep='', unitcols=1))
 ## 				##
@@ -4362,8 +4635,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 		print('')
 ## 		place.append([ vs[0], [], ])
 ## 				## TODO: remember alternatives
-## 
-## 
+##
+##
 ## ##					## filter vehicles which may reach
 ## ##					## the suitable deliverxy2dist windows
 ## ##		vs = vehicle_may_reach(x, y, tvec, vpos, xy2dist)
