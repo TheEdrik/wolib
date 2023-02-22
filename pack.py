@@ -216,6 +216,9 @@ vNEW_VEHICLE = 'NEW.VEHICLE'
 ##   since new vehicles lack history, only a single entry is needed,
 ##   without specifying which one
 
+## early-terminating search timeout, in milliseconds
+vTIMEOUT_MSEC = 3000.0
+
 
 ##----------------------------------------------------------
 ## BFD-scan parameters
@@ -363,15 +366,19 @@ def debugmsg(msg, lvl=1, type=0):
 
 
 ##--------------------------------------
+def timediff_msec(tstart, tend):
+	return 1000.0 * (tend - tstart)
+
+
+##--------------------------------------
 ## transform to human-scaled time
 ## start, end must have been supplied by time.perf_counter()
 ##
 def timediff_str(tstart, tend):
-	diff  = tend - tstart
-	scale = 1000.0
-	unit  = 'ms'
+	ms   = timediff_msec(tstart, tend)
+	unit = 'ms'
 
-	return(f"{ diff * scale :.2f}{unit}")
+	return(f"{ ms :.2f}{unit}")
 
 
 ##--------------------------------------
@@ -2818,10 +2825,11 @@ def register_best2global(arrivals, best, vid):
 
 	print(f"## LOAD.SECONDARY.VEH[{ vid }] = { best[ 'secondary' ] }")
 
-	for delv in best[ 'stops' ]:
+	for dlvi, delv in enumerate(best[ 'stops' ]):
 		minute, id = delv[0], delv[1]
 
-		print(f"## SCHED VEH={ vid },T={ minute }min,DELV={ id }")
+		print(f"## SCHED VEH={ vid },T={ minute }min,DELV={ id }," +
+			f"STOP={ dlvi+1 }")
 
 ## TODO: eval route; times must be increasing
 
@@ -3219,6 +3227,16 @@ def vroute_backtrack1(vcost, dels, arrivals=None):
 
 
 ##--------------------------------------
+## did 'enough time' pass since last checkpoint (such as filling a new vehicle?)
+## 'tbase' must have been filled with time.perf_counter()
+##
+def are_in_timeout(tprev):
+	tdelta_ms = timediff_msec(tprev, time.perf_counter())
+
+	return (tdelta_ms >= vTIMEOUT_MSEC)
+
+
+##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
 ##
@@ -3320,6 +3338,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 				## vplans: v.route info, see 'Vehicle Status'
 	vplans, done = {}, False
+				## done set to True with solution
+				##          <0 when exiting
 
 					## arrival times per ID, minutes, for
 					## already-fixed deliveries
@@ -3443,7 +3463,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 					## brute-force plan generation for each
 					## vehicle, based on BFD approximation
-	while not done:
+	while (done == False):
 		t, nr_routes = tmin, 0
 					## nr. of routes checked (this vehicle)
 
@@ -3480,7 +3500,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## set to True and 'continue' from loop below
 				## to force backtrack (just below loop)
 
-		tstart_this_vehicle = time.perf_counter()
+		tstart = time.perf_counter()
+		tstart_this_vehicle = tstart
 
 				## scan yet-unassigned deliveries which
 				## may be started in [t .. t+vNEXTUNITS)
@@ -3491,6 +3512,10 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## we would be too deeply nested.
 
 			print(f"## ARRIVALS.RESVD.COUNT=[{ len(arrivals) }]")
+
+			if are_in_timeout(tstart):
+				print("TIMED.OUT")
+				sys.exit(0)
 
 			show_backtrack(backtrack, btrack_alt)
 			debugmsg(f'## MAIN.LOOP.NOW={ minute2wall(now_min) }',
@@ -3642,7 +3667,13 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 						len(deliveries))
 
 			##---  terminate if solution got 'close enough'  -----
-			if (vcost["primary"] >= max1_current):
+			## check for under-limit is redundant
+			##
+			if ((vcost["primary"] >= max1_current) and
+			    (vcost["primary"] <= MAX1)):
+				best = maybe_register_best(best, vcost,
+				             arrivals)   ## just add newest one
+
 				print(f"## QUALITY.CURR={ max1_current }")
 				print(f"## SUM.PRIMARY={ vcost['primary'] }")
 				print("## sum(primary) over current quality " +
@@ -3655,7 +3686,6 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 			if (best != best0):
 ## ...log here...
 				sys.stdout.flush()
-
 
 			continue
 ## RRR
@@ -4078,7 +4108,11 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 		print()
 
 		done   = False
-## RRR
+
+					## termination condition: 3sec
+		if are_in_timeout(tstart):
+			print("TIMED.OUT")
+			sys.exit(0)
 
 	tstart = timediff_log_now(tbacktrack0, 'BFD.ASSIGN.ALL')
 	print('')
