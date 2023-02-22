@@ -1898,11 +1898,11 @@ def pct2str(val, maxv):
 ## as fn. of items to set decreases
 ##
 def current_anneal_limit(delvs_set, delvs_total):
-	ratio = 0.5
+	ratio = 0.6667
 
 	if delvs_set + 25 < delvs_total:
 		if delvs_set + 100 < delvs_total:
-			ratio = 0.9
+			ratio = 0.925
 
 		else:
 			ratio = 0.75
@@ -2801,6 +2801,20 @@ def register_arrival(arrivals, id, vid, arrival_minute):
 
 
 ##--------------------------------------
+## summarize current plan for vehicle 'vid'
+##
+## see also: register_best2global(), which is the complete form
+## this fn may get called with incomplete plans too
+##
+def report_plan(vroute, vid, marker=''):
+	for dlvi, delv in enumerate(vroute[ 'stops' ]):
+		minute, id = delv[0], delv[1]
+
+		print(f"## SCHED{marker} VEH={ vid },T={ minute }min," +
+			f"DELV={ id },STOP={ dlvi+1 }")
+
+
+##--------------------------------------
 ## mark route in 'best' as taken, sanity-checking its constituents
 ##   1) none of the deliveries in 'best' may have already been
 ##      assigned to other vehicles
@@ -2808,6 +2822,7 @@ def register_arrival(arrivals, id, vid, arrival_minute):
 ##      plus overhead times
 ##
 ## TODO: remaining sanity checks
+## see also: report_plan()
 ##
 def register_best2global(arrivals, best, vid):
 	assert(arrivals != None)
@@ -3515,6 +3530,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 			if are_in_timeout(tstart):
 				print("TIMED.OUT")
+				report_plan(vcost, vid, marker='?')
+				print("/TIMED.OUT")
 				sys.exit(0)
 
 			show_backtrack(backtrack, btrack_alt)
