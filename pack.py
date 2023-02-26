@@ -52,6 +52,7 @@
 ##                    stack  details of backtracking
 ##                    flow   control/data flow
 ##                    all    any traceable quantity (all of the above)
+##   SAT=...      output SAT solver input for the current problem
 ##   TUPLE_N=...  limit the size of element-tuples when attempting to swap
 ##                not-yet-selected and selected elements (see below)
 ##   TARGET=...host:port...
@@ -158,6 +159,7 @@ import csv, re, sys, os, operator, functools, itertools, time, json, copy
 import socket               ## best-result reporting; ignores all write errors
 import math, random
 import pathtools
+import textwrap
 
 
 ## keep these global; needs dict if working on context-local limits
@@ -199,6 +201,10 @@ sCDELIVERIES = sCPREFIX.upper() +'_ORDERS'
 sINDENT  = '    '    ## prefix added per indented level
 
 sTABLE_BREAK = 10    ## add empty columns/rows every N units in large tables
+
+sSATPREFIX  = 'SAT='       ## common prefix for data applicable to SAT solvers
+sSATCOMMENT = '## SAT='    ## SAT-related comment, for our own tracing
+sSAT_CONSTR_END   = ' 0'   ## terminate [term list of] constraint
 
 
 ##----------------------------------------------------------
@@ -1841,6 +1847,126 @@ def vehicle2primary(vehicle):
 
 
 ##--------------------------------------
+## SAT-solver aux. data
+## all variables are Booleans
+##
+## {
+##    'delv_units': { ... }
+##                -- delivery+time windows' variables:
+##                -- dXX_tYY: delivery XX may be delivered in time unit YY
+##
+##    'vars':     [ ...list of variables in order of addition... ]
+##
+##    'constraints':   [ [ ...text of constraint1..., ...comment... ] ]
+##                -- each is whitespace-separated list of variables
+## }
+##
+## struct stores arbitrary values for 'delv_units' etc.; only their keys matter
+
+
+##--------------------------------------
+def use_satsolver():
+	return ('SAT' in os.environ)
+
+
+##--------------------------------------
+## empty construct for SAT solver aux. data
+##
+def satsolv_init0():
+	return {
+		'delv_units':  {},
+		'vars':        [],
+		'constraints': [],
+	}
+
+
+##--------------------------------------
+## returns False if value has already been set, True if has just been added
+##
+def satsolv_add1(sat, key, value):
+	rv = True
+	if sat:
+		assert(key in sat)
+		rv = not ('value' in sat[ key ])
+		sat[ key ][ value ] = 1
+
+	return rv
+
+
+##--------------------------------------
+## returns variable ID for this delivery+unit
+##
+def satsolv_add_delvtime(sat, delvid, unit):
+	dtvar = f'd{ delvid }t{ unit }'
+
+	if satsolv_add1(sat, 'delv_units', dtvar):
+		assert(dtvar not in sat[ 'vars' ])
+		sat[ 'vars' ].append(dtvar)
+
+	return dtvar
+
+
+##--------------------------------------
+## not checking for replication
+##
+def satsolv_add_constraint(sat, vars, comment=''):
+	if sat:
+		sat[ 'constraints' ].append([ " ".join(vars), comment ])
+
+
+##--------------------------------------
+## register 'raw', preformatted constraint
+## not checking for replication
+##
+def satsolv_add_constraint1(sat, rawc, comment=''):
+	if sat:
+		sat[ 'constraints' ].append([ rawc, comment ])
+
+
+##--------------------------------------
+def satsolv_report(sat):
+	if not use_satsolver():
+		return
+
+					## problem sizes
+	print(sSATPREFIX + f'p cnf { len(sat[ "vars" ]) } ' +
+		f'{ len(sat[ "constraints" ] ) }')
+
+	print(sSATPREFIX +'c CONSTRAINTS:')
+
+	comments = 0
+	for ci, c in enumerate(sat[ "constraints" ]):
+		cvars, comm = c[0], c[1]
+		if comm:
+			print(sSATPREFIX +f'c [constraint #{ci}]: { comm }:')
+			comments += 1
+
+	vstr = ' '.join(f'{ v }[{ vi+1 }]'
+	                for vi, v in enumerate(sat[ "vars" ]))
+	print(sSATPREFIX +'c VARIABLES: ' +vstr)
+
+	if comments:
+		print(sSATPREFIX + 'c')
+
+					##-----  end of header  --------------
+
+	for ci, c in enumerate(sat[ "constraints" ]):
+		cvars, comm = c[0], c[1]
+
+					## map expression to int. indexes
+					## each entry MUST be present
+		if cvars[:4] == 'RAW=':
+			constr = cvars[4:]
+		else:
+			constr = " ".join(str(sat[ "vars" ].index(v) +1)
+			                  for v in cvars.split())
+
+		print(sSATPREFIX +constr +sSAT_CONSTR_END)
+
+	print()
+
+
+##============================================================================
 ## TODO: Python version-portable automatic values
 ##
 def vehicle2secondary(vehicle):
@@ -3251,6 +3377,78 @@ def are_in_timeout(tprev):
 	return (tdelta_ms >= vTIMEOUT_MSEC)
 
 
+##=====  SAT solver things  ==================================================
+## see codingnest.com/modern-sat-solvers-fast-neat-underused-part-1-of-n/
+## for a general introduction to expression encoding for SAT solvers.
+
+
+##--------------------------------------
+## variables may begin with '-', mapped to negated form (idx<0 in solver input)
+##
+## TODO: simplified to a form which could be list-comprehended
+##
+def satsolv_vars2ints(sat, vars):
+	res = []
+
+	for v in vars:
+		sgn, val = 1, v
+
+		if val[0] == '-':
+			sgn = -1
+			val = val[1:]
+
+		res.append(sgn * (sat[ "vars" ].index(val) +1))
+
+	return res
+
+
+##--------------------------------------
+## generate constraint set valid if and only if one of 'dvars' is True
+##
+## returns [ added variables ], [ constraints ], 2x tuples
+##
+## requires O(N) clauses and O(N) additional variables, instead of
+## the naive O(N^2) encoding.
+##
+## see
+## Klieber, Kwon: Efficient CNF encoding for selecting 1 of N objects,
+## www.cs.cmu.edu/~wklieber/papers/
+##     2007_efficient-cnf-encoding-for-selecting-1.pdf
+## [accessed 2023-02-20]
+##
+##
+def satsolv_one_of_n(dvars):
+	pass
+
+
+##--------------------------------------
+## register constraint on hitting one delivery window for 'delv'
+## 'dvars' contains IDs (names) of delivery+unit Booleans
+##
+## all variable names MUST have already been registered to 'sat'
+##
+def satsolv_add_delvs1(sat, dvars, delv):
+	vs   = list(enumerate(dvars))       ## (idx, variable name)
+	didx = delv[ "index" ]
+
+	comm =  f'delivery #{didx} scheduled({delv[ "time" ]}) '
+	comm += '(vars=' +(' '.join(dvars)) +')'
+
+	for i in range(len(vs)):
+		idxs = list(v  if (vi == i)  else "-"+v
+		            for vi, v  in vs)
+
+		expr = " ".join(str(s) for s in satsolv_vars2ints(sat, idxs))
+
+## TODO: document 'RAW' prefix
+		satsolv_add_constraint1(sat, 'RAW=' + expr, comm)
+		comm = ''
+
+#	if len(vs) >1:
+#		for i in dvars:
+#			satsolv_add_constraint(sat, [ i ])
+
+
 ##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
@@ -3276,6 +3474,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 		raise ValueError("inconsistent delivery+aux data")
 	if not aux:
 		raise ValueError("aux.data is uninitialized")
+
+	sat = satsolv_init0()
 
 				## time vector: all scheduled delivery windows
 	alltime_v = 0
@@ -3309,6 +3509,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 		xy2d = {}
 		dist = distances(aux, bases, xys=xy2d)
 
+
 	##-----  initial BFD-based estimate  ---------------------------------
 	## how many vehicles could deliver, just by iteratively picking
 	## BFD plans for them, w/o any delivery-time or distance
@@ -3318,7 +3519,6 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	## an initial estimate to plan for. we do not expect this
 	## many vehicles to be able to deliver---in other words,
 	## this is our minimal-count plan.
-
 
 	tstart = time.perf_counter()
 
@@ -3348,6 +3548,21 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 	dels = copy.deepcopy(aux)
 
+	##-----  store delivery/time variables
+	if use_satsolver():
+		for d in dels:
+			dvars = []
+			didx  = d[ "index" ]
+
+			for tu in timevec2units(d[ "time2vec" ]):
+				tbit = tu.bit_length()
+				dvars.append(satsolv_add_delvtime(sat,
+				             didx, tbit))
+
+			satsolv_add_delvs1(sat, dvars, d)
+
+
+	##------------------------------
 	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
 	mins_min, mins_max = dels[0]['MIN_TIME_ALL'], dels[0]['MAX_TIME_ALL']
 
@@ -3532,6 +3747,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				print("TIMED.OUT")
 				report_plan(vcost, vid, marker='?')
 				print("/TIMED.OUT")
+				satsolv_report(sat)
 				sys.exit(0)
 
 			show_backtrack(backtrack, btrack_alt)
@@ -4134,6 +4350,8 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	tstart = timediff_log_now(tbacktrack0, 'BFD.ASSIGN.ALL')
 	print('')
 	##=====  /v1  ========================================================
+
+	## satsolv_report(sat)
 
 	sys.exit(0)
 
