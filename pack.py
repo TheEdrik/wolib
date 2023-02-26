@@ -202,9 +202,14 @@ sINDENT  = '    '    ## prefix added per indented level
 
 sTABLE_BREAK = 10    ## add empty columns/rows every N units in large tables
 
-sSATPREFIX  = 'SAT='       ## common prefix for data applicable to SAT solvers
-sSATCOMMENT = '## SAT='    ## SAT-related comment, for our own tracing
-sSAT_CONSTR_END   = ' 0'   ## terminate [term list of] constraint
+sSATPREFIX  = 'SAT='      ## common prefix for data applicable to SAT solvers
+sSATCOMMENT = '## SAT='   ## SAT-related comment, for our own tracing
+sSAT_CONSTR_END = ' 0'    ## terminate [term list of] constraint
+sSAT_2ND_VAR    = 'NV'    ## prefix for secondary SAT (CNF) variables
+sSAT_SYM_PREFIX = 'RAW='  ## prefix for clauses which are stored as strings,
+                          ## only mapped to integer indexes in the end
+                          ## DIMACS CNF: "1 2 -3 0"
+                          ## 'raw' CNF:  "D1 D2 -D3"
 
 
 ##----------------------------------------------------------
@@ -1857,8 +1862,13 @@ def vehicle2primary(vehicle):
 ##
 ##    'vars':     [ ...list of variables in order of addition... ]
 ##
+##    'added_vars':   -- extra variables introduced by CNF constructions
+##
 ##    'constraints':   [ [ ...text of constraint1..., ...comment... ] ]
-##                -- each is whitespace-separated list of variables
+##                -- CNF clauses (each is an OR of variables)
+##                --
+##                -- whitespace-separated list of variables, possibly
+##                -- with leading '-' indicating negation ("A -B CMD")
 ## }
 ##
 ## struct stores arbitrary values for 'delv_units' etc.; only their keys matter
@@ -1876,6 +1886,7 @@ def satsolv_init0():
 	return {
 		'delv_units':  {},
 		'vars':        [],
+		'added_vars':   0,
 		'constraints': [],
 	}
 
@@ -1907,6 +1918,13 @@ def satsolv_add_delvtime(sat, delvid, unit):
 
 
 ##--------------------------------------
+def satsolv_add_vars(sat, vars):
+	if sat:
+		for v in (n  for n in vars  if (not n in sat['vars'])):
+			sat[ 'vars' ].append(v)
+
+
+##--------------------------------------
 ## not checking for replication
 ##
 def satsolv_add_constraint(sat, vars, comment=''):
@@ -1932,17 +1950,20 @@ def satsolv_report(sat):
 	print(sSATPREFIX + f'p cnf { len(sat[ "vars" ]) } ' +
 		f'{ len(sat[ "constraints" ] ) }')
 
+	print(sSATPREFIX +'c')
 	print(sSATPREFIX +'c CONSTRAINTS:')
 
 	comments = 0
 	for ci, c in enumerate(sat[ "constraints" ]):
 		cvars, comm = c[0], c[1]
 		if comm:
-			print(sSATPREFIX +f'c [constraint #{ci}]: { comm }:')
+			print(sSATPREFIX +f'c [constraint #{ci}]: { comm }')
 			comments += 1
 
 	vstr = ' '.join(f'{ v }[{ vi+1 }]'
 	                for vi, v in enumerate(sat[ "vars" ]))
+
+	print(sSATPREFIX +'c')
 	print(sSATPREFIX +'c VARIABLES: ' +vstr)
 
 	if comments:
@@ -1955,8 +1976,11 @@ def satsolv_report(sat):
 
 					## map expression to int. indexes
 					## each entry MUST be present
-		if cvars[:4] == 'RAW=':
-			constr = cvars[4:]
+		if cvars[ : len(sSAT_SYM_PREFIX) ] == sSAT_SYM_PREFIX:
+			constr = cvars[4:].split()
+			constr = " ".join(str(s) for s in
+			                  satsolv_vars2ints(sat, constr))
+
 		else:
 			constr = " ".join(str(sat[ "vars" ].index(v) +1)
 			                  for v in cvars.split())
@@ -3380,6 +3404,132 @@ def are_in_timeout(tprev):
 ##=====  SAT solver things  ==================================================
 ## see codingnest.com/modern-sat-solvers-fast-neat-underused-part-1-of-n/
 ## for a general introduction to expression encoding for SAT solvers.
+##
+## subordinate CNF-related code is in dev/satcnf.py
+
+
+##-----------------------------------------
+## return 2x list, of signs ('-' or empty) and of sign-less IDs
+## input is list of text IDs
+##
+def satsolv_str2ids(ids):
+	sgns = list(('-'  if (i[0] == '-')  else '')  for i in ids)
+	curr = list(re.sub('^-', '', i)  for i in ids)
+
+	return sgns, curr
+
+
+##-----------------------------------------
+def satsolv_nr_of_added_vars(sat):
+	nr = sat[ 'addedvars' ]  if sat  else 0
+
+	return nr
+
+
+##-----------------------------------------
+## return mapping table for string-to-int conversion for CNF specification
+##
+## inputs is all-numeric strings, standalone, or whitespace-separated clauses
+## 'DDD' for True, '-DDD' for False values
+##
+## non-None 'values' is checked for already-assigned value; not updated
+## caller must use .update(...result...) to merge new assignments
+##
+def satsolv_strings2ints(vars, values=None, first=1):
+	res = {}
+	for r in vars:
+				## split to sign ('-' or empty) and base string
+		_, curr = satsolv_str2ids(r.split())
+
+		for id in curr:
+			if values and (id in values):
+				continue
+
+			if not (id in res):
+				res[ id ] = first
+				first += 1
+	return res
+
+
+##-----------------------------------------
+## Return 'commander variables', newly added (commander) variables,
+## related additional clauses, and comments documenting the collection.
+##
+## The first element of the commander-variable array is true if and only
+## exactly one of 'vars' (variable-name) inputs is True.
+##
+## commander variables are named 'CMDR...'; prefix MUST NOT be used by others
+##
+## 'nr' is the number of defined variables, incl. current inputs
+##
+## see
+## Kliebert, Kwon: Efficient CNF encoding for selecting 1 of N objects,
+## www.cs.cmu.edu/~wklieber/papers/
+##     2007_efficient-cnf-encoding-for-selecting-1.pdf
+## [accessed 2023-02-24]
+##
+def satsolv_1n(vars, nr=0):
+	if vars == []:
+		raise ValueError("called with empty variable list")
+
+	if len(vars) == 1:
+		return vars[0], [], [], ''
+
+			## set newvar and cls to newly added variables +
+			## their clauses
+			## lf, rg are command variables of layers below
+
+	if len(vars) == 2:
+		lf, rg, newvar, addval, cls = vars[0], vars[1], [], 0, []
+
+	else:
+		half   = len(vars) // 2
+		lf, rg = vars[ :half ], vars[ half: ]
+
+		lf, newvar, cls, _ = satsolv_1n(lf, nr)
+		rg,  nvar2, cl2, _ = satsolv_1n(rg, nr+len(newvar))
+
+		newvar += nvar2
+		cls    += cl2
+
+	cmd = f'{ sSAT_2ND_VAR }{ nr +len(newvar) +1 }'
+	newvar.insert(0, cmd)
+
+	cls.extend([                         ## truth table for "{lf} XOR {rg}"
+		f' {lf}  {rg} -{cmd}',
+		f'-{lf}  {rg}  {cmd}',
+		f' {lf} -{rg}  {cmd}',
+		f'-{lf} -{rg} -{cmd}',
+	])
+	varlist = ",".join(vars)
+
+	return cmd, newvar, cls, f'1-of-N: ({ cmd }) for ({ varlist })'
+
+
+##-----------------------------------------------------------
+## add clauses for 1-of-N selections over 'vars'
+## returns top-level 'command' variable which is True if and only if 1-of-N
+##
+## append comments and clauses to respective lists
+##
+def satsolv_1ofn(sat, vars):
+	top, nvars, cls, cmt = satsolv_1n(vars, sat[ 'added_vars' ])
+
+	satsolv_add_vars(sat, nvars)
+
+	sat[ 'added_vars' ] += len(nvars)
+
+	comm = f'1-of-N: ({ top }) for ({ ",".join(vars) })'
+
+	for c in cls:
+		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + c, comm)
+		comm = ''
+
+						## force 1-of-N by ensuring
+						## commander var is True
+	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + top, comm)
+
+	return top
 
 
 ##--------------------------------------
@@ -3403,50 +3553,22 @@ def satsolv_vars2ints(sat, vars):
 
 
 ##--------------------------------------
-## generate constraint set valid if and only if one of 'dvars' is True
-##
-## returns [ added variables ], [ constraints ], 2x tuples
-##
-## requires O(N) clauses and O(N) additional variables, instead of
-## the naive O(N^2) encoding.
-##
-## see
-## Klieber, Kwon: Efficient CNF encoding for selecting 1 of N objects,
-## www.cs.cmu.edu/~wklieber/papers/
-##     2007_efficient-cnf-encoding-for-selecting-1.pdf
-## [accessed 2023-02-20]
-##
-##
-def satsolv_one_of_n(dvars):
-	pass
-
-
-##--------------------------------------
 ## register constraint on hitting one delivery window for 'delv'
 ## 'dvars' contains IDs (names) of delivery+unit Booleans
+## returns, as a list
 ##
 ## all variable names MUST have already been registered to 'sat'
 ##
 def satsolv_add_delvs1(sat, dvars, delv):
-	vs   = list(enumerate(dvars))       ## (idx, variable name)
+	vs   = list(enumerate(dvars))                   ## (idx, variable name)
 	didx = delv[ "index" ]
 
 	comm =  f'delivery #{didx} scheduled({delv[ "time" ]}) '
 	comm += '(vars=' +(' '.join(dvars)) +')'
 
-	for i in range(len(vs)):
-		idxs = list(v  if (vi == i)  else "-"+v
-		            for vi, v  in vs)
+	top = satsolv_1ofn(sat, dvars)
 
-		expr = " ".join(str(s) for s in satsolv_vars2ints(sat, idxs))
-
-## TODO: document 'RAW' prefix
-		satsolv_add_constraint1(sat, 'RAW=' + expr, comm)
-		comm = ''
-
-#	if len(vs) >1:
-#		for i in dvars:
-#			satsolv_add_constraint(sat, [ i ])
+	return top
 
 
 ##--------------------------------------
@@ -4351,7 +4473,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	print('')
 	##=====  /v1  ========================================================
 
-	## satsolv_report(sat)
+	satsolv_report(sat)
 
 	sys.exit(0)
 

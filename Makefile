@@ -19,13 +19,15 @@ TRACE := sched,pack,stack,flow
 			## level, if set
 DEBUG := 1
 
+## SAT := 1
+
 
 ##--------------------------------------
 all: packnroute.txt
 
 packnroute.txt:  $(ORDERS)  $(BASEXY_C)  $(DISTANCES)
 	BASE=$(shell cat $(BASEXY_C)) DIST=$(DISTANCES) \
-		TRACE=$(TRACE) DEBUG=$(DEBUG) \
+		TRACE=$(TRACE) DEBUG=$(DEBUG) SAT=$(SAT) \
 		MAX1=8542700000 TUPLE_N=6 NONSEL=1 \
 		./pack.py  $(ORDERS) n=$(R) | tee $@
 
