@@ -53,6 +53,9 @@
 ##                    flow   control/data flow
 ##                    all    any traceable quantity (all of the above)
 ##   SAT=...      output SAT solver input for the current problem
+##   SAT_VEHICLES=...   number of vehicles to assume, over BFD-derived limit
+##                      absolute number, or +...relative to BFD-limit...
+##
 ##   TUPLE_N=...  limit the size of element-tuples when attempting to swap
 ##                not-yet-selected and selected elements (see below)
 ##   TARGET=...host:port...
@@ -1859,6 +1862,12 @@ def vehicle2primary(vehicle):
 ##    'delv_units': { ... }
 ##                -- delivery+time windows' variables:
 ##                -- dXX_tYY: delivery XX may be delivered in time unit YY
+##                -- see also below
+##
+##    'delv_veh_units': { ... }
+##                -- delivery+time+vehicle assignment variables:
+##                -- dXX_tYYvZZ: delivery XX is delivered in time unit YY
+##                -- by vehicle ZZ
 ##
 ##    'vars':     [ ...list of variables in order of addition... ]
 ##
@@ -1869,6 +1878,9 @@ def vehicle2primary(vehicle):
 ##                --
 ##                -- whitespace-separated list of variables, possibly
 ##                -- with leading '-' indicating negation ("A -B CMD")
+##                --
+##                -- empty constraints are possible; they are used by
+##                -- comment-only additions f.ex.
 ## }
 ##
 ## struct stores arbitrary values for 'delv_units' etc.; only their keys matter
@@ -1880,14 +1892,46 @@ def use_satsolver():
 
 
 ##--------------------------------------
+## number of vehicles to consider
+##
+def satsolv_vehicle_count(bfd_limit=0):
+	if not "SAT_VEHICLES" in os.environ:
+		return bfd_limit
+
+	addl, sv = False, os.environ[ "SAT_VEHICLES" ]
+	if sv[ :1 ] == '+':
+		addl, sv = True, sv[ 1: ]
+
+	sv2 = int(sv, 0)
+	if (sv2 < 0):
+		raise ValueError(f"invalid delta/vehicle-count ({sv})")
+
+	sv2 += (bfd_limit  if addl  else 0)
+	if (sv2 < bfd_limit):
+		raise ValueError(f"delta/vehicle-count low ({sv}/{bfd_limit})")
+
+	return sv2
+
+
+##--------------------------------------
+def satsolve_vidx_bits(vehicles):
+	"number of bits to represent vehicles in SAT solver"
+
+				## includes pattern to indicate 'not serviced'
+
+	return (vehicles +1).bit_length()
+
+
+##--------------------------------------
 ## empty construct for SAT solver aux. data
 ##
 def satsolv_init0():
 	return {
-		'delv_units':  {},
-		'vars':        [],
-		'added_vars':   0,
-		'constraints': [],
+		'delv_units':     {},
+		'delv_veh_units': {},
+		'vars':           [],
+		'added_vars':      0,
+		'constraints':    [],
 	}
 
 
@@ -1905,16 +1949,30 @@ def satsolv_add1(sat, key, value):
 
 
 ##--------------------------------------
+def satsolv_var_name(delv_id, time_unit, vnumber=None):
+	if vnumber != None:
+		return f'd{ delv_id }t{ time_unit }v{ vnumber }'
+
+	return f'd{ delv_id }t{ time_unit }'
+
+
+##--------------------------------------
 ## returns variable ID for this delivery+unit
 ##
-def satsolv_add_delvtime(sat, delvid, unit):
-	dtvar = f'd{ delvid }t{ unit }'
+def satsolv_add_delvtime(sat, delvid, unit, vnumber=None):
+	var = satsolv_var_name(delvid, unit, vnumber=vnumber)
+	add = False
 
-	if satsolv_add1(sat, 'delv_units', dtvar):
-		assert(dtvar not in sat[ 'vars' ])
-		sat[ 'vars' ].append(dtvar)
+	if vnumber != None:
+		add = satsolv_add1(sat, 'delv_veh_units', var)
+	else:
+		add = satsolv_add1(sat, 'delv_units', var)
 
-	return dtvar
+	if add:
+		assert(var not in sat[ 'vars' ])
+		sat[ 'vars' ].append(var)
+
+	return var
 
 
 ##--------------------------------------
@@ -1942,6 +2000,14 @@ def satsolv_add_constraint1(sat, rawc, comment=''):
 
 
 ##--------------------------------------
+## register 'raw', preformatted comment
+##
+def satsolv_add_comment(sat, comment):
+	if sat:
+		sat[ 'constraints' ].append([ '', comment ])
+
+
+##--------------------------------------
 def satsolv_report(sat):
 	if not use_satsolver():
 		return
@@ -1954,30 +2020,34 @@ def satsolv_report(sat):
 	print(sSATPREFIX +'c CONSTRAINTS:')
 
 	comments = 0
-	for ci, c in enumerate(sat[ "constraints" ]):
-		cvars, comm = c[0], c[1]
+	for comm in (s  for s in sat[ "constraints" ]  if s[1]):
 		if comm:
-			print(sSATPREFIX +f'c [constraint #{ci}]: { comm }')
+			print(sSATPREFIX +'c   ' +comm[1])
 			comments += 1
 
 	vstr = ' '.join(f'{ v }[{ vi+1 }]'
 	                for vi, v in enumerate(sat[ "vars" ]))
-
+	print(sSATPREFIX +'c /CONSTRAINTS:')
 	print(sSATPREFIX +'c')
-	print(sSATPREFIX +'c VARIABLES: ' +vstr)
 
-	if comments:
-		print(sSATPREFIX + 'c')
+	print(sSATPREFIX +'c VARIABLES:')
+	for v in textwrap.wrap(vstr, width=64):
+		print(sSATPREFIX +'c   ' +v)
+	print(sSATPREFIX +'c /VARIABLES')
+	print(sSATPREFIX + 'c')
 
 					##-----  end of header  --------------
 
 	for ci, c in enumerate(sat[ "constraints" ]):
 		cvars, comm = c[0], c[1]
 
+		if cvars.strip() == '':
+			continue
 					## map expression to int. indexes
 					## each entry MUST be present
+					##
 		if cvars[ : len(sSAT_SYM_PREFIX) ] == sSAT_SYM_PREFIX:
-			constr = cvars[4:].split()
+			constr = cvars[ len(sSAT_SYM_PREFIX): ].split()
 			constr = " ".join(str(s) for s in
 			                  satsolv_vars2ints(sat, constr))
 
@@ -3406,6 +3476,19 @@ def are_in_timeout(tprev):
 ## for a general introduction to expression encoding for SAT solvers.
 ##
 ## subordinate CNF-related code is in dev/satcnf.py
+##
+## SAT Booleans are partially redundant, to allow use of simpler formulas:
+##   d0t2          delivery #0, time unit #2 features delivery
+##   d0t2v0..vN    delivery #0, time unit #2, nr. of delivering vehicle,
+##                 binary-encoded (big-endian; vN is least significant).
+##                 features +1 vehicles: all-0 corresponds to 'no delivery'
+##   v0t2          vehicle #0 delivers in time unit #2
+##
+## cross-references added:
+##   d0t2        <=>  d0t2v0..vN    is real delivery
+##   d0t2v0..vN  <=>  v...t2        for vehicle id=(v0..vN)
+##   d0t2v0..vN  <=>  NOT d...t...  for other deliveries+units which would
+##                                  conflict -> temporal separation
 
 
 ##-----------------------------------------
@@ -3532,6 +3615,25 @@ def satsolv_1ofn(sat, vars):
 	return top
 
 
+##-----------------------------------------------------------
+## add logical dependencies within each delivery+time unit:
+##   - dXXtYY <=> collection of dXXtYYvZZ conditions
+##   - delivery (XX), time unit (YY), binary-encoded vehicle number (ZZ)
+##     ZZ with bits 0..N-1
+##   - dXXtYY  is True if the dXXtYYvZZ bits encode a non-empty vehicle number
+##   - 'empty' vehicle number is ...XXX document here...
+##   - vnr_bits is integer list of bits used
+##
+def satsolv_delv_window_deps(sat, delv, time_unit, vnr_bits):
+	all  = satsolv_var_name(delv, time_unit)
+	bits = list(satsolv_var_name(delv, time_unit, v)  for v in vnr_bits)
+
+	comm = f'delivery+time <-> +vehicles: (d={ delv }, t={ time_unit })'
+	cls  = (' '.join(bits)) + f' -{ all }'
+
+	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + cls, comm)
+
+
 ##--------------------------------------
 ## variables may begin with '-', mapped to negated form (idx<0 in solver input)
 ##
@@ -3654,6 +3756,17 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 	##-----  tstart is after nr-of-units(BFD) calc  ----------------------
 
+	satvcount  = satsolv_vehicle_count(len(bfds))
+	satvbits   = satsolve_vidx_bits(satvcount)
+	satvbitnrs = list(range(satvbits))                  ## 0..N-1, integers
+				##
+				## width of representation for index(vehicle)
+				## incl. an entry marking 'no vehicle assigned'
+
+	if use_satsolver():
+		debugmsg(f'## SAT.VEHICLES={ satvcount }', 1)
+		satsolv_add_comment(sat, f'using { satvcount } vehicles, ' +
+				f'encoded as { satvbits } bits')
 
 	##=====  v1:  ========================================================
 	## greedy-assign routes for one vehicle at a time, in a BFD fashion:
@@ -3676,13 +3789,30 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 			dvars = []
 			didx  = d[ "index" ]
 
-			for tu in timevec2units(d[ "time2vec" ]):
-				tbit = tu.bit_length()
+				## register dXXtYY and dXXtYYvZZ
+				##   - delivery XX, time unit YY
+				##   - delivery XX, time unit YY, vehicle ZZ
+				## 'vehicle ZZ' covers bits, not counters
+				## (binary-encoded index of vehicle assigned)
+
+			tu, tbits = timevec2units(d[ "time2vec" ]), []
+
+			for t in tu:
+				tb = t.bit_length()
+				tbits.append(tb)
+
 				dvars.append(satsolv_add_delvtime(sat,
-				             didx, tbit))
+				             didx, tb))
+
+				for v in satvbitnrs:
+					satsolv_add_delvtime(sat,
+					             didx, tb, vnumber=v)
 
 			satsolv_add_delvs1(sat, dvars, d)
 
+			for t in tbits:
+				satsolv_delv_window_deps(sat, didx, t,
+				                         range(satvbits))
 
 	##------------------------------
 	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]

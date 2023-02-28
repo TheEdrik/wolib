@@ -14,21 +14,24 @@ BASEXY_C := bases1c.txt
 DISTANCES := distance.json
 
 			## tracing, see list in pack.py
-TRACE := sched,pack,stack,flow
+TRACE := sched,pack,stack,flow,map
 
 			## level, if set
 DEBUG := 1
 
-## SAT := 1
+SAT := 1                ## produce SAT solver expression
 
+SAT_V := +4             ## nr. of vehicles to consider, relative to
+                        ## rough-estimate minimum (+...)
 
 ##--------------------------------------
 all: packnroute.txt
 
 packnroute.txt:  $(ORDERS)  $(BASEXY_C)  $(DISTANCES)
-	BASE=$(shell cat $(BASEXY_C)) DIST=$(DISTANCES) \
-		TRACE=$(TRACE) DEBUG=$(DEBUG) SAT=$(SAT) \
-		MAX1=8542700000 TUPLE_N=6 NONSEL=1 \
+	BASE=$(shell cat $(BASEXY_C)) DIST=$(DISTANCES)  \
+		TRACE=$(TRACE) DEBUG=$(DEBUG)            \
+		SAT=$(SAT) SAT_VEHICLES=$(SAT_V)         \
+		MAX1=8542700000 TUPLE_N=6 NONSEL=1       \
 		./pack.py  $(ORDERS) n=$(R) | tee $@
 
 
