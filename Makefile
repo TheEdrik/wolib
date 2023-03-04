@@ -20,18 +20,22 @@ TRACE := sched,pack,stack,flow,map
 DEBUG := 1
 
 SAT := 1                ## produce SAT solver expression
+                        ## note: requires XY-to-distance(time) table
 
 SAT_V := +4             ## nr. of vehicles to consider, relative to
                         ## rough-estimate minimum (+...)
 
+SAT_DEBUG := 1
+
 ##--------------------------------------
 all: packnroute.txt
 
+
 packnroute.txt:  $(ORDERS)  $(BASEXY_C)  $(DISTANCES)
-	BASE=$(shell cat $(BASEXY_C)) DIST=$(DISTANCES)  \
-		TRACE=$(TRACE) DEBUG=$(DEBUG)            \
-		SAT=$(SAT) SAT_VEHICLES=$(SAT_V)         \
-		MAX1=8542700000 TUPLE_N=6 NONSEL=1       \
+	BASE=$(shell cat $(BASEXY_C)) DIST=$(DISTANCES)                 \
+		TRACE=$(TRACE) DEBUG=$(DEBUG)                           \
+		SAT=$(SAT) SAT_VEHICLES=$(SAT_V) SATDEBUG=$(SAT_DEBUG)  \
+		MAX1=8542700000 TUPLE_N=6 NONSEL=1                      \
 		./pack.py  $(ORDERS) n=$(R) | tee $@
 
 

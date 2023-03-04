@@ -52,7 +52,8 @@
 ##                    stack  details of backtracking
 ##                    flow   control/data flow
 ##                    all    any traceable quantity (all of the above)
-##   SAT=...      output SAT solver input for the current problem
+##   SAT=...            output SAT solver input for the current problem
+##   SATDEBUG=...       diagnostics level if >0, SAT-only diagnostics
 ##   SAT_VEHICLES=...   number of vehicles to assume, over BFD-derived limit
 ##                      absolute number, or +...relative to BFD-limit...
 ##
@@ -357,6 +358,7 @@ def debug_is_active(lvl=1, trace=0):
 	return (trace & tracetypes())  if trace  else 0
 			## nano-optimization to save calls to tracetypes()
 			## please do not comment on it
+## TODO: SAT-solver specific wrapper
 
 
 ##--------------------------------------
@@ -1738,8 +1740,22 @@ def timevec2asap(t, minutes=False):
 	if minutes:
 		return vTIME_UNIT_MINS * (pathtools.bitcount(lsb) -1)
 
+## TODO: bit_length() SHOULD be available everywhere
+
 	return lsb
 			## ... & (t-1) removes LS one bit
+
+
+##--------------------------------------
+## "...start-end..." string for [single-bit] time vector
+##
+def timevec2wall(t):
+	start = minute2wall(timevec2asap(t, True))
+	end   = minute2wall(timevec2asap(t << 1, True) -1)
+
+	return f"{ start :04}-{ end :04}"
+##
+## TODO: do we have a centralized wrapper for this?
 
 
 ##--------------------------------------
@@ -1892,6 +1908,16 @@ def use_satsolver():
 
 
 ##--------------------------------------
+def satsolv_is_debug(level=1):
+	if not ('SATDEBUG' in os.environ):
+		return False
+
+## TODO: evaluate int, cache, return
+
+	return True
+
+
+##--------------------------------------
 ## number of vehicles to consider
 ##
 def satsolv_vehicle_count(bfd_limit=0):
@@ -1915,7 +1941,7 @@ def satsolv_vehicle_count(bfd_limit=0):
 
 ##--------------------------------------
 def satsolve_vidx_bits(vehicles):
-	"number of bits to represent vehicles in SAT solver"
+	"number of bits to encode vehicles in SAT solver, incl. 'no vehicle'"
 
 				## includes pattern to indicate 'not serviced'
 
@@ -2597,6 +2623,16 @@ def vehicles_which_may_deliver(new_load, vehicles, vpos, minute0=0):
 ##--------------------------------------
 def msbit(t):
 	return (1 << (t.bit_length() -1))
+
+
+##--------------------------------------
+## not checking for t being single bit
+## equivalent bit2offset( msbit(t) ) if t is not power-of-two
+##
+def timevecbit2offset(t):
+	"map bit of time2vec bitvectors to 1-based offset/index"
+
+	return t.bit_length()
 
 
 ##--------------------------------------
@@ -3608,20 +3644,167 @@ def satsolv_1ofn(sat, vars):
 		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + c, comm)
 		comm = ''
 
+	if satsolv_is_debug():
+		for c in cls:
+			satsolv_add_constraint1(sat, '', '  ORIG=' +c)
+
 						## force 1-of-N by ensuring
 						## commander var is True
 	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + top, comm)
 
 	return top
 
+##-----------------------------------------------------------
+## delivery + time-window crossbar:
+## XXX
+#	dts[ d[ "index" ] ] = {
+#		"t":  t,
+#		"tu": list( timevec2units(t) ),
+#	}
+
+
+##-----------------------------------------------------------
+## cross-delivery dependencies:
+##
+##   1) enumerate all (delivery, time unit) pairs
+##
+##   2) register variable for each of <dXX tYY v0..vZ> with 0..Z encoding
+##      the delivering vehicle (0: no delivery, 1..N: vehicle N, >N: invalid);
+##      - D+T times (Z+1) bits, with the number of delivery+units D+T
+##
+##   3) for each delivery-delivery pair, check minimal distance -> delta(time)
+##
+##   4) foreach each (delivery, time unit) x2 combination:
+##      - if delta(time) > delta(time unit1, time unit2), add prohibition:
+##        - v0..vZ for dXXtYY(unit1) MAY NOT be identical to v0..vZ for
+##          dXXtYY(unit2), if both values are >0
+##
+## 'delvs'      is full input list
+## 'dts'        stores delivery+time-window crossbar
+## 'satvcount'  number of vehicles to allow (+1, all-0, for 'unassigned')
+##
+## TODO: delivery-window comparisons are only approximations: we should
+## check for maximally lenient deliveries (and filter non-solutions
+## iteratively)
+##
+def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
+	dtk = sorted(dts.keys())
+	ds  = list(range(len(dtk)))
+
+## caching in an external, d1-only loop has limited utility, since
+## distances -> bitmask positions to shift are pair-dependent
+##
+## in other words, we would not move out everything out of the d1+d2 core
+## the bitmask-shift+intersect operations are trivial anyway
+##
+## note that with only consecutive windows, one could step over all units
+## just by a single bitmask but shifting. this is no longer true if
+## delivery windows are possible in multiple, non-consecutive units,
+## so do not bother with that microoptimization.
+
+				## stores [d1(index), unit, d2(index), unit]
+				## tuples which MUST NOT be assigned
+				## to the same vehicle
+				##
+				## units are mapped to 0-based offsets
+				## (NOT individual bits of time vector)
+	conflict_pairs = []
+
+	for d1i, d2i in itertools.product(ds, ds):
+		if d1i >= d2i:
+			continue
+
+		d1,  d2  = dtk[ d1i ], dtk[ d2i ]
+		d1t, d2t = dts[ d1 ][ "t" ], dts[ d2 ][ "t" ]   ## time vectors
+
+## TODO: factor out to centralized deliveries-vs-tables check
+
+		if d1 >= len(dist[ "time" ]):
+			raise ValueError("access beyond XY-table dimensions. "
+				f"Is this the right lookup table? (X={d1} "
+				f"vs. { len(dist[ 'time' ]) })")
+					##
+		if d2 >= len(dist[ "time" ][ d1 ]):
+			raise ValueError("access beyond XY-table dimensions. "
+				f"Is this the right lookup table? (Y={d2} "
+				f"vs. { len(dist[ 'time' ][ d1 ]) })")
+
+		d12mins =  dist[ "time" ][ d1 ][ d2 ]
+		d12mins += vTIME_DELIVER_MIN
+
+					## min(traversal), in units
+		d12u = int(d12mins +vTIME_UNIT_MINS -1) // vTIME_UNIT_MINS
+
+					## should-not-happen; made explicit
+					## TODO: report (table parsing/import
+					## SHOULD have caught)
+		if d12u < 1:
+			continue
+
+					## scan d1 time units: time-dilate
+					## in both directions; note where
+					## these intercept d2.  those
+					## units MUST be prohibited for
+					## the same vehicle, since d1->d2 or
+					## d2->d1 traversal would violate
+					## timing constraint. 
+
+					## all time-vector bits which
+					## collide with this (d1, tu),
+					## (d1tu < d12u) - ...lower-limit 1...
+					##
+		d1tu, d2tu = dts[ d1 ][ "tu" ], dts[ d2 ][ "tu" ]
+		conflicts = []
+
+		for u1 in d1tu:
+			u1b  =  timevecbit2offset(u1)
+			allt =  u1 << d12u
+			allt -= max(1, u1 >> (d12u -1))
+
+					## units of delivery2 which conflict
+					## with this broader 'allt'
+					##
+			u2clash = list(u  for u in d2tu  if (allt & u))
+			if u2clash == []:
+				continue
+
+			for u2b in u2clash:
+				conflicts.append([d1, u1b -1, d2,
+				                 timevecbit2offset(u2b) -1])
+
+				if satsolv_is_debug(2):
+					t1s = timevec2wall(u1 )
+					t2s = timevec2wall(u2b)
+
+					print(f"## SAT.CONFLICT DELV1={d1}," +
+						f"T={ t1s } DELV2={d2}," +
+						f"T={ t2s } MIN.TIME.DIFF=" +
+						f"{ d12u*vTIME_UNIT_MINS }min")
+
+		if conflicts and satsolv_is_debug():
+			print(f"## SAT.COMPAT[{d1},{d2}]: TIME.VEC=" +
+				f"x{ d1t :x}/x{ d2t :x}, MIN.TIME.DIFF=" +
+				f"{ d12u }, CONFLICTS={ len(conflicts) }")
+
+		conflict_pairs.extend(conflicts)
+
+	print(f"## SAT.TOTAL.CONFLICTS={ len(conflict_pairs) }")
+
+	pass
+
 
 ##-----------------------------------------------------------
 ## add logical dependencies within each delivery+time unit:
+##
 ##   - dXXtYY <=> collection of dXXtYYvZZ conditions
+##
 ##   - delivery (XX), time unit (YY), binary-encoded vehicle number (ZZ)
 ##     ZZ with bits 0..N-1
+##
 ##   - dXXtYY  is True if the dXXtYYvZZ bits encode a non-empty vehicle number
+##
 ##   - 'empty' vehicle number is ...XXX document here...
+##
 ##   - vnr_bits is integer list of bits used
 ##
 def satsolv_delv_window_deps(sat, delv, time_unit, vnr_bits):
@@ -3632,6 +3815,9 @@ def satsolv_delv_window_deps(sat, delv, time_unit, vnr_bits):
 	cls  = (' '.join(bits)) + f' -{ all }'
 
 	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + cls, comm)
+
+	if satsolv_is_debug():
+		satsolv_add_constraint1(sat, '', '  ORIG=' +cls)
 
 
 ##--------------------------------------
@@ -3783,11 +3969,27 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 	dels = copy.deepcopy(aux)
 
+	##-----  SAT-pairs list  ---------------------------------------------
+				## full list of (delivery, time unit) pairs
+	dts = { }
+
 	##-----  store delivery/time variables
 	if use_satsolver():
+		if not xy2dist_table:
+			terminate("SAT solver requires XY-to-distance DB")
+
+		for d in dels:
+			t = d[ "time2vec" ]
+					##
+			dts[ d[ "index" ] ] = {
+				"t":  t,
+				"tu": list( timevec2units(t) ),
+			}
+
 		for d in dels:
 			dvars = []
 			didx  = d[ "index" ]
+## TODO: retrieve from above table, now that we populate it
 
 				## register dXXtYY and dXXtYYvZZ
 				##   - delivery XX, time unit YY
@@ -3795,10 +3997,10 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## 'vehicle ZZ' covers bits, not counters
 				## (binary-encoded index of vehicle assigned)
 
-			tu, tbits = timevec2units(d[ "time2vec" ]), []
+			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
 
 			for t in tu:
-				tb = t.bit_length()
+				tb = timevecbit2offset(t)
 				tbits.append(tb)
 
 				dvars.append(satsolv_add_delvtime(sat,
@@ -3811,8 +4013,14 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 			satsolv_add_delvs1(sat, dvars, d)
 
 			for t in tbits:
-				satsolv_delv_window_deps(sat, didx, t,
-				                         range(satvbits))
+				satsolv_delv_window_deps(sat, didx,
+						t, range(satvbits))
+
+		satsolv_delv_window_2x_deps(sat, d, xy2dist_table,
+		                            dts, satvcount)
+
+	del(dts)
+	##-----  /SAT-pairs list  --------------------------------------------
 
 	##------------------------------
 	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
@@ -5333,6 +5541,7 @@ def random_weight():
 ##
 ## JSON output:
 ## {
+##   'nr.points': ...just to simplify for human readers...
 ##   'points': [[X0, Y0], [X1, Y1], ...],
 ##   'time':   [[0.0, dist(XY0->XY1), dist(XY0->XY2)... ],
 ##              [dist(XY1->XY0), 0.0, dist(XY1->XY2)... ],
@@ -5357,8 +5566,9 @@ def xy2table(tab, aux, fmt='json'):
 			cost[-1].append(dist)
 
 	res = {
-		'points': pts,
-		'time':   cost,
+		'nr.points': len(pts),
+		'points':    pts,
+		'time':      cost,
 	}
 	if fmt == 'json':
 		print(json.dumps(res))
