@@ -1902,6 +1902,26 @@ def vehicle2primary(vehicle):
 ## struct stores arbitrary values for 'delv_units' etc.; only their keys matter
 
 
+## SAT-solver format specification:
+##
+## DIMACS format (simplified version):
+##     Jaervisalo, Le Berre, Roussel: Rules of the 2011 SAT competition
+##     www.satcompetition.org/2011/rules.pdf, section 4.1
+## accessed 2023-02-27
+## SHA1()=xb08ad0aca66821ee85fb8e05650340f6180db386
+## SHA256()=xcab5a36e6dda3efef32be201838012d03a901c04ef3556762442b5010aaeb479
+##
+## summary:
+##     | p cnf ...nr-of-variables... ...nr-of-clauses...
+##     |                        -- CNF (conjunctive normal form) only,
+##     |                        -- AND-of-OR terms
+##     | c ...comment...        -- optional
+##     | 1 -2 3 0               -- 1: True, -2: False, 0: end of clause
+##     | ...
+##
+## certain solvers report errors if unreferenced variables/clauses exist.
+
+
 ##--------------------------------------
 def use_satsolver():
 	return ('SAT' in os.environ)
@@ -2044,6 +2064,7 @@ def satsolv_report(sat):
 
 	print(sSATPREFIX +'c')
 	print(sSATPREFIX +'c CONSTRAINTS:')
+					## do not change CONSTRAINTS framing
 
 	comments = 0
 	for comm in (s  for s in sat[ "constraints" ]  if s[1]):
@@ -2056,6 +2077,8 @@ def satsolv_report(sat):
 	print(sSATPREFIX +'c /CONSTRAINTS:')
 	print(sSATPREFIX +'c')
 
+					## do not change VARIABLES framing
+					## or update dev/sat2back.py too
 	print(sSATPREFIX +'c VARIABLES:')
 	for v in textwrap.wrap(vstr, width=64):
 		print(sSATPREFIX +'c   ' +v)
@@ -3528,6 +3551,66 @@ def are_in_timeout(tprev):
 
 
 ##-----------------------------------------
+sNALL0 = 'NZ'                     ## suffix for not-all-(values-)zero +variable
+sNALL1 = 'ALL1'                   ## suffix for all-(values-)one +variable
+
+
+##-----------------------------------------
+## sample: A; B; N = A | B
+##     1) A | B | not(N)             N -> (A | B)
+##     2) not(A) | N       together: (A | B) -> N
+##     3) not(B) | N
+##
+## returns list of clauses + comment
+##
+def satsolv_or(base, vars, result=None):
+	cls = []
+	v   = sorted(vars)
+
+	if result == None:
+		result = base + sNALL0
+
+	all = list((base +b)  for b in  v)
+	all.append(f'-{ result }')
+		##
+	cls.append( " ".join(all) )                   ## A | B | not(N)
+
+	terms = list((base +b)  for b in v)
+
+	cls.extend((f'-{ t } { result }')  for t in terms)
+
+	return cls, f'{ result } := (' +(" OR ".join(terms)) +')'
+
+
+##-----------------------------------------
+## sample: A; B; N = A & B
+##     1) not(A) | not(B) | N            N -> (A & B)
+##     2) A | not(N)           together: (A & B) -> N
+##     3) B | not(N)
+##
+## None 'result' auto-assigns variable name
+## returns list of clauses + comment
+##
+def satsolv_and(base, vars, result=None):
+	cls  = []
+	v    = sorted(vars)
+
+	if result == None:
+		result = base + sNALL1
+
+	all = list((f"-{ (base +b) }")  for b in  v)
+	all.append(result)
+		##
+	cls.append( " ".join(all) )                   ## not(A) | not(B) | N
+
+	terms = list((base +b)  for b in v)
+
+	cls.extend((f'{ t } -{ result }')  for t in terms)
+
+	return cls, result, f'{ result } := (' +(" AND ".join(terms)) +')'
+
+
+##-----------------------------------------
 ## return 2x list, of signs ('-' or empty) and of sign-less IDs
 ## input is list of text IDs
 ##
@@ -3783,8 +3866,11 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 
 		if conflicts and satsolv_is_debug():
 			print(f"## SAT.COMPAT[{d1},{d2}]: TIME.VEC=" +
-				f"x{ d1t :x}/x{ d2t :x}, MIN.TIME.DIFF=" +
-				f"{ d12u }, CONFLICTS={ len(conflicts) }")
+				f"[{ delvs[ d1i ][ 'time' ] }]=x{ d1t :x}," +
+				f"[{ delvs[ d2i ][ 'time' ] }]=x{ d2t :x}," +
+				f"MIN.TIME.DIFF=" +
+				f"{ d12u * vTIME_UNIT_MINS }min, " +
+				f"CONFLICTS={ len(conflicts) }")
 
 		conflict_pairs.extend(conflicts)
 
@@ -4016,7 +4102,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				satsolv_delv_window_deps(sat, didx,
 						t, range(satvbits))
 
-		satsolv_delv_window_2x_deps(sat, d, xy2dist_table,
+		satsolv_delv_window_2x_deps(sat, dels, xy2dist_table,
 		                            dts, satvcount)
 
 	del(dts)

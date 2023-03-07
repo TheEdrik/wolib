@@ -54,23 +54,26 @@ sNALL1 = 'ALL1'                   ## suffix for all-(values-)one +variable
 ##     2) not(A) | N       together: (A | B) -> N
 ##     3) not(B) | N
 ##
-## returns list of clauses + comment
+## None 'result' auto-assigns variable name
+## returns list of clauses, name of final variable, + comment
 ##
-def satsolv_or(base, vars):
+def satsolv_or(base, vars, result=None):
 	cls = []
 	v   = sorted(vars)
-	nz  = base + sNALL0
+
+	if result == None:
+		result = base + sNALL0
 
 	all = list((base +b)  for b in  v)
-	all.append(f'-{ nz }')
+	all.append(f'-{ result }')
 		##
 	cls.append( " ".join(all) )                   ## A | B | not(N)
 
 	terms = list((base +b)  for b in v)
 
-	cls.extend((f'-{ t } { nz }')  for t in terms)
+	cls.extend((f'-{ t } { result }')  for t in terms)
 
-	return cls, f'{ nz } := (' +(" OR ".join(terms)) +')'
+	return cls, result, f'{ result } := (' +(" OR ".join(terms)) +')'
 
 
 ##-----------------------------------------
@@ -79,23 +82,26 @@ def satsolv_or(base, vars):
 ##     2) A | not(N)           together: (A & B) -> N
 ##     3) B | not(N)
 ##
+## None 'result' auto-assigns variable name
 ## returns list of clauses + comment
 ##
-def satsolv_and(base, vars):
+def satsolv_and(base, vars, result=None):
 	cls  = []
 	v    = sorted(vars)
-	all1 = base + sNALL1
+
+	if result == None:
+		result = base + sNALL1
 
 	all = list((f"-{ (base +b) }")  for b in  v)
-	all.append(all1)
+	all.append(result)
 		##
 	cls.append( " ".join(all) )                   ## not(A) | not(B) | N
 
 	terms = list((base +b)  for b in v)
 
-	cls.extend((f'{ t } -{ all1 }')  for t in terms)
+	cls.extend((f'{ t } -{ result }')  for t in terms)
 
-	return cls, f'{ all1 } := (' +(" AND ".join(terms)) +')'
+	return cls, result, f'{ result } := (' +(" AND ".join(terms)) +')'
 
 
 
@@ -346,12 +352,14 @@ def nof1(n):
 ##-----------------------------------------------------------
 if __name__ == '__main__':
 	print(satsolv_and("base", [ "A", "B", "C", ]))
+	print(satsolv_and("base", [ "A", "B", "C", ], result='AND_ABC'))
+	print(satsolv_or("base", [ "A", "B", "C", ]))
+	print(satsolv_or("base", [ "A", "B", "C", ], result='OR_ABC'))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", ], 15))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", ], 9))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", "v4", ], 23))
 	sys.exit(0)
 
-	print(satsolv_or("base", [ "A", "B", ]))
 	print(satsolv_nzdiffer_n("d31t11", "d44t22",
 	      	             [ "z0", "z1", "z2", "z3", "z4" ]))
 
