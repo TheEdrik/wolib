@@ -49,6 +49,41 @@ sNALL1 = 'ALL1'                   ## suffix for all-(values-)one +variable
 
 
 ##-----------------------------------------
+## XOR of two bits; 'negate' chooses XNOR
+##
+## sample: A; B; N = A ^ B
+##     1) A | B | not(N)             N -> (A | B)
+##     2) not(A) | N       together: (A | B) -> N
+##     3) not(B) | N
+##
+## None 'result' auto-assigns variable name
+## returns list of clauses, name of final variable, + comment
+##
+def satsolv_xor1(var1, var2, result=None, negate=False):
+	cls = []
+
+	if result == None:
+		negstr = 'n'  if negate  else ''
+		result = f'{ var1 }_{ negstr }x_{ var2 }'
+
+	if negate:                     ## X(N)OR only swap truth table polarity
+		pol = [ ' ', '-', '-', ' ', ]
+	else:
+		pol = [ '-', ' ', ' ', '-', ]
+
+	cls.extend([                         ## truth table for "{lf} XOR {rg}"
+		f' {var1}  {var2} { pol[0] }{ result }',
+		f'-{var1}  {var2} { pol[1] }{ result }',
+		f' {var1} -{var2} { pol[2] }{ result }',
+		f'-{var1} -{var2} { pol[3] }{ result }',
+	])
+
+	negstr = 'NOT '  if negate  else ''
+
+	return cls, result, f'{ result } := { negstr }({var1} XOR {var2})'
+
+
+##-----------------------------------------
 ## sample: A; B; N = A | B
 ##     1) A | B | not(N)             N -> (A | B)
 ##     2) not(A) | N       together: (A | B) -> N
@@ -309,6 +344,8 @@ def satsolv_1n(vars, nr=0):
 	cmd = f'CMDV{ nr +len(newvar) +1 }'
 	newvar.insert(0, cmd)
 
+## TODO: merge with satsolv_xor1() inner clause list
+
 	cls.extend([                         ## truth table for "{lf} XOR {rg}"
 		f' {lf}  {rg} -{cmd}',
 		f'-{lf}  {rg}  {cmd}',
@@ -355,6 +392,10 @@ if __name__ == '__main__':
 	print(satsolv_and("base", [ "A", "B", "C", ], result='AND_ABC'))
 	print(satsolv_or("base", [ "A", "B", "C", ]))
 	print(satsolv_or("base", [ "A", "B", "C", ], result='OR_ABC'))
+	print(satsolv_xor1("A", "B", result='XOR_AB'))
+	print(satsolv_xor1("A", "B"))
+	print(satsolv_xor1("A", "B", result='XNOR_AB', negate=True))
+	print(satsolv_xor1("A", "B", negate=True))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", ], 15))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", ], 9))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", "v4", ], 23))
