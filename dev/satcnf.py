@@ -84,6 +84,38 @@ def satsolv_xor1(var1, var2, result=None, negate=False):
 
 
 ##-----------------------------------------
+## NAND, for two bits
+##
+## sample: A; B; N = not(A & B)
+##     1) not(A) | not(B) | not(N)
+##     2)      A | N
+##     3)      B | N
+##
+## None 'result' auto-assigns variable name
+## returns list of clauses + comment
+##
+## TODO: merge with AND
+##
+def satsolv_nand1(var1, var2, result=None):
+	cls  = []
+
+	if result == None:
+		result = f'{ var1 }_nn_{ var2 }'
+
+			## placeholders, for column alignment
+	v1p = ' ' * (len(var1) +1)
+	v2p = ' ' * (len(var2) +1)
+
+	cls.extend([
+		f'-{var1} -{var2} -{result}',
+		f' {var1} { v2p }  {result}',
+		f' {var2} { v1p }  {result}',
+	])
+
+	return cls, result, f'{ result } := ({var1} NAND {var2})'
+
+
+##-----------------------------------------
 ## sample: A; B; N = A | B
 ##     1) A | B | not(N)             N -> (A | B)
 ##     2) not(A) | N       together: (A | B) -> N
@@ -137,7 +169,6 @@ def satsolv_and(base, vars, result=None):
 	cls.extend((f'{ t } -{ result }')  for t in terms)
 
 	return cls, result, f'{ result } := (' +(" AND ".join(terms)) +')'
-
 
 
 ##----------------------------------------------------------------------------
@@ -396,6 +427,8 @@ if __name__ == '__main__':
 	print(satsolv_xor1("A", "B"))
 	print(satsolv_xor1("A", "B", result='XNOR_AB', negate=True))
 	print(satsolv_xor1("A", "B", negate=True))
+	print(satsolv_nand1("A", "B", result='NAND_AB'))
+	print(satsolv_nand1("A", "B"))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", ], 15))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", ], 9))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", "v4", ], 23))
