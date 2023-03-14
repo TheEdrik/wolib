@@ -5,6 +5,94 @@
 import re, sys
 
 
+##--------------------------------------
+## please do not comment on splitting-through-string, or repeatedly
+## evaluating expression in loop
+##
+## available functions:
+##     AND, OR, NAND, NOR, XOR, XNOR
+##     1OFN      (or 1-of-N)
+##     MAX1OFN   (or MAX-1-of-N)
+##     LESSTHAN  (or LESS-THAN)    -- compares N-bit combinations <= 'limit'
+##
+##     DIFFER                      -- feed even nr. of bits, used as 2x N/2
+##                                 -- as nr1, nr2, respectively
+##                                 -- evaluate nr1 != nr2
+##     DIFFER-OR-0                 -- as with DIFFER, but true if
+##                                 -- either nr1 or nr2 are all-0
+##     DIFFER-AND-NOT-0            -- as with DIFFER, but false if
+##                                 -- either nr1 or nr2 are all-0
+##
+## with cnf>0, outputs directly CNF-usable form, with first variable
+## set to 'cnf'
+##
+def truthtable(fn, n, vars='v', limit=0, cnf=0):
+	fn  = fn.upper()
+	res = []
+
+	if (fn == 'LESSTHAN') or (fn == 'LESS-THAN'):
+		if limit < 1:
+			raise ValueError("upper limit must be >0")
+		if limit >= (1 << n):
+			raise ValueError(f"upper limit must be over {n} bits")
+
+	if (fn == 'DIFFER') or (fn == 'DIFFER-OR-0'):
+		if n % 2:
+			raise ValueError(f"DIFFER needs even nr. of bits")
+
+	for v in range(1 << n):
+		vb = list(int(b)  for b in f'{ v :0{n}b}')
+
+		nr1, nr2 = vb[ :n//2 ], vb[ n//2: ]     ## 2x halves
+
+		if fn == 'XOR':
+			r = sum(vb) & 1
+		elif fn == 'XNOR':
+			r = 1 - (sum(vb) & 1)
+		elif fn == 'OR':
+			r = max(vb)
+		elif fn == 'AND':
+			r = min(vb)
+		elif fn == 'NAND':
+			r = 1 - min(vb)
+		elif fn == 'NOR':
+			r = 1 - max(vb)
+
+							## compound functions
+		elif (fn == '1OFN') or (fn == '1-OF-N'):
+			r = 1  if (sum(vb) == 1)  else 0
+		elif (fn == 'MAX1OFN') or (fn == 'MAX-1-OF-N'):
+			r = 1  if (sum(vb) <= 1)  else 0
+		elif (fn == 'LESSTHAN') or (fn == 'LESS-THAN'):
+			r = (v < limit)
+
+		elif (fn == 'DIFFER'):
+			r = (nr1 != nr2)
+
+		elif (fn == 'DIFFER-OR-0'):
+			nr1nz = max(nr1)
+			nr2nz = max(nr2)
+			r     = ((nr1 != nr2) and nr1nz and nr2nz)
+
+		elif (fn == 'DIFFER-AND-NOT-0'):
+			no0 = min(max(nr1), max(nr2))
+			r   = ((nr1 != nr2) and no0)
+
+		else:
+			raise ValueError("unknown function")
+
+		r = 1  if r  else 0            ## allow Boolean etc. from cases
+
+		vb.append(r)
+
+		if cnf > 0:
+			vb = list((vi+cnf  if v else  -vi-cnf)
+			          for vi, v in enumerate(vb))
+		res.append(vb)
+
+	return res
+
+
 ##-----------------------------------------
 ## return 2x list, of signs ('-' or empty) and of sign-less IDs
 ##
@@ -49,6 +137,22 @@ sNALL1 = 'ALL1'                   ## suffix for all-(values-)one +variable
 
 
 ##-----------------------------------------
+##
+def satsolv_xor1_clauses(var1, var2, result, negate=False):
+	if negate:                     ## X(N)OR only swap truth table polarity
+		pol = [ ' ', '-', '-', ' ', ]
+	else:
+		pol = [ '-', ' ', ' ', '-', ]
+
+	return [
+		f' {var1}  {var2} { pol[0] }{ result }',
+		f'-{var1}  {var2} { pol[1] }{ result }',
+		f' {var1} -{var2} { pol[2] }{ result }',
+		f'-{var1} -{var2} { pol[3] }{ result }',
+	]
+
+
+##-----------------------------------------
 ## XOR of two bits; 'negate' chooses XNOR
 ##
 ## sample: A; B; N = A ^ B
@@ -66,19 +170,20 @@ def satsolv_xor1(var1, var2, result=None, negate=False):
 		negstr = 'n'  if negate  else ''
 		result = f'{ var1 }_{ negstr }x_{ var2 }'
 
-	if negate:                     ## X(N)OR only swap truth table polarity
-		pol = [ ' ', '-', '-', ' ', ]
-	else:
-		pol = [ '-', ' ', ' ', '-', ]
+	cls = satsolv_xor1_clauses(var1, var2, result, negate=negate)
 
-	cls.extend([                         ## truth table for "{lf} XOR {rg}"
-		f' {var1}  {var2} { pol[0] }{ result }',
-		f'-{var1}  {var2} { pol[1] }{ result }',
-		f' {var1} -{var2} { pol[2] }{ result }',
-		f'-{var1} -{var2} { pol[3] }{ result }',
-	])
-
-	negstr = 'NOT '  if negate  else ''
+##	if negate:                     ## X(N)OR only swap truth table polarity
+##		pol = [ ' ', '-', '-', ' ', ]
+##	else:
+##		pol = [ '-', ' ', ' ', '-', ]
+##
+##	cls.extend([
+##		f' {var1}  {var2} { pol[0] }{ result }',
+##		f'-{var1}  {var2} { pol[1] }{ result }',
+##		f' {var1} -{var2} { pol[2] }{ result }',
+##		f'-{var1} -{var2} { pol[3] }{ result }',
+##	])
+	negstr = 'NOT'  if negate  else ''
 
 	return cls, result, f'{ result } := { negstr }({var1} XOR {var2})'
 
@@ -375,14 +480,13 @@ def satsolv_1n(vars, nr=0):
 	cmd = f'CMDV{ nr +len(newvar) +1 }'
 	newvar.insert(0, cmd)
 
-## TODO: merge with satsolv_xor1() inner clause list
-
-	cls.extend([                         ## truth table for "{lf} XOR {rg}"
-		f' {lf}  {rg} -{cmd}',
-		f'-{lf}  {rg}  {cmd}',
-		f' {lf} -{rg}  {cmd}',
-		f'-{lf} -{rg} -{cmd}',
-	])
+	cls.extend(satsolv_xor1_clauses(lf, rg, cmd))
+##	cls.extend([                         ## truth table for "{lf} XOR {rg}"
+##		f' {lf}  {rg} -{cmd}',
+##		f'-{lf}  {rg}  {cmd}',
+##		f' {lf} -{rg}  {cmd}',
+##		f'-{lf} -{rg} -{cmd}',
+##	])
 
 	varlist = ",".join(vars)
 
@@ -432,8 +536,22 @@ if __name__ == '__main__':
 	print(satsolv_le([ "v0", "v1", "v2", "v3", ], 15))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", ], 9))
 	print(satsolv_le([ "v0", "v1", "v2", "v3", "v4", ], 23))
-	sys.exit(0)
 
+	print(" ".join(str(v) for v in truthtable('AND',  4)))
+	print(" ".join(str(v) for v in truthtable('OR',   4)))
+	print(" ".join(str(v) for v in truthtable('NAND', 4)))
+	print(" ".join(str(v) for v in truthtable('NOR',  4)))
+	print(" ".join(str(v) for v in truthtable('XOR',  4)))
+	print(" ".join(str(v) for v in truthtable('XNOR', 4)))
+	print(" ".join(str(v) for v in truthtable('XOR',  4, cnf=1)))
+	print(" ".join(str(v) for v in truthtable('LESS-THAN', 5, limit=24)))
+	print(" ".join(str(v) for v in truthtable('LESS-THAN', 5, limit=24, cnf=1)))
+	print(" ".join(str(v) for v in truthtable('DIFFER', 8)))
+	print(" ".join(str(v) for v in truthtable('DIFFER-OR-0', 8)))
+	print(" ".join(str(v) for v in truthtable('DIFFER-AND-NOT-0', 8)))
+	print(" ".join(str(v) for v in truthtable('DIFFER-AND-NOT-0', 10)))
+
+	sys.exit(0)
 	print(satsolv_nzdiffer_n("d31t11", "d44t22",
 	      	             [ "z0", "z1", "z2", "z3", "z4" ]))
 
