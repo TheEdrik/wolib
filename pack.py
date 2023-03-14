@@ -1870,6 +1870,48 @@ def vehicle2primary(vehicle):
 	return  vehicle[ 'primary' ]  if ('primary' in vehicle)  else 0
 
 
+##============================================================================
+## unconditionally defined SAT variables (ignore any spaces):
+##   dXX tYY         -- delivery XX is scheduled in time unit YY
+##   dXX tYY vZZ     -- vZZ is v0..v(N-1) for N-bit vehicle IDs
+##                   -- all-0 vehicle ID means no vehicle assigned
+##       -> dXX tYY  true if and only if at least one of 'dXX tYY vZZ' is 1
+##       -> MUST check for dXXtYYv0..dXXtYYv(N-1) not encoding an index
+##          over limit. (<=M with M vehicles is fine; effective encoding
+##          is one-based, with 0 indicating absence.)
+##
+## conditionally defined variables:
+##   A nand B    -- NAND(A, B); used to check for either dXX tYY or dWW tZZ
+##                  are all-0 (-> not yet assigned to vehicle)
+##                  -- defined for all potentially conflicting dXX tYY, dWW tZZ
+##                  -- delivery+unit pairs
+##   A xor B  -- XOR(..., ...): the two variables differ
+##                  -- defined for all potentially conflicting
+##                  -- delivery+time+vehicleID(bit) assignments ->
+##
+## unconditional constraints:
+##   - exactly one of 'dXX tYY' is 1 for every delivery dXX:
+##     (1) delivery is scheduled sometime
+##     (2) it is scheduled exactly once
+##       - TODO: will not be true once we allow delaying a delivery (which
+##         may not be assigned in the current time horizont) -> one-of-N
+##         assignment for those will be conditional
+##     (3) side note: gives an immediate ordering for vehicle tYY, since
+##         it assigns deliveries+units in delivery order. (at current
+##         settings, units are sufficiently granular that not more than
+##         one delivery may be scheduled to them. this might change with
+##         multi-delivery batches, which we do not currently support.)
+## 
+## design decisions:
+##   - one-hot encoding of vehicle IDs would be counterproductive. less
+##     variables and more bitwise comparisons appear to
+##     be solver-friendlier.
+##
+## DO NOT CHANGE THESE CONVENTIONS UNLESS YOU KNOW WHAT YOU ARE DOING
+##
+## see satsolv_var_name() which encapsulates delivery+time -> SAT name mapping
+
+
 ##--------------------------------------
 ## SAT-solver aux. data
 ## all variables are Booleans
@@ -2022,10 +2064,16 @@ def satsolv_add_delvtime(sat, delvid, unit, vnumber=None):
 
 
 ##--------------------------------------
+## bundle as many as possible
+## esp. delivery+time-unit collisions add many short lists -> O(N^2) extension
+##
+## intermediate set: "not in sat['vars']" is slow re-search
+##
 def satsolv_add_vars(sat, vars):
 	if sat:
-		for v in (n  for n in vars  if (not n in sat['vars'])):
-			sat[ 'vars' ].append(v)
+		seen = set(sat['vars'])
+		v = (v  for v in vars  if (not v in seen))
+		sat[ 'vars' ].extend(v)
 
 
 ##--------------------------------------
@@ -2043,6 +2091,68 @@ def satsolv_add_constraint(sat, vars, comment=''):
 def satsolv_add_constraint1(sat, rawc, comment=''):
 	if sat:
 		sat[ 'constraints' ].append([ rawc, comment ])
+
+
+##--------------------------------------
+## handed a list of [ delivery ID1, time unit1, delv.ID2, time unit2 ] tuples
+## (dXX, tYY, dWW, tZZ below; example also uses v0,v1 2-bit v.ID example):
+##
+##       dXXtYYv0 OR dXXtYYv1  ==  dXXtYY  (== dXX,tYY is delivery)
+##
+## register them _not_ to conflict (with example of 2 vehicle-ID bits,
+## v0+v1), as OR of the following expressions:
+##     - NOT (dXXtYY & dWWtZZ)       neither assigned in that time unit
+##     -  dXXtYYv0 !=  dWWtZZv0    | together: 2-bit delivery IDs differ,
+##     -  dXXtYYv1 !=  dWWtZZv1    | not scheduled to same vehicle
+##
+##         ->  ((NOT (dXXtYY AND dWWtZZ)) OR
+##              (dXXtYYv0 XOR dWWtZZv0)   OR
+##              (dXXtYYv1 XOR dWWtZZv1))     -> expansion of dXXtYY+dWWtZZ ->
+##
+##         ->  ((NOT (dXXtYYv0 OR dXXtYYv1 OR dWWtZZv0 OR dWWtZZv1)) OR
+##              (dXXtYYv0 XOR dWWtZZv0)   OR
+##              (dXXtYYv1 XOR dWWtZZv1))
+##
+##         ->  (dXXtYY NAND dWWtZZ) OR (dXXtYYv0 XOR dWWtZZv0) OR ...
+##                                  ...(dXXtYYv1 XOR dWWtZZv1)
+##
+## use 'veh_count' as max. number of vehicles to use
+##     - all-0 bits: not yet assigned
+##     - valid bit combinations: <= veh_count
+##
+## sat[ "vars" ] MUST already have initalized all referenced dXXtYY etc.
+## variables.
+##
+## NOTE: unlike most CNF-generating functions, we emit numeric
+## CNF expressions directly: post-filtering string-to-value becomes perf.
+## bottleneck at few hundred thousand expressions.
+##
+def satsolv_add_conflict_constraint1(sat, constr, veh_count):
+	d1, t1, d2, t2 = constr
+
+	vbits  = satsolve_vidx_bits(veh_count)
+	v1main = satsolv_var_name(d1, t1)
+	v2main = satsolv_var_name(d2, t2)
+	v12nand, nvar, ncomm = satsolv_nand1(v1main, v2main)
+							## v1main NAND v2main
+	for c in v12nand:
+		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + c, ncomm)
+		ncomm = ''
+
+	addvars = [ v1main, v2main, nvar ]
+							## pairwise XORs
+	for v in range(vbits):
+		v1bit = satsolv_var_name(d1, t1, v)
+		v2bit = satsolv_var_name(d2, t2, v)
+		xconstr, xn, xcomm = satsolv_xor1(v1bit, v2bit)
+
+		for c in xconstr:
+			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, ncomm)
+			xcomm = ''
+
+		addvars.extend([ v1bit, v2bit, xn ])
+
+	return addvars
 
 
 ##--------------------------------------
@@ -3556,12 +3666,80 @@ sNALL1 = 'ALL1'                   ## suffix for all-(values-)one +variable
 
 
 ##-----------------------------------------
+## XOR of two bits; 'negate' chooses XNOR
+##
+## sample: A; B; N = A ^ B
+##     1) A | B | not(N)             N -> (A | B)
+##     2) not(A) | N       together: (A | B) -> N
+##     3) not(B) | N
+##
+## None 'result' auto-assigns variable name
+## returns list of clauses, name of final variable, + comment
+##
+def satsolv_xor1(var1, var2, result=None, negate=False):
+	cls = []
+
+	if result == None:
+		negstr = 'n'  if negate  else ''
+		result = f'{ var1 }_{ negstr }x_{ var2 }'
+
+	if negate:                     ## X(N)OR only swap truth table polarity
+		pol = [ ' ', '-', '-', ' ', ]
+	else:
+		pol = [ '-', ' ', ' ', '-', ]
+
+	cls.extend([                         ## truth table for "{lf} XOR {rg}"
+		f' {var1}  {var2} { pol[0] }{ result }',
+		f'-{var1}  {var2} { pol[1] }{ result }',
+		f' {var1} -{var2} { pol[2] }{ result }',
+		f'-{var1} -{var2} { pol[3] }{ result }',
+	])
+
+	negstr = 'NOT '  if negate  else ''
+
+	return cls, result, f'{ result } := { negstr }({var1} XOR {var2})'
+
+
+##-----------------------------------------
+## NAND, for two bits
+##
+## sample: A; B; N = not(A & B)
+##     1) not(A) | not(B) | not(N)
+##     2)      A | N
+##     3)      B | N
+##
+## None 'result' auto-assigns variable name
+## returns list of clauses + comment
+##
+## TODO: merge with AND
+##
+def satsolv_nand1(var1, var2, result=None):
+	cls  = []
+
+	if result == None:
+		result = f'{ var1 }_nn_{ var2 }'
+
+			## placeholders, for column alignment
+			## incl. +1 column since aligns with negated column
+	v1p = ' ' * (len(var1) +1)
+	v2p = ' ' * (len(var2) +1)
+
+	cls.extend([
+		f'-{var1} -{var2} -{result}',
+		f' {var1} { v2p }  {result}',
+		f' {var2} { v1p }  {result}',
+	])
+
+	return cls, result, f'{ result } := ({var1} NAND {var2})'
+
+
+##-----------------------------------------
 ## sample: A; B; N = A | B
 ##     1) A | B | not(N)             N -> (A | B)
 ##     2) not(A) | N       together: (A | B) -> N
 ##     3) not(B) | N
 ##
-## returns list of clauses + comment
+## returns list of clauses + control variable + comment
 ##
 def satsolv_or(base, vars, result=None):
 	cls = []
@@ -3579,7 +3757,7 @@ def satsolv_or(base, vars, result=None):
 
 	cls.extend((f'-{ t } { result }')  for t in terms)
 
-	return cls, f'{ result } := (' +(" OR ".join(terms)) +')'
+	return cls, result, f'{ result } := (' +(" OR ".join(terms)) +')'
 
 
 ##-----------------------------------------
@@ -3592,8 +3770,8 @@ def satsolv_or(base, vars, result=None):
 ## returns list of clauses + comment
 ##
 def satsolv_and(base, vars, result=None):
-	cls  = []
-	v    = sorted(vars)
+	cls = []
+	v   = sorted(vars)
 
 	if result == None:
 		result = base + sNALL1
@@ -3619,6 +3797,24 @@ def satsolv_str2ids(ids):
 	curr = list(re.sub('^-', '', i)  for i in ids)
 
 	return sgns, curr
+
+
+##-----------------------------------------
+## SAT/CNF: are two variable collections identical?
+## used to cross-check possibly conflicting deliveries, with two N-bit
+## configurations: different delivery + time(unit) + vehicle index(N-bit):
+##   (1) either one of the indexes is all-0: not yet assigned
+##   (2) N-bit value 1 != N-bit value 2 (-> assigned to different vehicles)
+##
+## inputs are collections of variables of identical size
+##
+def satsolv_differ_n(var1, var2, result=None):
+	if (not var1) or (not var2) or (len(var1) != len(var2)):
+		raise ValueError("inconstent bitvectors-differ input")
+
+	comment = ''
+
+	return [], result, comment
 
 
 ##-----------------------------------------
@@ -3737,6 +3933,7 @@ def satsolv_1ofn(sat, vars):
 
 	return top
 
+
 ##-----------------------------------------------------------
 ## delivery + time-window crossbar:
 ## XXX
@@ -3765,6 +3962,9 @@ def satsolv_1ofn(sat, vars):
 ## 'delvs'      is full input list
 ## 'dts'        stores delivery+time-window crossbar
 ## 'satvcount'  number of vehicles to allow (+1, all-0, for 'unassigned')
+##
+## 'conflicts' collects the following form:
+##     [ delivery ID(1); time unit(1); delivery ID(2); time unit(2) ]
 ##
 ## TODO: delivery-window comparisons are only approximations: we should
 ## check for maximally lenient deliveries (and filter non-solutions
@@ -3876,7 +4076,18 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 
 	print(f"## SAT.TOTAL.CONFLICTS={ len(conflict_pairs) }")
 
-	pass
+			## (1) register all variables, so var-to-int lookups
+			##     always succeed
+			## (2) raw-register integer-only expressions
+			##
+			## rationale: post-filtering var-to-int becomes global
+			## bottleneck at few hundred thousand constraints
+
+	nvars = []
+	for c in conflict_pairs:
+		nvars.extend( satsolv_add_conflict_constraint1(sat,
+		                          c, satvcount) )
+	satsolv_add_vars(sat, nvars)
 
 
 ##-----------------------------------------------------------
@@ -3900,10 +4111,10 @@ def satsolv_delv_window_deps(sat, delv, time_unit, vnr_bits):
 	comm = f'delivery+time <-> +vehicles: (d={ delv }, t={ time_unit })'
 	cls  = (' '.join(bits)) + f' -{ all }'
 
-	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + cls, comm)
-
 	if satsolv_is_debug():
-		satsolv_add_constraint1(sat, '', '  ORIG=' +cls)
+		satsolv_add_constraint1(sat, '', '  ORIG(VEH)=' +cls)
+
+	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + cls, comm)
 
 
 ##--------------------------------------
@@ -4039,6 +4250,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 		debugmsg(f'## SAT.VEHICLES={ satvcount }', 1)
 		satsolv_add_comment(sat, f'using { satvcount } vehicles, ' +
 				f'encoded as { satvbits } bits')
+		satsolv_add_comment(sat, f'  all-00: not (yet?) assigned')
 
 	##=====  v1:  ========================================================
 	## greedy-assign routes for one vehicle at a time, in a BFD fashion:
@@ -4079,9 +4291,15 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 				## register dXXtYY and dXXtYYvZZ
 				##   - delivery XX, time unit YY
-				##   - delivery XX, time unit YY, vehicle ZZ
+				##   - delivery XX, time unit YY,
+				##     vehicle-ID ZZ
 				## 'vehicle ZZ' covers bits, not counters
 				## (binary-encoded index of vehicle assigned)
+				##
+				## with 4 vehicles, v0 and v1; variables:
+				##     dXX-tYY-v0
+				##     dXX-tYY-v1
+				## combinations of v0+v1 used to count
 
 			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
 
