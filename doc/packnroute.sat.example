@@ -1,0 +1,96 @@
+## BFD.ALL.COUNT=7
+## BFD.ALL=8540971234,8541107033,8531413961,8507224810,8542031294,
+       8508412318,7160367808
+## BFD.VEHICLES=7               -- assuming BFD packing, and no time
+                                -- restrictions, 7 vehicles (see above)
+                                -- are sufficient to pack all deliveries
+## SAT.VEHICLES=11              -- allow +4 vehicles for extra slack;
+                                -- the temporal restriction is not realistic
+                                --     -> the BFD estimate is optimistic
+...
+## SAT.CONFLICT DELV1=0,T=0815-0829 DELV2=3,T=0915-0929 MIN.TIME.DIFF=75min
+                                -- due to >= 75 mins (5 time units) minimum
+                                -- separation between (the X+Y coordinate
+                                -- pairs of) deliveries 1 and 2, the
+                                -- "DELV1, 0815-0829" and "DELV2, 0915-0929"
+                                -- windows MUST NOT be assigned to the
+                                -- same vehicle.
+                                --
+                                -- note: T=0815-0829 is time unit 1,
+                                -- T=0915-0929 is time unit 5.
+...
+## SAT.CONFLICT DELV1=0,T=0830-0844 DELV2=3,T=0900-0914 MIN.TIME.DIFF=75min
+## SAT.CONFLICT DELV1=0,T=0830-0844 DELV2=3,T=0915-0929 MIN.TIME.DIFF=75min
+...
+## SAT.CONFLICT DELV1=0,T=1000-1014 DELV2=3,T=1030-1044 MIN.TIME.DIFF=75min
+## SAT.CONFLICT DELV1=0,T=1000-1014 DELV2=3,T=1045-1059 MIN.TIME.DIFF=75min
+## SAT.COMPAT[0,3]: TIME.VEC=[0815-1015]=x1fe,[0900-1100]=xff0,
+       MIN.TIME.DIFF=75min, CONFLICTS=43
+...
+SAT=p cnf 294540 830439
+                 --- 294'540 variables, 830'439 constraints ('clauses')
+SAT=c
+SAT=c CONSTRAINTS:                            -- comment section, SAT solver
+                                              -- ignores ('c '... prefix)
+SAT=c   using 11 vehicles, encoded as 4 bits  -- v0, v1, v2, v3 below
+SAT=c     all-00: not (yet?) assigned         -- v0..v3 >0 indicates assignment
+                                              -- to 1-based vehicle ID=v0..v3
+...
+SAT=c   1-of-N: (NV7) for (d0t2,d0t3,d0t4,d0t5,d0t6,d0t7,d0t8,d0t9)
+                                              -- since Delivery 0 MUST be
+                                              -- assigned somewhere, exactly
+                                              -- one of these aggregate
+                                              -- variables is True
+...
+SAT=c   delivery+time <-> +vehicles: (d=0, t=2)
+SAT=c     ORIG(VEH)=d0t3v0 d0t3v1 d0t3v2 d0t3v3 -d0t3
+                                    -- d0t3 == delv. 0 assigned to time unit t3
+                                    -- 4 bits form the 1-based ID, see above
+                                    --
+                                    -- all-0 v0..v3 shows unassigned,
+                                    -- d0t3 is false under that condition.
+...
+SAT=c   delivery+time <-> +vehicles: (d=0, t=3)
+SAT=c     ORIG(VEH)=d0t4v0 d0t4v1 d0t4v2 d0t4v3 -d0t4
+...
+SAT=c   d0t1_nn_d3t5 := (d0t1 NAND d3t5)
+                                    -- (part of) clause prohibiting d0t1
+                                    -- and d3t5 from being assigned to
+                                    -- the same vehicle
+                                    --
+                                    -- NAND is used by the condition,
+                                    -- since only identical assignments
+                                    -- are prohibited (both 1). If either
+                                    -- value is 0, at least one delivery+unit
+                                    -- pair has not been assigned so,
+                                    -- and there is no conflict. (Therefore,
+                                    -- these NANDs are combined to detect
+                                    -- different bit combinations conditionally)
+SAT=c   d0t1_nn_d3t4 := (d0t1 NAND d3t4)
+SAT=c   d0t1_nn_d3t5 := (d0t1 NAND d3t5)
+                                    -- same for (d0t1 and d3t4) and
+                                    -- (d0t1 and d3t5) etc.
+...
+SAT=c VARIABLES:                    -- variable/int commentary
+                                    -- still in the CNF commentary section
+SAT=c   d0t2[1] d0t2v0[2] d0t2v1[3] d0t2v2[4] d0t2v3[5] d0t3[6] ...
+                                    -- 1  == d0t2 is True
+                                    -- -1 == d0t2 is False
+                                    -- (DIMACS assignment format)
+...
+SAT=c   d89t24v3[4437] NV665[4438] NV663[4439] NV664[4440] d0t1[4441] ...
+SAT=c   d3t4[4442] d0t1_nn_d3t4[4443] d0t1v0[4444]...   --- d0t1_nn_d3t4: 4443
+SAT=c   d0t1v0_x_d3t4v0[4446] d0t1v1[4447] d3t4v1[4448]
+...
+                                    -- DIMACS statement:
+SAT=4434 4435 4436 4437 -4433 0
+                                    -- NAND truth table:
+SAT=-4441 -4442 -4443 0             --   not(d0t1)  not(d3t4)  not(d0t1_nn_d3t4)
+SAT=4441 4443 0                     --       d0t1       d0t1_nn_d3t4
+SAT=4442 4443 0                     --       d3t4       d0t1_nn_d3t4
+                                    -- together, CNF representation of:
+                                    --     d0t1_nn_d3t4 = d0t1 NAND d3t4
+SAT=4444 4445 -4446 0
+...
+SAT=-4444 4445 4446 0
+SAT=4444 -4445 4446 0
