@@ -2024,6 +2024,7 @@ def satsolv_init0():
 
 
 ##--------------------------------------
+## register key+value to sat{}
 ## returns False if value has already been set, True if has just been added
 ##
 def satsolv_add1(sat, key, value):
@@ -2037,18 +2038,28 @@ def satsolv_add1(sat, key, value):
 
 
 ##--------------------------------------
-def satsolv_var_name(delv_id, time_unit, vnumber=None):
-	if vnumber != None:
-		return f'd{ delv_id }t{ time_unit }v{ vnumber }'
+## with 'time_unit' None, returns delivery+v0...v(N-1) bits, which
+##                        describe which vehicle this delivery is assigned to
+##
+##      'vnumber'   None, returns only delivery+time main variable
+##
+def satsolv_var_name(delv_id, time_unit=None, vnumber=None):
+	if (time_unit == None) and (vnumber == None):
+		raise ValueError("no delivery-only variable names supported")
 
-	return f'd{ delv_id }t{ time_unit }'
+	tunit_id = f"t{ time_unit }"  if (time_unit != None)  else ''
+
+	if vnumber != None:
+		return f'd{ delv_id }{ tunit_id }v{ vnumber }'
+
+	return f'd{ delv_id }{ tunit_id }'
 
 
 ##--------------------------------------
 ## returns variable ID for this delivery+unit
 ##
 def satsolv_add_delvtime(sat, delvid, unit, vnumber=None):
-	var = satsolv_var_name(delvid, unit, vnumber=vnumber)
+	var = satsolv_var_name(delvid, time_unit=unit, vnumber=vnumber)
 	add = False
 
 	if vnumber != None:
@@ -2131,8 +2142,8 @@ def satsolv_add_conflict_constraint1(sat, constr, veh_count):
 	d1, t1, d2, t2 = constr
 
 	vbits  = satsolve_vidx_bits(veh_count)
-	v1main = satsolv_var_name(d1, t1)
-	v2main = satsolv_var_name(d2, t2)
+	v1main = satsolv_var_name(d1, time_unit=t1)
+	v2main = satsolv_var_name(d2, time_unit=t2)
 	v12nand, nvar, ncomm = satsolv_nand1(v1main, v2main)
 							## v1main NAND v2main
 	for c in v12nand:
@@ -2142,8 +2153,8 @@ def satsolv_add_conflict_constraint1(sat, constr, veh_count):
 	addvars = [ v1main, v2main, nvar ]
 							## pairwise XORs
 	for v in range(vbits):
-		v1bit = satsolv_var_name(d1, t1, v)
-		v2bit = satsolv_var_name(d2, t2, v)
+		v1bit = satsolv_var_name(d1, time_unit=t1, vnumber=v)
+		v2bit = satsolv_var_name(d2, time_unit=t2, vnumber=v)
 		xconstr, xn, xcomm = satsolv_xor1(v1bit, v2bit)
 
 		for c in xconstr:
@@ -4096,17 +4107,24 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 ##   - dXXtYY <=> collection of dXXtYYvZZ conditions
 ##
 ##   - delivery (XX), time unit (YY), binary-encoded vehicle number (ZZ)
-##     ZZ with bits 0..N-1
+##     ZZ with bits v0..v(N-1)
 ##
 ##   - dXXtYY  is True if the dXXtYYvZZ bits encode a non-empty vehicle number
 ##
-##   - 'empty' vehicle number is ...XXX document here...
+##   - dXXv0..v(N-1) encode
+##     - with all-00 meaning unassigned, this is just an OR of all dXXtYY
+##       for all possible tYY
+##     - MUST be non-0 if delivery is to be started (in exactly one time unit)
+##     - MAY be all-0 if starting this delivery is optional (0: not starting)
+##
+##   - 'empty' vehicle number is all-00
 ##
 ##   - vnr_bits is integer list of bits used
 ##
 def satsolv_delv_window_deps(sat, delv, time_unit, vnr_bits):
-	all  = satsolv_var_name(delv, time_unit)
-	bits = list(satsolv_var_name(delv, time_unit, v)  for v in vnr_bits)
+	all  = satsolv_var_name(delv, time_unit=time_unit)
+	bits = list(satsolv_var_name(delv, time_unit=time_unit, vnumber=v)
+	            for v in vnr_bits)
 
 	comm = f'delivery+time <-> +vehicles: (d={ delv }, t={ time_unit })'
 	cls  = (' '.join(bits)) + f' -{ all }'
@@ -4118,9 +4136,47 @@ def satsolv_delv_window_deps(sat, delv, time_unit, vnr_bits):
 
 
 ##--------------------------------------
+## register delivery-identifying, time-independent bits v0..v(N-1)
+##
+## dXXtYYv0 dXXtYYv1
+## dXXtZZv0 dXXtZZv0  ->
+## dXXv0    dXXv1
+##
+## 'tbits' is bitmask of time units used
+##
+def satsolv_delv2vehicle(sat, delv, tbits, vnr_bits):
+	vb = list(vnr_bits)
+
+	vvars = list(satsolv_var_name(delv, vnumber=v)  for v in vb)
+					## naming in v0..v(N-1) identical order
+
+	tvars = list(satsolv_var_name(delv, time_unit=t)  for t in tbits)
+					## dXXtYY base IDs
+
+	satsolv_add_vars(sat, vvars)
+
+	for vi, v in enumerate(vb):
+		vr = satsolv_var_name(delv, vnumber=v)
+
+						## dXXtYYv0 OR dXXtZZv0 OR ...
+						## scans t for identical dXX+v0
+## TODO: implicit _var_name construction replicated here:
+##
+		vconstr, _, vcomm = satsolv_or('',
+					(f'{ t }v{vi}'  for t in tvars),
+					result = vvars[vi])
+
+		for c in vconstr:
+			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, vcomm)
+			vcomm = ''
+
+
+##--------------------------------------
 ## variables may begin with '-', mapped to negated form (idx<0 in solver input)
 ##
 ## TODO: simplified to a form which could be list-comprehended
+##
+## see also:
 ##
 def satsolv_vars2ints(sat, vars):
 	res = []
@@ -4284,6 +4340,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				"tu": list( timevec2units(t) ),
 			}
 
+		vbitlist = range(satvbits)      ## bit indexes for vehicle IDs
+		                                ## v0..v(N-1) in descriptions
+
 		for d in dels:
 			dvars = []
 			didx  = d[ "index" ]
@@ -4300,6 +4359,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				##     dXX-tYY-v0
 				##     dXX-tYY-v1
 				## combinations of v0+v1 used to count
+				## (1-based) delivery index
 
 			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
 
@@ -4318,7 +4378,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 			for t in tbits:
 				satsolv_delv_window_deps(sat, didx,
-						t, range(satvbits))
+						t, vbitlist)
+
+			satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
 
 		satsolv_delv_window_2x_deps(sat, dels, xy2dist_table,
 		                            dts, satvcount)

@@ -46,7 +46,7 @@ import re, sys, fileinput
 
 
 ##-----------------------------------------
-reVARDEF = re.compile('(?P<id> [a-zA-Z0-9]+) \[ (?P<nr> \d+) \]',
+reVARDEF = re.compile('(?P<id> [a-zA-Z0-9] [a-zA-Z0-9_]*) \[ (?P<nr> \d+) \]',
                       re.VERBOSE)
 ##
 ## match "d0t4v0[14]" -> id = d0t4v0, nr = 14
