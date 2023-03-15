@@ -4197,37 +4197,40 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 ##     ZZ with bits v0..v(N-1)
 ##
 ##   - dXXtYY  is True if the dXXtYYvZZ bits encode a non-empty vehicle number
-##
-##   - dXXv0..v(N-1) encode
-##     - with all-00 meaning unassigned, this is just an OR of all dXXtYY
-##       for all possible tYY
-##     - MUST be non-0 if delivery is to be started (in exactly one time unit)
-##     - MAY be all-0 if starting this delivery is optional (0: not starting)
-##
-##   - 'empty' vehicle number is all-00
-##
-##   - vnr_bits is integer list of bits used
-##
-def satsolv_delv_window_deps(sat, delv, time_unit, vnr_bits):
-	all  = satsolv_var_name(delv, time_unit=time_unit)
-	bits = list(satsolv_var_name(delv, time_unit=time_unit, vnumber=v)
-	            for v in vnr_bits)
 
-	comm = f'delivery+time <-> +vehicles: (d={ delv }, t={ time_unit })'
-	cls  = (' '.join(bits)) + f' -{ all }'
 
-	if satsolv_is_debug():
-		satsolv_add_constraint1(sat, '', '  ORIG(VEH)=' +cls)
+##--------------------------------------
+## register time-identifying, vehicle-bit-aggregating
+##     dXXtYYv0 dXXtYYv1  ->  dXXtYY
+##     dXXtZZv0 dXXtZZv0  ->  dXXtZZ
+##
+## relies on the vehicle-bits encoding being >0 if and only if
+## a vehicle is assigned (all-0 means unassigned)
+##
+def satsolv_delv2time(sat, delv, time_unit, vnr_bits):
+	vb = list(vnr_bits)
 
-	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + cls, comm)
+	tvar  = satsolv_var_name(delv, time_unit=time_unit)
+	vvars = list(satsolv_var_name(delv, time_unit=time_unit, vnumber=v)
+	                              for v in vb)
+
+	cls, _, _ = satsolv_or('', vvars, result=tvar)
+
+	comm =  f'delivery+time <-> +vehicles: (d={ delv }, t={ time_unit })'
+	comm += f' [{tvar} = ({ " OR ".join(vvars) })]'
+
+	for c in cls:
+		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
+		comm = ''
 
 
 ##--------------------------------------
 ## register delivery-identifying, time-independent bits v0..v(N-1)
-##
-## dXXtYYv0 dXXtYYv1
-## dXXtZZv0 dXXtZZv0  ->
-## dXXv0    dXXv1
+##     dXXtYYv0 dXXtYYv1
+##     dXXtZZv0 dXXtZZv0
+##       |        |
+##       v        v
+##     dXXv0    dXXv1
 ##
 ## 'tbits' is bitmask of time units used
 ##
@@ -4252,7 +4255,6 @@ def satsolv_delv2vehicle(sat, delv, tbits, vnr_bits):
 		vconstr, _, vcomm = satsolv_or('',
 					(f'{ t }v{vi}'  for t in tvars),
 					result = vvars[vi])
-
 		for c in vconstr:
 			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, vcomm)
 			vcomm = ''
@@ -4464,8 +4466,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 			satsolv_add_delvs1(sat, dvars, d)
 
 			for t in tbits:
-				satsolv_delv_window_deps(sat, didx,
-						t, vbitlist)
+				satsolv_delv2time(sat, didx, t, vbitlist)
 
 			satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
 
