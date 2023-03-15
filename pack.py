@@ -3745,6 +3745,24 @@ def satsolv_nand1(var1, var2, result=None):
 
 
 ##-----------------------------------------
+## raw clauses for two-input OR
+##
+## returns assigned variable and clauses
+## TODO: sync assign-in results, then adapt to that
+##
+def satsolv_or1(var1, var2, result):
+	return result, [
+#		[ ' ', var1, ' ', var2, '-', result ],
+#		[ '-', var1, ' ', result,           ],
+#		[ '-', var1, ' ', result,           ],
+
+		f' {var1} {var2} -{result}',
+		f'-{var1} {result}',
+		f'-{var2} {result}',
+	]
+
+
+##-----------------------------------------
 ## sample: A; B; N = A | B
 ##     1) A | B | not(N)             N -> (A | B)
 ##     2) not(A) | N       together: (A | B) -> N
@@ -3759,6 +3777,7 @@ def satsolv_or(base, vars, result=None):
 	if result == None:
 		result = base + sNALL0
 
+## see also: satsolv_or1()
 	all = list((base +b)  for b in  v)
 	all.append(f'-{ result }')
 		##
@@ -3861,15 +3880,33 @@ def satsolv_strings2ints(vars, values=None, first=1):
 
 
 ##-----------------------------------------
-## Return 'commander variables', newly added (commander) variables,
+def satsolv_new_varname(nr=0):
+	return f'{ sSAT_2ND_VAR }{ nr +1 }'
+
+
+##-----------------------------------------
+## partition l into (roughly) k-sized parts
+##
+## in Python v3.12+, this will be itertools.batched()
+##
+def list2split(l, k):
+	return [l[ i*k : (i+1)*k ]
+		for i in range((len(l) +k -1) // k)]
+
+
+##-----------------------------------------
+## Return '(top-level) commander variable', newly added (commander) variables,
 ## related additional clauses, and comments documenting the collection.
 ##
 ## The first element of the commander-variable array is true if and only
 ## exactly one of 'vars' (variable-name) inputs is True.
 ##
 ## commander variables are named 'CMDR...'; prefix MUST NOT be used by others
+## TODO: current form restricted to a binary tree
+##       may specialize if truth table generator for k>2 fanout is available
 ##
-## 'nr' is the number of defined variables, incl. current inputs
+## 'nr' is the number of defined additional variables, incl. current inputs
+## (used in assigning IDs to intermediate ones)
 ##
 ## see
 ## Kliebert, Kwon: Efficient CNF encoding for selecting 1 of N objects,
@@ -3877,42 +3914,92 @@ def satsolv_strings2ints(vars, values=None, first=1):
 ##     2007_efficient-cnf-encoding-for-selecting-1.pdf
 ## [accessed 2023-02-24]
 ##
-def satsolv_1n(vars, nr=0):
+def satsolv_1n(vars, nr=0, allow0=False, result=None):
 	if vars == []:
 		raise ValueError("called with empty variable list")
 
+	##-----  trivial special cases  --------------------------------------
 	if len(vars) == 1:
 		return vars[0], [], [], ''
 
-			## set newvar and cls to newly added variables +
-			## their clauses
-			## lf, rg are command variables of layers below
+	if len(vars) == 2:              ## -> A XOR B  or  A NAND B (if allow-0)
+		cmd = result  if result  else f'{ sSAT_2ND_VAR }{ nr +1 }'
 
-	if len(vars) == 2:
-		lf, rg, newvar, addval, cls = vars[0], vars[1], [], 0, []
+		if allow0:
+			cls, _, _ = satsolv_nand1(vars[0], vars[1], result=cmd)
+			cmt = f'at-most-1({cmd}) => ({vars[0]} NAND {vars[1]})'
 
+		else:
+			cls, _, _ = satsolv_xor1(vars[0], vars[1], result=cmd)
+			cmt = f'at-most-1({cmd}) => ({vars[0]} XOR {vars[1]})'
+
+		return cmd, [ cmd, ], cls, cmt
+
+	##--------------------------------------------------------------------
+## TODO: should be factored out, since other expressions may reuse
+##       hierarchical grouping+var.assignment
+
+			## recurse: build bottom-up grouping
+			## 1st level: groups of original inputs
+			## 2nd level: commander variables of 1st level groups...
+
+			## TODO: fixed to fanout of 2
+	grps  = list2split(vars, 2)
+	grps0 = grps[:]    ## originals; allow modification of grps[]
+
+	assign, newvar = [], []
+			## assign[] collects [ ...group..., [ cmd.var ] ] list,
+			## in assignment (bottom up) order
+	cls = []
+
+			## if a variable is alone in its group,
+			## propagate it directly up.  in this case, the
+			## originating group remains empty, and we only
+			## store  [ [], [ ...variable... ] ] to assign
+	while grps:
+		curr = []
+		for g in grps:
+			if len(g) == 1:
+				assign.append([ [], g[0] ])
+				curr.append( g[0] )
+				continue
+
+			nv = satsolv_new_varname(nr +len(newvar) +1 )
+			newvar.append(nv)
+			assign.append([ g, nv, ])
+			curr.append(nv)
+
+		if len(curr) == 1:
+			break
+		grps = list2split(curr, 2)   ## advance to next level
+
+	if result:
+		assign[-1][-1] = result      ## caller-supplied top var.name
+		newvar.pop(-1)               ## was last new-var appended, undo
 	else:
-		half   = len(vars) // 2
-		lf, rg = vars[ :half ], vars[ half: ]
+		result = assign[-1][-1]
 
-		lf, newvar, cls, _ = satsolv_1n(lf, nr)
-		rg,  nvar2, cl2, _ = satsolv_1n(rg, nr+len(newvar))
+					## commander conditions, see section 2
+					##
+					## these conditions essentially simplify
+					## to NAND/OR primitives' clauses,
+					## for fanout k=2
+	cls = []
+	for a in assign:
+		c, sub = a[-1], a[-2]
+		assert(len(sub) <= 2)   ## in case increasing fanout, but
+		                        ## forgetting to update something...
+		if sub == []:           ## non-hierarchical, pass-through var
+			continue
 
-		newvar += nvar2
-		cls    += cl2
+		_, c2 = satsolv_or1(sub[-2], sub[-1], c)
+		cls.extend(c2)
+					## both sub-variables may not be True
+		cls.append( f'-{sub[-2]} -{sub[-1]}' )
 
-	cmd = f'{ sSAT_2ND_VAR }{ nr +len(newvar) +1 }'
-	newvar.insert(0, cmd)
-
-	cls.extend([                         ## truth table for "{lf} XOR {rg}"
-		f' {lf}  {rg} -{cmd}',
-		f'-{lf}  {rg}  {cmd}',
-		f' {lf} -{rg}  {cmd}',
-		f'-{lf} -{rg} -{cmd}',
-	])
 	varlist = ",".join(vars)
 
-	return cmd, newvar, cls, f'1-of-N: ({ cmd }) for ({ varlist })'
+	return result, newvar, cls, f'1-of-N: ({ result }) for ({ varlist })'
 
 
 ##-----------------------------------------------------------
