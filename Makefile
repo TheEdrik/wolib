@@ -39,15 +39,28 @@ packnroute.txt:  $(ORDERS)  $(BASEXY_C)  $(DISTANCES)
 		./pack.py  $(ORDERS) n=$(R) | tee $@
 
 
+##--------------------------------------
+## (1) extract SAT-solver input from pack-and-route log
+## (2) pass through solver
+## (3) match solver variables to original symbolic forms (which are stored
+##     as comments in solver input)
+##
+sat: packnroute.txt
+	grep SAT= $^ | sed 'sQSAT=QQ'      > p.sat
+	time cryptominisat5 --verb 2 p.sat | tee p.solv
+	dev/sat2back.py p.sat p.solv       | tee pnr.log 
+
+
 $(BASEXY_C): $(BASEXY)
 	$(shell tr '\t' , < $^ > $@)
 
 
 ##--------------------------------------
-CLEAN := packnroute.txt
+CLEAN := packnroute.txt p.sat p.solv pnr.log
 
 clean: $(wildcard $(CLEAN))
 	$(RM) $(wildcard $(CLEAN))
 
-.PHONY: clean
+
+.PHONY: clean sat
 .PRECIOUS: packnroute.txt

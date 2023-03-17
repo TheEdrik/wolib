@@ -6,7 +6,12 @@ bases*.txt
 orders*txt
 r/
 *.time
+dist*.json
 a
 a1
-packnroute.txt
-
+packnroute*.txt
+a.*
+a[0-9].*
+p.*
+pnr.log
+ 
