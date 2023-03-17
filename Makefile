@@ -44,11 +44,13 @@ packnroute.txt:  $(ORDERS)  $(BASEXY_C)  $(DISTANCES)
 ## (2) pass through solver
 ## (3) match solver variables to original symbolic forms (which are stored
 ##     as comments in solver input)
+## (4) extract directly schedule-relevant variables
 ##
 sat: packnroute.txt
-	grep SAT= $^ | sed 'sQSAT=QQ'      > p.sat
-	time cryptominisat5 --verb 2 p.sat | tee p.solv
-	dev/sat2back.py p.sat p.solv       | tee pnr.log 
+	grep SAT= $^ | sed 'sQSAT=QQ'           > p.sat
+	time cryptominisat5 --verb 2 p.sat      | tee p.solv
+	dev/sat2back.py p.sat p.solv            | tee pnr.log 
+	grep -v -e ' NV' -e _x_ -e _nn_ pnr.log | tee pnr2.log
 
 
 $(BASEXY_C): $(BASEXY)
@@ -56,7 +58,7 @@ $(BASEXY_C): $(BASEXY)
 
 
 ##--------------------------------------
-CLEAN := packnroute.txt p.sat p.solv pnr.log
+CLEAN := packnroute.txt p.sat p.solv pnr.log pnr2.log
 
 clean: $(wildcard $(CLEAN))
 	$(RM) $(wildcard $(CLEAN))
