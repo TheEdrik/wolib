@@ -10,40 +10,54 @@ import re, sys
 ## evaluating expression in loop
 ##
 ## available functions:
-##     AND, OR, NAND, NOR, XOR, XNOR
-##     1OFN      (or 1-of-N)
-##     MAX1OFN   (or MAX-1-of-N)
-##     LESSTHAN  (or LESS-THAN)    -- compares N-bit combinations <= 'limit'
+##   AND, OR, NAND, NOR, XOR, XNOR
+##   1OFN         (or 1-of-N)
+##   MAX1OFN      (or MAX-1-of-N)
+##   LESSTHAN     (or LESS-THAN) -- compares N-bit combinations < 'limit'
+##   LESSTHAN-NZ  (or LESS-THAN-NZ)
+##                               -- is 0 < N-bit combinations < 'limit'
+##   LT          2x N-bit values -- A < B ?
+##   LE          2x N-bit values -- A <= B ?
 ##
-##     DIFFER                      -- feed even nr. of bits, used as 2x N/2
-##                                 -- as nr1, nr2, respectively
-##                                 -- evaluate nr1 != nr2
-##     DIFFER-OR-0                 -- as with DIFFER, but true if
-##                                 -- either nr1 or nr2 are all-0
-##     DIFFER-AND-NOT-0            -- as with DIFFER, but false if
-##                                 -- either nr1 or nr2 are all-0
+##   DIFFER                      -- feed even nr. of bits, used as 2x N/2
+##                               -- as nr1, nr2, respectively
+##                               -- evaluate nr1 != nr2
+##   DIFFER-OR-0                 -- as with DIFFER, but true if
+##                               -- either nr1 or nr2 are all-0
+##   DIFFER-AND-NOT-0            -- as with DIFFER, but false if
+##                               -- either nr1 or nr2 are all-0
 ##
 ## with cnf>0, outputs directly CNF-usable form, with first variable
 ## set to 'cnf'
 ##
 def truthtable(fn, n, vars='v', limit=0, cnf=0):
-	fn  = fn.upper()
-	res = []
+	fn   = fn.upper()
+	res  = []
+	is2x = ((fn == 'LT') or (fn == 'LE'))
 
-	if (fn == 'LESSTHAN') or (fn == 'LESS-THAN'):
+	if ((fn == 'LESSTHAN') or (fn == 'LESS-THAN') or
+	    (fn == 'LESSTHAN-NZ') or (fn == 'LESS-THAN-NZ')):
 		if limit < 1:
 			raise ValueError("upper limit must be >0")
 		if limit >= (1 << n):
 			raise ValueError(f"upper limit must be over {n} bits")
+
+	if is2x:
+		n += n
 
 	if (fn == 'DIFFER') or (fn == 'DIFFER-OR-0'):
 		if n % 2:
 			raise ValueError(f"DIFFER needs even nr. of bits")
 
 	for v in range(1 << n):
-		vb = list(int(b)  for b in f'{ v :0{n}b}')
+		vb0s = f'{ v :0{n}b}'
+		vb   = list(int(b)  for b in vb0s)
 
 		nr1, nr2 = vb[ :n//2 ], vb[ n//2: ]     ## 2x halves
+
+		if is2x:
+			vms, vls = vb0s[ : n//2 ], vb0s[ n//2 : ] ## most+least
+			vb,  v2b = vb[ : n//2 ],   vb[ n//2 : ]
 
 		if fn == 'XOR':
 			r = sum(vb) & 1
@@ -65,6 +79,13 @@ def truthtable(fn, n, vars='v', limit=0, cnf=0):
 			r = 1  if (sum(vb) <= 1)  else 0
 		elif (fn == 'LESSTHAN') or (fn == 'LESS-THAN'):
 			r = (v < limit)
+		elif (fn == 'LESSTHAN-NZ') or (fn == 'LESS-THAN-NZ'):
+			r = (0 < v < limit)
+
+		elif (fn == 'LT'):
+			r = 1  if (vms < vls)  else 0
+		elif (fn == 'LE'):
+			r = 1  if (vms <= vls)  else 0
 
 		elif (fn == 'DIFFER'):
 			r = (nr1 != nr2)
@@ -83,6 +104,8 @@ def truthtable(fn, n, vars='v', limit=0, cnf=0):
 
 		r = 1  if r  else 0            ## allow Boolean etc. from cases
 
+		if is2x:
+			vb.extend(v2b)
 		vb.append(r)
 
 		if cnf > 0:
@@ -172,17 +195,6 @@ def satsolv_xor1(var1, var2, result=None, negate=False):
 
 	cls = satsolv_xor1_clauses(var1, var2, result, negate=negate)
 
-##	if negate:                     ## X(N)OR only swap truth table polarity
-##		pol = [ ' ', '-', '-', ' ', ]
-##	else:
-##		pol = [ '-', ' ', ' ', '-', ]
-##
-##	cls.extend([
-##		f' {var1}  {var2} { pol[0] }{ result }',
-##		f'-{var1}  {var2} { pol[1] }{ result }',
-##		f' {var1} -{var2} { pol[2] }{ result }',
-##		f'-{var1} -{var2} { pol[3] }{ result }',
-##	])
 	negstr = 'NOT'  if negate  else ''
 
 	return cls, result, f'{ result } := { negstr }({var1} XOR {var2})'
@@ -546,6 +558,14 @@ if __name__ == '__main__':
 	print(" ".join(str(v) for v in truthtable('XOR',  4, cnf=1)))
 	print(" ".join(str(v) for v in truthtable('LESS-THAN', 5, limit=24)))
 	print(" ".join(str(v) for v in truthtable('LESS-THAN', 5, limit=24, cnf=1)))
+	print(" ".join(str(v) for v in truthtable('LESS-THAN-NZ', 5, limit=24)))
+	print(" ".join(str(v) for v in truthtable('LESS-THAN-NZ', 5, limit=24, cnf=1)))
+	print(" ".join(str(v) for v in truthtable('LE', 3)))
+	print(" ".join(str(v) for v in truthtable('LE', 4)))
+	print(" ".join(str(v) for v in truthtable('LE', 5)))
+	print(" ".join(str(v) for v in truthtable('LT', 3)))
+	print(" ".join(str(v) for v in truthtable('LT', 4)))
+	print(" ".join(str(v) for v in truthtable('LT', 5)))
 	print(" ".join(str(v) for v in truthtable('DIFFER', 8)))
 	print(" ".join(str(v) for v in truthtable('DIFFER-OR-0', 8)))
 	print(" ".join(str(v) for v in truthtable('DIFFER-AND-NOT-0', 8)))
