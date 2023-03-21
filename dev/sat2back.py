@@ -2,8 +2,13 @@
 
 ## turn back standalone SAT-solver output to packer-readable form
 ##
+## sanity-checks values if 'VERIFY' is presnt in environment
+## reverses to human-readable schedule form for variables
+## in canonical form
+## see satsolv_var_name() in pack.py for variable-naming rules
+##
 ## requires pack-and-route result (for variable/name mappings) and
-## SAT solver DIMACS output
+## SAT solver DIMACS-formatted result
 ##
 ## see satsolv_report() in pack-and-route for formatting. we extract
 ## the VARIABLES section:
@@ -42,7 +47,7 @@
 ##
 ## Author: Visegrady, Tamas  <tamas.visegrady@gmail.com>
 
-import re, sys, fileinput
+import re, sys, os, fileinput
 
 
 ##-----------------------------------------
@@ -162,6 +167,182 @@ def satsolv_ints2strings(vars, lut):
 
 
 ##-----------------------------------------------------------
+## capture patterns
+##
+## all feature 'delivery'
+## the patterns are redundant; please do not comment on it
+##
+## delivery, time unit (del, t)
+reDT = re.compile('^ d (?P<del>\d+) t (?P<t>\d+) $', re.VERBOSE)
+##
+## delivery, vehicle-ID bit (del, bit)
+reDV = re.compile('^ d (?P<del>\d+) v (?P<bit>\d+) $', re.VERBOSE)
+##
+## delivery, time, vehicle-ID bit (del, t, bit)
+reDTV = re.compile('^ d (?P<del>\d+) t (?P<t>\d+) v (?P<bit>\d+) $',
+                   re.VERBOSE)
+
+
+##-----------------------------------------------------------
+## locate variables in known-canonical form; turn them back to
+## schedule-relevant inputs
+##
+## returns dicts (see list in end); no consistency checking yet
+##
+## input is { 'name': Boolean } dictionary
+##
+def solv2vars(res):
+	delvs, tunits, vbits = {}, {}, {}           ## list of all D,T,V's seen
+	dtvs = {}           ## [ delivery ][ time  ][ v.bit ]
+	dts  = {}           ## [ delivery ][ time  ]
+	dvs  = {}           ## [ delivery ][ v.bit ]
+						## captured individually
+						## cross-checked in the end
+
+	for r in res:
+		d, t, v = None, None, None
+		value = res[r]
+
+		while True:                         ## break from first capture
+			dtv = re.match(reDTV, r)
+			if dtv:
+				d, t = dtv.group('del'), dtv.group('t')
+				v    = dtv.group('bit')
+				break
+
+			dt = re.match(reDT, r)
+			if dt:
+				d, t = dt.group('del'), dt.group('t')
+				break
+
+			dv = re.match(reDV, r)
+			if dv:
+				d, v = dv.group('del'), dv.group('bit')
+				break
+
+			break
+
+		if (d == None) and (t == None) and (v == None):
+			continue
+
+		d = int(d)                        ## delivery is always present
+		if t != None:
+			t = int(t)
+		if v != None:
+			v = int(v)
+
+		delvs[ d ] = 1
+
+		if (not d in dtvs):
+			dtvs[ d ] = {}
+		if (not d in dts):
+			dts[ d ] = {}
+		if (not d in dvs):
+			dvs[ d ] = {}
+
+		if t != None:
+			tunits[ t ] = 1
+			if (not t in dts[d]):
+				dts[d][t] = {}
+
+			if v != None:
+				if (not t in dtvs[d]):
+					dtvs[d][t] = {}
+				if (not v in dtvs[d][t]):
+					dtvs[d][t][v] = value
+
+		if v != None:
+			vbits[ v ] = 1
+			if (not v in dvs[d]):
+				dvs[d][v] = value
+
+		continue
+
+	return {
+		'delv-time':     dts,
+		'delv-vid':      dvs,
+		'delv-time-vid': dtvs,
+	}
+
+
+##--------------------------------------
+## collapse full-range lists to START..END
+## expect to run on reasonably short lists of integers
+## returns pretty-print string
+##
+def list2str(lst):
+	arr = list(sorted(lst))
+
+	minv, maxv = arr[0], arr[-1]
+
+	if (maxv - minv) == len(arr) -1:
+		return f"{ minv }..{ maxv }"
+	else:
+		return ",".join(str(v)  for v in arr)
+
+
+##--------------------------------------
+## is the recovered set of dicts-of-variables consistent?
+## excepts if arrays are trivially malformed
+##
+def vars2check(dicts):
+	delvs = sorted(dicts[ 'delv-time' ].keys())
+
+				## explode if not reading all cross-lists
+				## each dict indexes (full list of) deliveries
+
+	if delvs != sorted(dicts[ 'delv-vid' ].keys()):
+		raise ValueError("delv.list(vehicle IDs) != delv.list(time)")
+
+	if delvs != sorted(dicts[ 'delv-time-vid' ].keys()):
+		raise ValueError("delv.list(vehicle IDs) != " +
+					"delv.list(delivery+time)")
+
+	tunits, vbits = {}, {}
+	for d in delvs:
+		for t in dicts[ 'delv-time' ][ d ]:
+			tunits[ t ] = 1
+	tunits = list(sorted(tunits.keys()))
+
+					## all vehicle-ID bits must be
+					## present in each delv x time pair
+					## pick arbitrary row to check size
+	tsample = list( dicts[ 'delv-time-vid' ][ delvs[0] ].keys() )[0]
+					##
+	vbitcount = len(dicts[ 'delv-time-vid' ][ delvs[0] ][ tsample ])
+
+					## every delv x time pair MUST specify
+					## this number of vehicle-ID bits
+	dtv = dicts[ 'delv-time-vid' ]
+
+	for d in delvs:
+		for t in dtv[ d ]:
+			if vbitcount != len(dtv[ d ][ t ]):
+				actual = len(dtv[ d ][ t ])
+				raise ValueError("inconsistent nr. of "
+				      f"vehicle-ID bits: DELV={d},TIME={t} " +
+				      f" ({actual} vs. expected {vbitcount})")
+
+		for vb in dtv[ d ][ t ].keys():
+			vbits[ vb ] = 1
+
+	vbits = list(sorted(vbits.keys()))
+
+	print(f"DELV.LIST={ list2str(delvs) }")
+	print(f"TIME.UNITS={ list2str(tunits) }")
+	print(f"VEHICLE.ID.BITS={ list2str(vbits) }")
+
+			## vehicle ID rows MUST be all-False, except for
+			## one time unit, for each delivery
+
+
+##--------------------------------------
+def verify(res):
+	v = solv2vars(res)
+	vars2check(v)
+
+
+##-----------------------------------------------------------
 if __name__ == '__main__':
 	if len(sys.argv) < 2:
 		sys.stderr.write(
@@ -196,4 +377,7 @@ if __name__ == '__main__':
 
 	for r in sorted(res.keys()):
 		print(f'  { r }: { res[r] }')
+
+	if 'VERIFY' in os.environ:
+		verify(res)
 
