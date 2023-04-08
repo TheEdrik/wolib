@@ -46,12 +46,18 @@ packnroute.txt:  $(ORDERS)  $(BASEXY_C)  $(DISTANCES)
 ##     as comments in solver input)
 ## (4) extract directly schedule-relevant variables
 ##
+## with intermediate/partial input, there may be missing variables
+## or clauses.  kissat, as an example, requires the '--relaxed' flag
+## to process such incomplete input.  (cryptominisat does not.)
+##
 sat: packnroute.txt
-	grep SAT= $^ | sed 'sQSAT=QQ'           > p.sat
-	time cryptominisat5 --verb 2 p.sat      | tee p.solv
-	dev/sat2back.py p.sat p.solv            | tee pnr.log 
+	grep ^SAT= $^ | sed 'sQSAT=QQ'          > p.sat
+	kissat --relaxed -s -v -v p.sat         | tee p.solv
+	dev/sat2back.py p.sat p.solv            | tee pnr.log
 	grep -v -e ' NV' -e _x_ -e _nn_ pnr.log | tee pnr2.log
 
+## cryptominisat invocation above:
+## time cryptominisat5 --verb 2 p.sat      | tee p.solv
 
 $(BASEXY_C): $(BASEXY)
 	$(shell tr '\t' , < $^ > $@)
@@ -66,3 +72,4 @@ clean: $(wildcard $(CLEAN))
 
 .PHONY: clean sat
 .PRECIOUS: packnroute.txt
+
