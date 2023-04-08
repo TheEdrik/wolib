@@ -653,6 +653,17 @@ def env2num(key, default=None, expect_float=False):
 
 
 ##--------------------------------------
+## returns 'defval' if key is not present in dict
+## defaultdict() inl
+##
+def dict2val(d, key, defval=None):
+	return  d[key]  if (key in d)  else defval
+##
+## TODO: deduplicate (if there is an alternative)
+## TODO: use for preexisting 'check-for-default' conditional expressions
+
+
+##--------------------------------------
 def sgn(v1, v2):
 	"sign of v1-v2"
 	return (v2 < v1) - (v1 < v2)
@@ -1068,7 +1079,8 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##     'minutes':  actual arrival, 0-based minutes from vHR_MIN:00
 ##     'vehicle':  ...vehicle ID...
 ##     'vehicle_may': bitmask of vehicles which may be assigned
-##                    -1 if any vehicle may deliver
+##                    -1 if any vehicle may deliver (which would be
+##                    understood as default if key is missing)
 ##     'time2vec': 0x1e78,
 ##                  --        0001'1110'0111'1000
 ##                  --             ^ ^  ^  ^  ^ ^
@@ -1823,8 +1835,22 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##     'vehicle': vehicle ID,
 ##     'minute':  ...arrival time...
 ## }
+## 'VEHICLE2TIME': {              ## which is not a valid (numeric) delivery ID
+##                                ## see tVID2TIME as symbolic key
+##   'vehicle ID': [
+##     {
+##       'delivery': delivery ID,
+##       'minute':  ...arrival time...
+##     }
+##   ]
+## ]
+##
+## redundant, to simplify both vehicle-counting and delivery-sorting use
 ##
 ## MUST be consistent with 'stops' of delivering vehicles
+
+tVID2TIME = 'VEHICLE2TIME'               ## 
+
 
 
 ##--------------------------------------
@@ -1852,7 +1878,7 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ## TODO: stops/deliveries/arrivals together are redundant
 ##       (they evolved from different sub-functions, and converged)
 ##       when we finalize sorting code, remove the then-unused one
-##       note: time-based sorting 
+##       note: time-based sorting
 ##
 ##    'checked':    -- dictionary of new routes (ID+time strings);
 ##                  -- appended when new route is being explored
@@ -1901,7 +1927,7 @@ def vehicle2primary(vehicle):
 ##         settings, units are sufficiently granular that not more than
 ##         one delivery may be scheduled to them. this might change with
 ##         multi-delivery batches, which we do not currently support.)
-## 
+##
 ## design decisions:
 ##   - one-hot encoding of vehicle IDs would be counterproductive. less
 ##     variables and more bitwise comparisons appear to
@@ -3192,10 +3218,26 @@ def delv_arrival_status(vid, arrival_minute):
 
 
 ##--------------------------------------
-## sets Delivery Arrival Status
+## sets Delivery Arrival Status for delivery 'id', vehicle ID 'vid'
 ##
 def register_arrival(arrivals, id, vid, arrival_minute):
 	assert(arrivals != None)
+
+	if not tVID2TIME in arrivals:
+		arrivals[ tVID2TIME ] = {}
+
+	if not vid in arrivals[ tVID2TIME ]:
+		arrivals[ tVID2TIME ][ vid ] = {}
+
+## TODO: check for final assignments
+## intermediate search MAY legitimately assign inconsistent values
+## while searching
+##	if id in arrivals[ tVID2TIME ][ vid ]:
+##		if arrivals[ tVID2TIME ][ vid ][ id ] != arrival_minute:
+##			raise ValueError(f"inconsistent vehicle/id/arrival "
+##					"combination vid={vid},delv={id}")
+##	else:
+	arrivals[ tVID2TIME ][ vid ][ id ] = arrival_minute
 
 	arrivals[ id ] = delv_arrival_status(vid, arrival_minute)
 
@@ -4042,9 +4084,27 @@ def satsolv_1ofn(sat, vars):
 
 
 ##-----------------------------------------------------------
+## vehicle bitmask intersection: common subset of allowed-vehicle
+## bitmasks for two deliveries
+##
+## returns >0  if there is overlap in possible-vehicle sets for both
+##         0   if anything fails (which SNH)
+##
+def common_vehicles(delvs, d1idx, d2idx):
+	if (not delvs) or (d1idx in delvs) or (d2idx in delvs):
+		return 0
+
+	mask1 = dict2val(delvs[ d1idx ], 'vehicle_may', -1)
+	mask2 = dict2val(delvs[ d2idx ], 'vehicle_may', -1)
+
+	return (mask1 & mask2)
+
+
+##-----------------------------------------------------------
 ## cross-delivery dependencies:
 ##
-##   1) enumerate all (delivery, time unit) pairs
+##   1) enumerate all (delivery, time unit) pairs, which have a possibly
+##      overlapping set of vehicles
 ##
 ##   2) register variable for each of <dXX tYY v0..vZ> with 0..Z encoding
 ##      the delivering vehicle (0: no delivery, 1..N: vehicle N, >N: invalid);
@@ -4110,6 +4170,10 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 				f"Is this the right lookup table? (Y={d2} "
 				f"vs. { len(dist[ 'time' ][ d1 ]) })")
 
+		if (common_vehicles(delvs, d1i, d2i) == 0):
+			## TODO: log
+			continue
+
 		d12mins =  dist[ "time" ][ d1 ][ d2 ]
 		d12mins += vTIME_DELIVER_MIN
 
@@ -4128,7 +4192,7 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 					## units MUST be prohibited for
 					## the same vehicle, since d1->d2 or
 					## d2->d1 traversal would violate
-					## timing constraint. 
+					## timing constraint.
 
 					## all time-vector bits which
 					## collide with this (d1, tu),
@@ -4302,6 +4366,165 @@ def satsolv_add_delvs1(sat, dvars, delv):
 
 
 ##--------------------------------------
+## after timeout, solve the rest through SAT
+##
+## 'vroute' is already assigned delivery routes (see VRoute)
+## 'sat_vehicles' is the nr. of vehicles for remaining/SAT processing
+##
+def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
+	if (not use_satsolver()) or sat == None:
+		return
+
+	if not tVID2TIME in arrivals:
+		raise ValueError("arrival plan lacks vehicle-to-time field")
+
+	if not xy2dist_table:
+ 		terminate("SAT solver requires XY-to-distance DB")
+
+	vids_assigned = sorted(arrivals[ tVID2TIME ].keys())
+		##
+	print(sSATCOMMENT +'pre-SAT vehicles assigned ' +
+		f'[{ len(vids_assigned) } total]: ' +
+		",".join(vids_assigned))
+
+	sat_vehicles = max_vehicles - len(vids_assigned)
+
+	print(sSATCOMMENT +f'max. number of vehicles: { max_vehicles } ' +
+		f"({ sat_vehicles :+})")
+
+	if sat_vehicles < 0:
+		raise ValueError("too many vehicles already assigned: " +
+			f"{ max_vehicles } expected, { len(vids_assigned) } " +
+			"already allocated")
+
+	if sat_vehicles <= 0:
+		return
+				## keep <= comparison, in case above exception
+				## picks up additional condition usw.
+
+				## deliveries left for the SAT solver
+				##
+	sdels = list(sorted(d['index']  for d in delvs
+	                    if (not d['index'] in arrivals)))
+	if sdels == []:
+		print(sSATCOMMENT +"no deliveries left for SAT solver")
+		return
+
+	print(sSATCOMMENT +f'deliveries remaining [{ len(sdels) } total]: ' +
+		(",".join(str(s) for s in sdels)))
+
+	satvbits   = satsolve_vidx_bits(sat_vehicles)
+	satvbitnrs = list(range(satvbits))                  ## 0..N-1, integers
+				##
+				## width of representation for index(vehicle)
+				## incl. an all-0 entry marking
+				## 'no vehicle assigned'
+
+	debugmsg(f'## SAT.VEHICLES={ sat_vehicles }', 1)
+	debugmsg(f'## SAT.VEHICLE.ID.BITS={ satvbits }', 1)
+
+	satsolv_add_comment(sat, f'using { sat_vehicles } SAT vehicles, ' +
+				f'encoded as { satvbits } bits')
+	satsolv_add_comment(sat, f'all-00 SAT-vehicle ID: not (yet?) assigned')
+
+	dts = { }                   ## full list of (delivery, time unit) pairs
+
+ 	##-----  SAT-pairs list  ---------------------------------------------
+	## check for conflicting delivery/time unit/vehicle assignments
+
+	vbitlist = range(satvbits)      ## bit indexes for vehicle IDs
+ 	                                ## v0..v(N-1) in descriptions
+
+	for sd in sdels:
+		d = delvs[sd]                      ## current delivery's struct
+		t = d[ "time2vec" ]
+				##
+		dts[ d[ "index" ] ] = {
+			"t":  t,
+			"tu": list( timevec2units(t) ),
+		}
+
+	for sd in sdels:
+		d = delvs[sd]                      ## current delivery's struct
+		dvars = []
+		didx  = d[ "index" ]
+
+		tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
+		for t in tu:
+			tb = timevecbit2offset(t)
+			tbits.append(tb)
+
+			dvars.append(satsolv_add_delvtime(sat,
+			             didx, tb))
+
+			for v in satvbitnrs:
+				satsolv_add_delvtime(sat,
+				             didx, tb, vnumber=v)
+
+		satsolv_add_delvs1(sat, dvars, d)
+
+		for t in tbits:
+			satsolv_delv2time(sat, didx, t, vbitlist)
+
+		satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
+
+	satsolv_delv_window_2x_deps(sat, delvs, xy2dist_table,
+	                            dts, sat_vehicles)
+
+##
+## 	del(dts)
+## 	##-----  /SAT-pairs list  --------------------------------------------
+
+## RRR
+## 		for d in dels:
+## 			dvars = []
+## 			didx  = d[ "index" ]
+## ## TODO: retrieve from above table, now that we populate it
+##
+## 				## register dXXtYY and dXXtYYvZZ
+## 				##   - delivery XX, time unit YY
+## 				##   - delivery XX, time unit YY,
+## 				##     vehicle-ID ZZ
+## 				## 'vehicle ZZ' covers bits, not counters
+## 				## (binary-encoded index of vehicle assigned)
+## 				##
+## 				## with 4 vehicles, v0 and v1; variables:
+## 				##     dXX-tYY-v0
+## 				##     dXX-tYY-v1
+## 				## combinations of v0+v1 used to count
+## 				## (1-based) delivery index
+##
+## 			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
+##
+## 			for t in tu:
+## 				tb = timevecbit2offset(t)
+## 				tbits.append(tb)
+##
+## 				dvars.append(satsolv_add_delvtime(sat,
+## 				             didx, tb))
+##
+## 				for v in satvbitnrs:
+## 					satsolv_add_delvtime(sat,
+## 					             didx, tb, vnumber=v)
+##
+## 			satsolv_add_delvs1(sat, dvars, d)
+##
+## 			for t in tbits:
+## 				satsolv_delv2time(sat, didx, t, vbitlist)
+##
+## 			satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
+##
+## 		satsolv_delv_window_2x_deps(sat, dels, xy2dist_table,
+## 		                            dts, satvcount)
+##
+## 	del(dts)
+## 	##-----  /SAT-pairs list  --------------------------------------------
+
+# RRR
+	print('## xxx.SAT', sat)
+
+
+##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
 ##
@@ -4385,17 +4608,23 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	##-----  tstart is after nr-of-units(BFD) calc  ----------------------
 
 	satvcount  = satsolv_vehicle_count(len(bfds))
-	satvbits   = satsolve_vidx_bits(satvcount)
-	satvbitnrs = list(range(satvbits))                  ## 0..N-1, integers
-				##
-				## width of representation for index(vehicle)
-				## incl. an entry marking 'no vehicle assigned'
+				## incl. any additional slack for lower
+				## limit inferred from BFD assignment vehicles
 
-	if use_satsolver():
-		debugmsg(f'## SAT.VEHICLES={ satvcount }', 1)
-		satsolv_add_comment(sat, f'using { satvcount } vehicles, ' +
-				f'encoded as { satvbits } bits')
-		satsolv_add_comment(sat, f'  all-00: not (yet?) assigned')
+## TODO: moved all to satsolv_rest(); no longer used in main flow
+##	satvbits   = satsolve_vidx_bits(satvcount)
+##	satvbitnrs = list(range(satvbits))                  ## 0..N-1, integers
+##				##
+##				## width of representation for index(vehicle)
+##				## incl. an all-0 entry marking
+##				## 'no vehicle assigned'
+##
+##	if use_satsolver():
+##		debugmsg(f'## SAT.VEHICLES={ satvcount }', 1)
+##		satsolv_add_comment(sat, f'using { satvcount } vehicles, ' +
+##				f'encoded as { satvbits } bits')
+##		satsolv_add_comment(sat, f'  all-00: not (yet?) assigned')
+
 
 	##=====  v1:  ========================================================
 	## greedy-assign routes for one vehicle at a time, in a BFD fashion:
@@ -4412,69 +4641,70 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 	dels = copy.deepcopy(aux)
 
-	##-----  SAT-pairs list  ---------------------------------------------
-				## full list of (delivery, time unit) pairs
-	dts = { }
-
-	##-----  store delivery/time variables
-	if use_satsolver():
-		if not xy2dist_table:
-			terminate("SAT solver requires XY-to-distance DB")
-
-		for d in dels:
-			t = d[ "time2vec" ]
-					##
-			dts[ d[ "index" ] ] = {
-				"t":  t,
-				"tu": list( timevec2units(t) ),
-			}
-
-		vbitlist = range(satvbits)      ## bit indexes for vehicle IDs
-		                                ## v0..v(N-1) in descriptions
-
-		for d in dels:
-			dvars = []
-			didx  = d[ "index" ]
-## TODO: retrieve from above table, now that we populate it
-
-				## register dXXtYY and dXXtYYvZZ
-				##   - delivery XX, time unit YY
-				##   - delivery XX, time unit YY,
-				##     vehicle-ID ZZ
-				## 'vehicle ZZ' covers bits, not counters
-				## (binary-encoded index of vehicle assigned)
-				##
-				## with 4 vehicles, v0 and v1; variables:
-				##     dXX-tYY-v0
-				##     dXX-tYY-v1
-				## combinations of v0+v1 used to count
-				## (1-based) delivery index
-
-			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
-
-			for t in tu:
-				tb = timevecbit2offset(t)
-				tbits.append(tb)
-
-				dvars.append(satsolv_add_delvtime(sat,
-				             didx, tb))
-
-				for v in satvbitnrs:
-					satsolv_add_delvtime(sat,
-					             didx, tb, vnumber=v)
-
-			satsolv_add_delvs1(sat, dvars, d)
-
-			for t in tbits:
-				satsolv_delv2time(sat, didx, t, vbitlist)
-
-			satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
-
-		satsolv_delv_window_2x_deps(sat, dels, xy2dist_table,
-		                            dts, satvcount)
-
-	del(dts)
-	##-----  /SAT-pairs list  --------------------------------------------
+## TODO: any pieces not yet in satsolv_rest()?
+## 	##-----  SAT-pairs list  ---------------------------------------------
+## 				## full list of (delivery, time unit) pairs
+## 	dts = { }
+##
+## 	##-----  store delivery/time variables
+## 	if use_satsolver():
+## 		if not xy2dist_table:
+## 			terminate("SAT solver requires XY-to-distance DB")
+##
+## 		for d in dels:
+## 			t = d[ "time2vec" ]
+## 					##
+## 			dts[ d[ "index" ] ] = {
+## 				"t":  t,
+## 				"tu": list( timevec2units(t) ),
+## 			}
+##
+## 		vbitlist = range(satvbits)      ## bit indexes for vehicle IDs
+## 		                                ## v0..v(N-1) in descriptions
+##
+## 		for d in dels:
+## 			dvars = []
+## 			didx  = d[ "index" ]
+## ## TODO: retrieve from above table, now that we populate it
+##
+## 				## register dXXtYY and dXXtYYvZZ
+## 				##   - delivery XX, time unit YY
+## 				##   - delivery XX, time unit YY,
+## 				##     vehicle-ID ZZ
+## 				## 'vehicle ZZ' covers bits, not counters
+## 				## (binary-encoded index of vehicle assigned)
+## 				##
+## 				## with 4 vehicles, v0 and v1; variables:
+## 				##     dXX-tYY-v0
+## 				##     dXX-tYY-v1
+## 				## combinations of v0+v1 used to count
+## 				## (1-based) delivery index
+##
+## 			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
+##
+## 			for t in tu:
+## 				tb = timevecbit2offset(t)
+## 				tbits.append(tb)
+##
+## 				dvars.append(satsolv_add_delvtime(sat,
+## 				             didx, tb))
+##
+## 				for v in satvbitnrs:
+## 					satsolv_add_delvtime(sat,
+## 					             didx, tb, vnumber=v)
+##
+## 			satsolv_add_delvs1(sat, dvars, d)
+##
+## 			for t in tbits:
+## 				satsolv_delv2time(sat, didx, t, vbitlist)
+##
+## 			satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
+##
+## 		satsolv_delv_window_2x_deps(sat, dels, xy2dist_table,
+## 		                            dts, satvcount)
+##
+## 	del(dts)
+## 	##-----  /SAT-pairs list  --------------------------------------------
 
 	##------------------------------
 	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
@@ -4661,6 +4891,10 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				print("TIMED.OUT")
 				report_plan(vcost, vid, marker='?')
 				print("/TIMED.OUT")
+
+						## solve the rest through SAT
+				satsolv_rest(sat, dels, arrivals, vcost,
+				             satvcount, xy2dist_table)
 				satsolv_report(sat)
 				sys.exit(0)
 
@@ -5259,11 +5493,90 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 					## termination condition: 3sec
 		if are_in_timeout(tstart):
 			print("TIMED.OUT")
-			sys.exit(0)
+			break
 
-	tstart = timediff_log_now(tbacktrack0, 'BFD.ASSIGN.ALL')
+	tstart = timediff_log_now(tbacktrack0,
+		'BFD.ASSIGN.ALL'  if done  else 'BFD.ASSIGN.PARTIAL')
 	print('')
 	##=====  /v1  ========================================================
+
+
+	print('xxx', arrivals)
+	sys.exit(0)
+
+		## got initial time plan, covering some subset of vehicles
+		## turn unassigned deliveries and vehicles into SAT solver
+
+ 	##-----  SAT-pairs list  ---------------------------------------------
+ 				## full list of (delivery, time unit) pairs
+	dts = { }
+	sys.exit(0)
+
+	##-----  store delivery/time variables
+	if use_satsolver():
+		if not xy2dist_table:
+			terminate("SAT solver requires XY-to-distance DB")
+
+		for d in dels:
+##		for d in (d  for d in dels  if ):
+			t = d[ "time2vec" ]
+					##
+			dts[ d[ "index" ] ] = {
+				"t":  t,
+				"tu": list( timevec2units(t) ),
+			}
+
+		vbitlist = range(satvbits)      ## bit indexes for vehicle IDs
+		                                ## v0..v(N-1) in descriptions
+
+
+##		for d in (d  for d in dels :
+
+## 			dvars = []
+## 			didx  = d[ "index" ]
+## ## TODO: retrieve from above table, now that we populate it
+##
+## 				## register dXXtYY and dXXtYYvZZ
+## 				##   - delivery XX, time unit YY
+## 				##   - delivery XX, time unit YY,
+## 				##     vehicle-ID ZZ
+## 				## 'vehicle ZZ' covers bits, not counters
+## 				## (binary-encoded index of vehicle assigned)
+## 				##
+## 				## with 4 vehicles, v0 and v1; variables:
+## 				##     dXX-tYY-v0
+## 				##     dXX-tYY-v1
+## 				## combinations of v0+v1 used to count
+## 				## (1-based) delivery index
+##
+## 			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
+##
+## 			for t in tu:
+## 				tb = timevecbit2offset(t)
+## 				tbits.append(tb)
+##
+## 				dvars.append(satsolv_add_delvtime(sat,
+## 				             didx, tb))
+##
+## 				for v in satvbitnrs:
+## 					satsolv_add_delvtime(sat,
+## 					             didx, tb, vnumber=v)
+##
+## 			satsolv_add_delvs1(sat, dvars, d)
+##
+## 			for t in tbits:
+## 				satsolv_delv2time(sat, didx, t, vbitlist)
+##
+## 			satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
+##
+## 		satsolv_delv_window_2x_deps(sat, dels, xy2dist_table,
+## 		                            dts, satvcount)
+##
+## 	del(dts)
+## 	##-----  /SAT-pairs list  --------------------------------------------
+
+	if not done:
+		print('xxx1')
 
 	satsolv_report(sat)
 
@@ -5794,7 +6107,6 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ## 		primary, secondary = d['primary'], d['secondary']
 ## 		vid_picked, arrival = None, vTIME_UNDEF
 ##
-## RRR
 ## 		for v in vs:
 ## 			vid = v[0]
 ## 			v1  = vehicle2primary  (vpos[ vid ])
@@ -6189,6 +6501,7 @@ if __name__ == '__main__':
 
 				## TODO: proper report
 
+		tgth = t[0]  if (t[0] != '')  else 'localhost'
 		sock = socket_open(t[0], t[1])
 ## TODO: wrap with proper exceptions to wrapper
 
