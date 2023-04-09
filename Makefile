@@ -52,7 +52,7 @@ packnroute.txt:  $(ORDERS)  $(BASEXY_C)  $(DISTANCES)
 ##
 sat: packnroute.txt
 	grep ^SAT= $^ | sed 'sQSAT=QQ'          > p.sat
-	kissat --relaxed -s -v -v p.sat         | tee p.solv
+	kissat -s -v -v p.sat                   | tee p.solv
 	dev/sat2back.py p.sat p.solv            | tee pnr.log
 	grep -v -e ' NV' -e _x_ -e _nn_ pnr.log | tee pnr2.log
 

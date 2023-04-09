@@ -2201,22 +2201,36 @@ def satsolv_add_comment(sat, comment):
 
 
 ##--------------------------------------
+## filter out comment-only constraints, which do not lead to clauses
+## comment-only conditions are empty strings for non-comment part
+##
+def sat_nr_of_clauses(sat):
+	if (not sat) or (not "constraints" in sat):
+		return 0
+
+	nrc = sum(1  if (c[0] != '')  else  0
+	          for c in sat["constraints"])
+
+	return nrc
+
+
+##--------------------------------------
 def satsolv_report(sat):
 	if not use_satsolver():
 		return
 
-					## problem sizes
-	print(sSATPREFIX + f'p cnf { len(sat[ "vars" ]) } ' +
-		f'{ len(sat[ "constraints" ] ) }')
+	nrclauses = sat_nr_of_clauses(sat)
+							## problem sizes
+	print(sSATPREFIX + f'p cnf { len(sat[ "vars" ]) } { nrclauses }')
 
 	print(sSATPREFIX +'c')
 	print(sSATPREFIX +'c CONSTRAINTS:')
 					## do not change CONSTRAINTS framing
 
 	comments = 0
-	for comm in (s  for s in sat[ "constraints" ]  if s[1]):
-		if comm:
-			print(sSATPREFIX +'c   ' +comm[1])
+	for commstr in (s  for s in sat[ "constraints" ]  if s[1]):
+		if commstr:
+			print(sSATPREFIX +'c   ' +commstr[1])
 			comments += 1
 
 	vstr = ' '.join(f'{ v }[{ vi+1 }]'
@@ -2235,7 +2249,7 @@ def satsolv_report(sat):
 					##-----  end of header  --------------
 
 	for ci, c in enumerate(sat[ "constraints" ]):
-		cvars, comm = c[0], c[1]
+		cvars, comment = c[0], c[1]
 
 		if cvars.strip() == '':
 			continue
@@ -3937,6 +3951,18 @@ def list2split(l, k):
 
 
 ##-----------------------------------------
+## comment for 1-of-N to ...result... SAT clause/s
+## 'vars' is list of input variables
+##
+## TODO: where do we special-case N=1, things like that?
+##
+def sat_1ofn_comment(res, vars):
+	vlist = ",".join(vars)
+
+	return f'1-of-N[={ len(vars) }]: ({ res }) for ({ vlist })'
+
+
+##-----------------------------------------
 ## Return '(top-level) commander variable', newly added (commander) variables,
 ## related additional clauses, and comments documenting the collection.
 ##
@@ -4039,9 +4065,7 @@ def satsolv_1n(vars, nr=0, allow0=False, result=None):
 					## both sub-variables may not be True
 		cls.append( f'-{sub[-2]} -{sub[-1]}' )
 
-	varlist = ",".join(vars)
-
-	return result, newvar, cls, f'1-of-N: ({ result }) for ({ varlist })'
+	return result, newvar, cls, sat_1ofn_comment(result, vars)
 
 
 ##-----------------------------------------------------------
@@ -4057,11 +4081,11 @@ def satsolv_1ofn(sat, vars):
 
 	sat[ 'added_vars' ] += len(nvars)
 
-	comm = f'1-of-N: ({ top }) for ({ ",".join(vars) })'
+	descr = sat_1ofn_comment(top, vars)
 
 	for c in cls:
-		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + c, comm)
-		comm = ''
+		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + c, descr)
+		descr = ''
 
 	if satsolv_is_debug():
 		for c in cls:
@@ -4069,7 +4093,7 @@ def satsolv_1ofn(sat, vars):
 
 						## force 1-of-N by ensuring
 						## commander var is True
-	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + top, comm)
+	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + top, descr)
 
 	return top
 
@@ -4423,6 +4447,10 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 	debugmsg(f'## SAT.VEHICLES={ sat_vehicles }', 1)
 	debugmsg(f'## SAT.VEHICLE.ID.BITS={ satvbits }', 1)
 
+	if (satvbits > 3):
+		raise ValueError("predefined less-than-N SAT forms are " +
+				"available up to V=3 vehicle-ID bits")
+
 	satsolv_add_comment(sat, f'using { sat_vehicles } SAT vehicles, ' +
 				f'encoded as { satvbits } bits')
 	satsolv_add_comment(sat, f'all-00 SAT-vehicle ID: not (yet?) assigned')
@@ -4521,7 +4549,6 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 ## 	##-----  /SAT-pairs list  --------------------------------------------
 
 # RRR
-	print('## xxx.SAT', sat)
 
 
 ##--------------------------------------
@@ -5500,8 +5527,6 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	print('')
 	##=====  /v1  ========================================================
 
-
-	print('xxx', arrivals)
 	sys.exit(0)
 
 		## got initial time plan, covering some subset of vehicles
@@ -5574,9 +5599,6 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 ##
 ## 	del(dts)
 ## 	##-----  /SAT-pairs list  --------------------------------------------
-
-	if not done:
-		print('xxx1')
 
 	satsolv_report(sat)
 
