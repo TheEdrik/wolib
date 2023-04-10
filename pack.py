@@ -2117,8 +2117,14 @@ def satsolv_add_vars(sat, vars):
 ## not checking for replication
 ##
 def satsolv_add_constraint(sat, vars, comment=''):
-	if sat:
+	if sat and ('constraints' in sat):
 		sat[ 'constraints' ].append([ " ".join(vars), comment ])
+
+
+##--------------------------------------
+def satsolv_add_comment(sat, comment):
+	if sat and ('constraints' in sat):
+		sat[ 'constraints' ].append([ '', comment ])
 
 
 ##--------------------------------------
@@ -2811,6 +2817,7 @@ def msbit(t):
 
 ##--------------------------------------
 ## not checking for t being single bit
+##
 ## equivalent bit2offset( msbit(t) ) if t is not power-of-two
 ##
 def timevecbit2offset(t):
@@ -3740,7 +3747,7 @@ sNALL1 = 'ALL1'                   ## suffix for all-(values-)one +variable
 ##     2) not(A) | N       together: (A | B) -> N
 ##     3) not(B) | N
 ##
-## None 'result' auto-assigns variable name
+## None 'result' auto-assigns variable name if necessary
 ## returns list of clauses, name of final variable, + comment
 ##
 def satsolv_xor1(var1, var2, result=None, negate=False):
@@ -3859,6 +3866,9 @@ def satsolv_and(base, vars, result=None):
 	cls = []
 	v   = sorted(vars)
 
+	if len(vars) == 1:
+		return vars[0], vars[0], f'AND({ vars[0] }) == { vars[0] }'
+
 	if result == None:
 		result = base + sNALL1
 
@@ -3899,15 +3909,206 @@ def satsolv_differ_n(var1, var2, result=None):
 		raise ValueError("inconstent bitvectors-differ input")
 
 	comment = ''
-
 	return [], result, comment
 
 
 ##-----------------------------------------
 def satsolv_nr_of_added_vars(sat):
-	nr = sat[ 'addedvars' ]  if sat  else 0
+	return sat[ 'added_vars' ]  if (sat and ('added_vars' in sat))  else 0
 
-	return nr
+
+##-----------------------------------------
+## increase the number of solver-allocated, intermediate variables
+##
+def satsolv_register_added_vars(sat, n):
+	sat[ 'added_vars' ] += n
+
+
+##-----------------------------------------
+## centralized NOT, to save on recurring logs
+##
+## just a macro to document NOT-X invocations
+## does not need extra variables, just an inverting clause
+##
+def satsolv_not(sat, var):
+	rv = f'-{var}'
+
+	return rv, rv, f'NOT({ var })'
+
+
+##-----------------------------------------
+## NAND, for arbitrary nr of bits
+##
+## sample: A; B; C; D; N = not(A & B & C & D)
+##     1) not(A) | not(B) | not(N)
+##     2)      A | N
+##     3)      B | N
+##     4)      ...
+##
+## None 'result' auto-assigns variable name
+## returns list of clauses, result variable, comment
+##
+def satsolv_nand_n(sat, vars, result=None):
+	cls  = []
+
+	if len(vars) == 1:
+		return satsolv_not(sat, vars[0])
+
+	if result == None:
+		result = satsolv_new_varname(satsolv_nr_of_added_vars(sat) +1)
+
+	vall = list(f'-{v}'  for v in vars)
+
+	cls.append([ ' '.join(vall) + f' -{result}' ])
+	cls.extend([ f' {v} {result}' ]  for v in vars  )        ## 1x each bit
+
+	return cls, result, f'{ result } := NAND({ ",".join(vars) })'
+
+
+##----------------------------------------------------------------------------
+## collapse list to runs of identical entries
+##     [ 1, 0, 1, 1 ]  ->  [ [1], [0], [1, 1] ]
+##
+def arr2runs(arr):
+	runs = []
+
+	for v in arr:
+		if (runs == []) or (runs[-1][-1] != v):
+			runs.append([])
+		runs[-1].append(v)
+
+	return runs
+
+
+##----------------------------------------------------------------------------
+## expressions compare up to two runs' worth of bits, comparing only
+## bits of the most significant runs against the big-endian bit array 'vars'
+##
+## first run always from an all-1 region
+##
+## assume V is the variable's value, the three cases below compare:
+##     V  <  1  0000..000
+##     V  <  1111..111                         all-ones
+##     V  <  111..11   000..00
+##
+## 'runs' in the above cases: [ [1],        [0,0,...0,0]   ]
+##                            [ [1,1,1,...,1]              ]
+##                            [ [1,1,..,1], [0,0,0,...0,0] ]
+## 'nbits' is the printable-collapsed form, 100..00, 111..111 etc.
+##
+## returns None, None, None  if no more runs
+## registers any intermediate variables
+##
+def satsolv_less_than_2x(sat, vars, runs, nbits):
+	if runs == []:
+		return None, None, None
+
+	if runs[0][0] != 1:
+		raise ValueError("bits<N did not start with all-1 bit run")
+
+## TODO: this special-casing of single bits disappears, once _nand_n()
+## centralizes all <3 special-cased cases: can pass 1-bit comparison
+## through as-is
+
+	vdescr = 'VARS:' +(".".join(vars))
+
+	if (len(runs) == 2) and (len(runs[0]) == 1):   ## 100..00 -> direct bit
+		result = vars[0]                ## no additional condition/var
+		cls    = [ f'-{result}' ]
+		xcomm  = f'{result}: ({vdescr} < { nbits }b)'
+
+	elif (len(runs) <= 2):
+				## 11100..000 -> NAND(...3 MS variables...)
+				## 11111..111 -> NAND(...all variables...)
+				##
+				##
+				##
+		bits2cmp = vars[ : len(runs[0]) ]
+		cls, result, xcomm = satsolv_nand_n(sat, bits2cmp)
+				##
+		satsolv_add_vars(sat, [ result ])
+				##
+		xcomm += f': ({vdescr} < { nbits }b)'
+
+	elif (len(runs) == 3) and (len(runs[-1]) == 1):
+				## straightforward case:
+				##   n <= 11..100001  exactly three runs; LS one
+				##                    is a single bit
+				##
+				## construct comparison from:
+				##   (1) AND(...MS bit/s...)
+				##         -> if not, value < pattern
+				##   (2) OR(...all-0 runs' bits below...)
+				##         -> if yes, value > pattern
+				##   (3) ...comparison of LS bit...
+				##         -> if yes, value > pattern
+				##
+				## comparison is hierarchical:
+				##   (1) not-AND(1)         -> value < pattern
+				##   (2) AND(1)  AND  OR(2) -> value > pattern
+				##   (3) AND(1)  AND  NOT(OR(2))  AND
+				##          not-AND(3)      -> value < pattern
+				##
+				## with minor additions, would also extrapolate
+				## to three runs, with >1 bits in LS one: just
+				## adds a less-than-X term for the LS run
+				##
+		msvars  = vars[ : len(runs[0]) ]   
+		midvars = vars[ len(runs[0]) : ]
+		lsvars  = vars[ len(runs[0])+len(runs[1]) : ]
+
+		mscls, mscmp, mscomm = satsolv_and('', msvars)
+##		satsolv_add_vars(sat, [ mscmp ])
+				##   (1) -> mscmp
+
+		midcls, midcmp, midcomm = satsolv_or('', midvars)
+##		satsolv_add_vars(sat, [ mscmp ])
+				##   (2) -> midcmp
+
+		lscls, lscmp, lscomm = satsolv_and('', lsvars)
+##		satsolv_add_vars(sat, [ mscmp ])
+				##   (3) -> lscmp
+
+		cls, result, xcomm = None, None, None
+
+	else:
+		raise ValueError("need a generic SAT/range comparison here")
+
+	return cls, result, xcomm
+
+
+##----------------------------------------------------------------------------
+## is the binary combination of 'vars' < N?
+## register expression to SAT variables+clauses
+##
+## 'vars' is bit variables, most to least significant
+##
+## registers any newly allocated variables to 'sat'
+##
+## TODO: proper binary comparison, then Quine McCluskey etc. reduction
+## TODO: right now, we just pick predefined patterns
+##
+## since pack-n-route currently leaves only unallocated deliveries to
+## the SAT solver, we expect to see not more than 3 (maybe 4)-bit variables
+##
+def satsolv_less_than(sat, vars, n):
+	nbits = f'{ n :b}'
+	nb    = list(int(b)  for b in nbits)
+
+	if len(nbits) >= (1 << len(vars)):     ## N is wider than 2^...bits...
+		return                         ## always succeeds
+
+	runs = arr2runs(nb)
+
+	assert(runs != [])
+	assert(runs[0][0] == 1)                ## nb[] has no MS zeroes
+
+	result, cls, xcomm = satsolv_less_than_2x(sat, vars, runs, nbits)
+
+	## ...any special logging etc. would happen here...
+
+	return cls, result, xcomm
+
 
 
 ##-----------------------------------------
@@ -3982,7 +4183,7 @@ def sat_1ofn_comment(res, vars):
 ##     2007_efficient-cnf-encoding-for-selecting-1.pdf
 ## [accessed 2023-02-24]
 ##
-def satsolv_1n(vars, nr=0, allow0=False, result=None):
+def satsolv_1n(sat, vars, nr=0, allow0=False, result=None):
 	if vars == []:
 		raise ValueError("called with empty variable list")
 
@@ -4034,8 +4235,12 @@ def satsolv_1n(vars, nr=0, allow0=False, result=None):
 
 			nv = satsolv_new_varname(nr +len(newvar) +1 )
 			newvar.append(nv)
+				##
 			assign.append([ g, nv, ])
 			curr.append(nv)
+				##
+			satsolv_add_comment(sat,
+				f'  1-of-N {nv} = OR+not-NAND({",".join(g)})')
 
 		if len(curr) == 1:
 			break
@@ -4053,16 +4258,29 @@ def satsolv_1n(vars, nr=0, allow0=False, result=None):
 					## to NAND/OR primitives' clauses,
 					## for fanout k=2
 	cls = []
-	for a in assign:
+	for ai, a in enumerate(assign):
 		c, sub = a[-1], a[-2]
 		assert(len(sub) <= 2)   ## in case increasing fanout, but
 		                        ## forgetting to update something...
 		if sub == []:           ## non-hierarchical, pass-through var
 			continue
 
+## TODO: top-level variable is just an XOR, or an NAND, depending on
+## whether one tolerates 0 or checks for exactly 1 operation.  this
+## might be worth documenting in comments; attempt below.
+##
+##		if (ai+1 >= len(assign)):
+##			xconstr, xn, _ = satsolv_xor1(sub[-2], sub[-1])
+##			xcomm = f'XXX XOR({sub[-2]},{sub[1]})'
+##			for c in xconstr:
+##				satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c,
+##							xcomm)
+##				xcomm = ''
+##		else:
+
 		_, c2 = satsolv_or1(sub[-2], sub[-1], c)
 		cls.extend(c2)
-					## both sub-variables may not be True
+				## both sub-variables may not be True
 		cls.append( f'-{sub[-2]} -{sub[-1]}' )
 
 	return result, newvar, cls, sat_1ofn_comment(result, vars)
@@ -4075,7 +4293,7 @@ def satsolv_1n(vars, nr=0, allow0=False, result=None):
 ## append comments and clauses to respective lists
 ##
 def satsolv_1ofn(sat, vars):
-	top, nvars, cls, cmt = satsolv_1n(vars, sat[ 'added_vars' ])
+	top, nvars, cls, cmt = satsolv_1n(sat, vars, sat[ 'added_vars' ])
 
 	satsolv_add_vars(sat, nvars)
 
@@ -4096,15 +4314,6 @@ def satsolv_1ofn(sat, vars):
 	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + top, descr)
 
 	return top
-
-
-##-----------------------------------------------------------
-## delivery + time-window crossbar:
-## XXX
-#	dts[ d[ "index" ] ] = {
-#		"t":  t,
-#		"tu": list( timevec2units(t) ),
-#	}
 
 
 ##-----------------------------------------------------------
@@ -4175,12 +4384,14 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 				## (NOT individual bits of time vector)
 	conflict_pairs = []
 
-	for d1i, d2i in itertools.product(ds, ds):
+	for d1i, d2i in itertools.product(ds, ds):    ## all pairs of delv. IDs
 		if d1i >= d2i:
 			continue
 
 		d1,  d2  = dtk[ d1i ], dtk[ d2i ]
 		d1t, d2t = dts[ d1 ][ "t" ], dts[ d2 ][ "t" ]   ## time vectors
+
+		tmax_mask = d1t | d2t     ## limit on checking: max-wid bitmask
 
 ## TODO: factor out to centralized deliveries-vs-tables check
 
@@ -4195,11 +4406,15 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 				f"vs. { len(dist[ 'time' ][ d1 ]) })")
 
 		if (common_vehicles(delvs, d1i, d2i) == 0):
-			## TODO: log
+				## TODO: log: delivery pair may not conflict,
+				## since they are limited to disjoint sets of 
+				## suitable vehicles
 			continue
 
 		d12mins =  dist[ "time" ][ d1 ][ d2 ]
 		d12mins += vTIME_DELIVER_MIN
+				##
+				## minimal nr. of minutes between d1 and d2
 
 					## min(traversal), in units
 		d12u = int(d12mins +vTIME_UNIT_MINS -1) // vTIME_UNIT_MINS
@@ -4218,6 +4433,12 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 					## d2->d1 traversal would violate
 					## timing constraint.
 
+					## note that there are some special
+					## cases around multi-window
+					## deliveries, where dilation may
+					## extend into units where delivery
+					## may not be scheduled at all
+
 					## all time-vector bits which
 					## collide with this (d1, tu),
 					## (d1tu < d12u) - ...lower-limit 1...
@@ -4226,29 +4447,37 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 		conflicts = []
 
 		for u1 in d1tu:
-			u1b  =  timevecbit2offset(u1)
-			allt =  u1 << d12u
-			allt -= max(1, u1 >> (d12u -1))
+			u1b  = timevecbit2offset(u1)
+			allt = 0
+
+				## bits(u1) shifted +-[...conflicting range...]
+				## per-bit construction; works
+				## regardless of multiple windows
+				##
+			for shift in range(d12u):
+				allt |= (u1b << shift) & tmax_mask
+				allt |= (u1b >> shift)
 
 					## units of delivery2 which conflict
 					## with this broader 'allt'
 					##
 			u2clash = list(u  for u in d2tu  if (allt & u))
-			if u2clash == []:
-				continue
 
 			for u2b in u2clash:
-				conflicts.append([d1, u1b -1, d2,
-				                 timevecbit2offset(u2b) -1])
+				u2bit = timevecbit2offset(u2b)
 
-				if satsolv_is_debug(2):
-					t1s = timevec2wall(u1 )
-					t2s = timevec2wall(u2b)
+				conflicts.append([d1, u1b, d2, u2bit])
 
-					print(f"## SAT.CONFLICT DELV1={d1}," +
-						f"T={ t1s } DELV2={d2}," +
-						f"T={ t2s } MIN.TIME.DIFF=" +
-						f"{ d12u*vTIME_UNIT_MINS }min")
+				if not satsolv_is_debug(2):
+					continue
+
+				t1s = timevec2wall(u1 )
+				t2s = timevec2wall(u2b)
+					##
+				print(f"## SAT.CONFLICT DELV1={d1}," +
+					f"T={ t1s }[{u1b}] DELV2={d2}," +
+					f"T={ t2s }[{u2bit}] MIN.TIME.DIFF=" +
+					f"{ d12u*vTIME_UNIT_MINS }min")
 
 		if conflicts and satsolv_is_debug():
 			print(f"## SAT.COMPAT[{d1},{d2}]: TIME.VEC=" +
@@ -4482,8 +4711,7 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 			tb = timevecbit2offset(t)
 			tbits.append(tb)
 
-			dvars.append(satsolv_add_delvtime(sat,
-			             didx, tb))
+			dvars.append(satsolv_add_delvtime(sat, didx, tb))
 
 			for v in satvbitnrs:
 				satsolv_add_delvtime(sat,
@@ -4498,57 +4726,6 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 
 	satsolv_delv_window_2x_deps(sat, delvs, xy2dist_table,
 	                            dts, sat_vehicles)
-
-##
-## 	del(dts)
-## 	##-----  /SAT-pairs list  --------------------------------------------
-
-## RRR
-## 		for d in dels:
-## 			dvars = []
-## 			didx  = d[ "index" ]
-## ## TODO: retrieve from above table, now that we populate it
-##
-## 				## register dXXtYY and dXXtYYvZZ
-## 				##   - delivery XX, time unit YY
-## 				##   - delivery XX, time unit YY,
-## 				##     vehicle-ID ZZ
-## 				## 'vehicle ZZ' covers bits, not counters
-## 				## (binary-encoded index of vehicle assigned)
-## 				##
-## 				## with 4 vehicles, v0 and v1; variables:
-## 				##     dXX-tYY-v0
-## 				##     dXX-tYY-v1
-## 				## combinations of v0+v1 used to count
-## 				## (1-based) delivery index
-##
-## 			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
-##
-## 			for t in tu:
-## 				tb = timevecbit2offset(t)
-## 				tbits.append(tb)
-##
-## 				dvars.append(satsolv_add_delvtime(sat,
-## 				             didx, tb))
-##
-## 				for v in satvbitnrs:
-## 					satsolv_add_delvtime(sat,
-## 					             didx, tb, vnumber=v)
-##
-## 			satsolv_add_delvs1(sat, dvars, d)
-##
-## 			for t in tbits:
-## 				satsolv_delv2time(sat, didx, t, vbitlist)
-##
-## 			satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
-##
-## 		satsolv_delv_window_2x_deps(sat, dels, xy2dist_table,
-## 		                            dts, satvcount)
-##
-## 	del(dts)
-## 	##-----  /SAT-pairs list  --------------------------------------------
-
-# RRR
 
 
 ##--------------------------------------
