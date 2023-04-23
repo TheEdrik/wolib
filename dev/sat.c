@@ -631,9 +631,11 @@ struct SatName {
 	size_t sbytes;
 
 	uint64_t cs;     /* compact string, if known */
+
+	unsigned int invert;   /* is the implied use inverted, below? */
 } ;
 //
-#define SAT_NAME0  { {0,}, 0, 0, }
+#define SAT_NAME_INIT0  { {0,}, 0, 0, 0, }
 
 
 // formatted line
@@ -675,6 +677,110 @@ struct SatState {
 } ;
 
 
+// 32-bit IDs: store 4-bit prefix for type, 28-bit (packed) integer ID
+//
+// type(4):
+//   x0     D/T/V    delivery, time unit, vehicle-ID bit
+//   x1     D/T      delivery, time unit
+//   x2     D/V      delivery, vehicle-ID bit
+//   x8     aux. variable
+//
+// number ranges: D: 10000; T: 1000; V: 10
+//     10k   deliveries
+//     1000  time units =416 days at 10-minute resolution
+//     10:   1000+ vehicles (2^10 bits to identify them)
+//
+// if we grow out of these limits, it will be time to move beyond 32-bit
+// hashtables. the 32-bit form fits many nice embeddable ones (as of 2023-04)
+
+
+/*--------------------------------------
+ * prefix-free mapping of auxiliary-variable number to 32-bit unique ID
+ * see also sat_dtvvar2id()
+ *
+ * returns ~0 if value is out of range
+ */
+static inline uint32_t sat_auxvar2id(unsigned int varnr)
+{
+	return (varnr > 0x0fffffff)
+	        ? (UINT32_C(0x80000000) | varnr)
+	        : ~((uint32_t) 0);
+}
+
+
+/*--------------------------------------
+ * encode some combination of 1-based delivery ID, 1-based time unit,
+ * 1-based vehicle-bit ID into a 32-bit unique ID
+ *
+ * any 0 indicates the field is unused
+ *
+ * returns ~0 if any of the values is out of range
+ */
+static inline
+uint32_t sat_var2id_core(unsigned int d, unsigned int t, unsigned int v)
+{
+	unsigned int dtv = ((!!d) << 16) | ((!!t) << 8) | !!v;
+	uint32_t pack;
+
+	if ((d && (d > 10000)) ||
+	    (t && (t >  1000)) ||
+	    (v && (v >    10)))
+		return ~((uint32_t) 0);
+
+//   x0     D/T/V    delivery, time unit, vehicle-ID bit
+//   x1     D/T      delivery, time unit
+//   x2     D/V      delivery, vehicle-ID bit
+
+	pack =  d ? ((d-1) * 10000) : 0;
+	pack += t ? ((t-1) * 10)    : 0;
+	pack += v ?  (v-1)          : 0;
+
+	switch (dtv) {
+		case 0x10101:                         // D+T+V
+			return UINT32_C(0x00000000) | pack;
+
+		case 0x10100:                         // D+T
+			return UINT32_C(0x10000000) | pack;
+
+		case 0x10001:                         // D+V
+			return UINT32_C(0x20000000) | pack;
+
+		default:
+			break;
+	}
+
+	return ~((uint32_t) 0);
+}
+
+
+/*--------------------------------------
+ * D+T only: zero-based D+T
+ */
+static inline uint32_t sat_var2id_dt(unsigned int d, unsigned int t)
+{
+	return sat_var2id_core(d+1, t+1, 0);
+}
+
+
+/*--------------------------------------
+ * D+V only: zero-based D+V
+ */
+static inline uint32_t sat_var2id_dv(unsigned int d, unsigned int v)
+{
+	return sat_var2id_core(d+1, 0, v+1);
+}
+
+
+/*--------------------------------------
+ * D+V only: zero-based D+T+V
+ */
+static inline
+uint32_t sat_var2id_dtv(unsigned int d, unsigned int t, unsigned int v)
+{
+	return sat_var2id_core(d+1, t+1, v+1);
+}
+
+
 //--------------------------------------
 static inline struct SatClause *sat_clause_init0(struct SatClause *ps)
 {
@@ -689,7 +795,7 @@ static inline struct SatClause *sat_clause_init0(struct SatClause *ps)
 static inline struct SatName *sat_name_init0(struct SatName *pn)
 {
 	if (pn)
-		*pn = (struct SatName) SAT_NAME0;
+		*pn = (struct SatName) SAT_NAME_INIT0;
 
 	return pn;
 }
@@ -802,7 +908,7 @@ static int sat_ensure_clauses(struct SatState *ps, unsigned int n)
 				// why is there no calloc()-equivalent realloc?
 				// grrrr.
 				//
-				// TODO: exact range to set-0, in 
+				// TODO: exact range to set-0, in
 				// separate/readable tmp.variable
 				//
 			memset(&(ps->c[ ps->c_used ]), 0, (after - ps->c_used)*
@@ -1191,7 +1297,7 @@ static unsigned int sat_new_var(struct SatName *name,
 	if (!name || !ps)
 		return 0;
 
-	*name = (struct SatName) SAT_NAME0;
+	*name = (struct SatName) SAT_NAME_INIT0;
 
 	name->sbytes = snprintf((char *) name->s, sizeof(name->s),
 	                        STC_NEWNAME_PREFIX "%u", ps->addvars +1);
@@ -1226,6 +1332,13 @@ static unsigned int sat_const(struct SatState *ps,
                                      uint64_t a,
                                  unsigned int val) ;
 
+// 'invert' turns OR into NOR
+static unsigned int sat_or(struct SatName *name,
+                          struct SatState *ps,
+                                 uint64_t r,
+                                 uint64_t *a, unsigned int an,
+                                      int invert) ;
+
 
 /*----------------------------------------------------------------------------
  * appends clauses for R := XOR(A, B)
@@ -1236,11 +1349,11 @@ static unsigned int sat_const(struct SatState *ps,
  *    A -B  R
  *   -A -B -R
  *
- * 'res' supplies name for R; it is constructed otherwise into 'name'
+ * 'r' supplies name for R; it is constructed otherwise into 'name'
  * when supplied, we do not need to register its name; newly constructed
  * 'name' is registered to 'ps'
  *
- * non-0 'invert' switches to XNOR (equality) from XOR
+ * non-0 'invert' switches to NXOR (equality) from XOR
  *
  * NULL 'res' requires non-NULL 'name', which will be updated with
  * name of result variable
@@ -1267,6 +1380,7 @@ static unsigned int sat_xor1(struct SatName *name,
 
 // TODO: minimize A==B -> invalid condition, fixed False
 
+// TODO: factor out: recurring init-or-pick-up condition
 	if (!r) {
 		if (!sat_new_var(name, ps))
 			return 0;
@@ -1278,7 +1392,7 @@ static unsigned int sat_xor1(struct SatName *name,
 		return 0;
 
 	pc[ idx ].comment = sat_str_append(&( ps->comments ),
-	                                   invert ? "EQ/XNOR" : "XOR",
+	                                   invert ? "EQ/NXOR" : "XOR",
 	                                   invert ? 7         : 3);
 	if (!pc[ idx ].comment)
 		return 0;
@@ -1304,8 +1418,8 @@ static unsigned int sat_xor1(struct SatName *name,
 				//       -A    B    R
 				//        A   -B    R
 				//       -A   -B   -R
-				//            ^    
-				//            x40  
+				//            ^
+				//            x40
 				// invert (== instead of XOR) flips negated/R
 	invert = invert ? 0x20 : 0;
 
@@ -1315,6 +1429,157 @@ static unsigned int sat_xor1(struct SatName *name,
 	pc[ idx +3 ].neg[ 0 ] = (UINT64_C(0xe0) ^ invert) << 56;
 
 	return 4;
+}
+
+
+/*-----  range comparison primitives  --------------------------------------*/
+// we split constants into 'runs' of identical bits
+//
+#define SAT_MAX_CMP_RUNS  ((unsigned int) 8)
+
+// 1111-0-11 will result in [ 4, 1, 2, 0, ... ]
+//
+struct SatRuns {
+	unsigned int bits[ SAT_MAX_CMP_RUNS ];
+	unsigned int used;      // nr of entries in bits[]
+	unsigned int total;     // sum(bits)
+				// [0] always corresponds to run-of-1's
+} ;
+//
+#define SAT_RUNS_INIT0  { {0,}, 0, 0, }
+
+
+/*--------------------------------------
+ * returns nr. of runs in 'n'
+ *         0  if anything invalid, or if input is 0, which caller SHOULD
+ *            have detected
+ *        ~0  if something is out of range, such as too many runs
+ *
+ * TODO: can be compacted to a much simpler loop with
+ * using nr-of-leading-zeroes intrinsic, if available (always with gcc/clang)
+ *
+ * APPLICATION NOTE:
+ * due to our use of runs, we ignore LS run of 0's (they may not
+ * decide comparisons, so are ignored for those purposes)
+ */
+static unsigned int sat_val2runs(struct SatRuns *pr, unsigned int n)
+{
+	unsigned int run = 0, mask;
+
+	if (!pr || !n)
+		return 0;
+
+	*pr = (struct SatRuns) SAT_RUNS_INIT0;
+	n   = (n ^ (n >> 1)) | !!((n & 3) == 2);
+					//
+					// leave only bits which start runs
+					// incl. LS one if bit above is 1
+
+	mask = ~((unsigned int) 0) - (~((unsigned int) 0) >> 1);
+
+	pr->total = 8 * sizeof(unsigned int);
+
+	while (!(mask & n)) {
+		pr->total--;
+		mask >>= 1;
+	}
+
+					// (mask & n) when entering loop
+					// we just start the next run
+	while (mask) {
+		mask >>= 1;
+
+		++run;
+		if (run > ARRAY_ELEMS(pr->bits))
+			return ~((unsigned int) 0);
+		pr->used = run;
+
+		pr->bits[ run-1 ] = 1;
+
+		while (mask && !(mask & n)) {
+			pr->bits[ run-1 ]++;
+			mask >>= 1;
+		}
+	}
+
+	return pr->total;
+}
+
+
+/*----------------------------------------------------------------------------
+ * range comparisons: binary combination < N ('less than')
+ *
+ * 'r' supplies name for R; it is constructed otherwise into 'name'
+ * when supplied, we do not need to register its name; newly constructed
+ * 'name' is registered to 'ps'
+ */
+static unsigned int sat_lt(struct SatName *name,
+                          struct SatState *ps,
+                                 uint64_t r,
+                                 uint64_t *a, unsigned int an,
+                             unsigned int n)
+{
+	unsigned int idx, nruns, adds = 0, curr;
+		// adds: total nr. of entries we add; curr: current building blk
+
+	struct SatRuns runs = SAT_RUNS_INIT0;
+	char cfmt[ STC_STR_MAX_BYTES +1 ];
+	struct SatClause *pc;
+	size_t cb;
+
+	if (!ps || !a || !an)
+		return 0;
+
+	if (!n)
+		return 0;                          // TODO: condition: never <0
+
+	nruns = sat_val2runs(&runs, n);
+	if (!nruns || (nruns == ~((unsigned int) 0)))
+		return 0;                          // TODO: report out-of-range
+
+	if (!r) {
+		if (!sat_new_var(name, ps))
+			return 0;
+		r = name->cs;
+	}
+
+	cb  = snprintf(cfmt, sizeof(cfmt), "N[%ub]<CONST(%u)", an, n);
+	idx = ps->c_used;                        // idx. of first clause we add
+
+	curr = sat_comment(ps, cfmt, cb);
+	if (!curr)
+		return 0;
+	adds += curr;
+
+					// const >= 2^runs.total
+					// shorter field is trivially below
+	if (an < runs.total) {
+		curr = sat_comment(ps, "CONSTANT-TRUE", 13);
+		return curr ? (adds + curr) : 0;
+	}
+
+printf("xxx %u/%u: %u,%u,%u\n", an, runs.total, runs.bits[0], runs.bits[1],
+       runs.bits[2]);
+
+					// OR(all bits above leading 1's run)
+					// MUST be all-0, otherwise comparison
+					// would trivially fail
+	if (an > runs.total) {
+		struct SatName discard = SAT_NAME_INIT0;
+// only need clauses, but not implied variable
+
+		sat_or(&discard, ps, 0, a, an - runs.total, 1/*NOR*/);
+	}
+// RRR
+(void) idx;
+(void) pc;
+	
+
+//	pc  = sat_add_clauses(ps, &idx, an+1);
+//	if (!pc)
+//		return 0;
+
+	return 0;
 }
 
 
@@ -1348,6 +1613,7 @@ valid_np1_params(const struct SatName *name,
 
 /*--------------------------------------
  * appends clauses for R := OR(...variables of a[]...)
+ * supply at least one variable; reports error otherwise
  *
  * clauses:
  *      A | B | ... | H | -R    -- R -> (A | B | ... | H)
@@ -1355,11 +1621,14 @@ valid_np1_params(const struct SatName *name,
  *     -B | R
  *     ...
  *     -H | R
+ *
+ * 'invert' flips sign of R, turns OR into NOR
  */
 static unsigned int sat_or(struct SatName *name,
                           struct SatState *ps,
                                  uint64_t r,
-                                 uint64_t *a, unsigned int an)
+                                 uint64_t *a, unsigned int an,
+                                      int invert)
 {
 	struct SatClause *pc;
 	unsigned int idx, i;
@@ -1373,16 +1642,53 @@ static unsigned int sat_or(struct SatName *name,
 		r = name->cs;
 	}
 
+				// trivial cases:  OR(A) -> A
+				//                NOR(A) -> -A
+				// neither case requires a new variable
+				//
+				// TODO: check for generic new-variable
+				// propagation, incl. reporting an inverted one
+				//
+				// keep '||' to ensure comment and constant
+				// added in expected order---even if it
+				// is irrelevant for CNF-only form, which
+				// skips comments
+	if (an == 1) {
+		if (name)
+			name->cs = a[0];        // OR(A) -> A  or  NOR(A) -> -A
+
+		if (invert) {
+			if (name)
+				name->invert = 1;
+
+			if (!sat_comment(ps, "NOR(v)->NOT(v)", 14) ||
+			    !sat_const(ps, a[0], 0))
+				return 0;
+
+		} else if (name) {
+			if (!sat_comment(ps, "OR(v)->v", 8) ||
+			    !sat_const(ps, a[0], 1))
+				return 0;
+		}
+		return 2;
+	}
+
 	pc = sat_add_clauses(ps, &idx, an+1);
 	if (!pc)
 		return 0;
 
-	pc[ idx ].comment = sat_str_append(&( ps->comments ), "OR", 2);
+	pc[ idx ].comment = sat_str_append(&( ps->comments ),
+	                                   invert ? "NOR" : "OR",
+	                                   invert ? 3     : 2);
 	if (!pc[ idx ].comment)
 		return 0;
 
+	if (!an)
+		return 0;          // explicit check for >=1 input/s
+
+
 	pc[ idx ].used = an+1;
-					// a[0] | a[1] | ... | a[an-1] | NOT(R)
+				// a[0] | a[1] | ... | a[an-1] | <NOT(R) or R>
 	for (i=0; i<an; ++i) {
 		pc[ idx ].soffset[ i ] = cstring2offset(a[ i ]);
 		pc[ idx ].sbytes [ i ] =  cstring2bytes(a[ i ]);
@@ -1390,7 +1696,8 @@ static unsigned int sat_or(struct SatName *name,
 	pc[ idx ].soffset[ an ] = cstring2offset(r);
 	pc[ idx ].sbytes [ an ] =  cstring2bytes(r);
 		//
-	pc[ idx ].neg[ 0 ] = UINT64_C(1) << (63 - an);                // NOT(R)
+	pc[ idx ].neg[ 0 ] = ((uint64_t) !invert) << (63 - an);
+						// NOT(R) (=OR) or R (=NOR)
 
 
 	for (i=0; i<an; ++i) {
@@ -1400,7 +1707,9 @@ static unsigned int sat_or(struct SatName *name,
 		pc[ idx +1 +i ].sbytes [ 1 ] =  cstring2bytes(r);
 						// NOT(A) | R ... NOT(H) | R
 
-		pc[ idx +1 +i ].neg[ 0 ] = UINT64_C(0x80) << 56;
+		pc[ idx +1 +i ].neg[ 0 ] = ((uint64_t) (2 | !!invert)) << 62;
+						// R (=OR) or NOT(R) (=NOR)
+
 		pc[ idx +1 +i ].used     = 2;
 	}
 
@@ -1476,7 +1785,7 @@ static unsigned int sat_nand(struct SatName *name,
  * the general idea is to create a hierarchy of 'commander variables'
  * where (1) the top one is 1 (or possibly 0, with 0-of-N allowed)
  * (2) not more than one of the lowest-level commander variables
- * is 1 (3) 
+ * is 1 (3)
  *
  * see
  * Kliebert, Kwon: Efficient CNF encoding for selecting 1 of N objects,
@@ -1573,8 +1882,8 @@ static unsigned int sat_1ofn_core2x(struct SatState *ps,
                                            uint64_t end,
                                      const uint64_t *a, unsigned int an)
 {
+	struct SatName name = SAT_NAME_INIT0;
 	struct Sat1Ncmd h = SAT_1NCMD_INIT0;
-	struct SatName name = SAT_NAME0;
 
 	if (!ps || !a || !an || (an > STC_CLS_MAX_ELEMS))
 		return 0;
@@ -2046,14 +2355,16 @@ int main(int argc, char **argv)
 	}
 
 	{
-	uint64_t arr[4] = { a, b, c, d, };
+	uint64_t arr[6] = { a, b, c, d, e0, f1 };
 	struct SatName nn;
 
 	sat_xor1(&nn, &psat, 0, c, d, 0);
 	sat_xor1(&nn, &psat, 0, a, c, 1);
 
-	sat_or(NULL, &psat, r, arr, ARRAY_ELEMS(arr));
-	sat_or(&nn, &psat, 0, arr, ARRAY_ELEMS(arr));
+	sat_or(NULL, &psat, r, arr, ARRAY_ELEMS(arr), 0);
+	sat_or(NULL, &psat, r, arr, ARRAY_ELEMS(arr), 1/*NOR*/);
+	sat_or(&nn, &psat, 0, arr, ARRAY_ELEMS(arr), 0);
+	sat_or(&nn, &psat, 0, arr, ARRAY_ELEMS(arr), 1/*NOR*/);
 
 	sat_and(&nn, &psat, 0, arr, ARRAY_ELEMS(arr));
 	sat_and(&nn, &psat, 0, arr, ARRAY_ELEMS(arr));
@@ -2070,6 +2381,10 @@ int main(int argc, char **argv)
 	sat_1ofn(&nn, &psat, 0, arr, 3, 0);
 	sat_1ofn(&nn, &psat, 0, arr, 4, 0);
 
+	sat_lt(&nn, &psat, 0, arr, 6, 12);
+	sat_lt(&nn, &psat, 0, arr, 6, 25);
+
+if (0) {
 				// XORs are restricted to STC_CLS_MAX_ELEMS
 				// build many shorter ones
 				//
@@ -2079,6 +2394,7 @@ int main(int argc, char **argv)
 			         &(varr[ STC_CLS_MAX_ELEMS *i ]), j, 0);
 		}
 	}
+}
 
 	sat_const(&psat, e0, 0);
 	sat_const(&psat, f1, 1);
