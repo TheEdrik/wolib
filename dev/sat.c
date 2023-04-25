@@ -709,6 +709,17 @@ static inline uint32_t sat_auxvar2id(unsigned int varnr)
 
 
 /*--------------------------------------
+ * number of clauses used
+ *
+ * returns 0 for uninitialized/NULL state
+ */
+static inline unsigned int sat_state2clausecnt(const struct SatState *ps)
+{
+	return (ps && ps->c && (ps->c_used < ps->c_allocd)) ? ps->c_used : 0;
+}
+
+
+/*--------------------------------------
  * encode some combination of 1-based delivery ID, 1-based time unit,
  * 1-based vehicle-bit ID into a 32-bit unique ID
  *
@@ -1328,6 +1339,9 @@ static inline void sat_register_clauses(struct SatState *ps, unsigned int incr)
 static unsigned int sat_comment(struct SatState *ps,
                                      const char *c, size_t cbytes) ;
 
+static uint64_t sat_comment1(struct SatState *ps,
+                                  const char *c, size_t cbytes) ;
+
 static unsigned int sat_const(struct SatState *ps,
                                      uint64_t a,
                                  unsigned int val) ;
@@ -1336,7 +1350,7 @@ static unsigned int sat_const(struct SatState *ps,
 static unsigned int sat_or(struct SatName *name,
                           struct SatState *ps,
                                  uint64_t r,
-                                 uint64_t *a, unsigned int an,
+                           const uint64_t *a, unsigned int an,
                                       int invert) ;
 
 
@@ -1516,12 +1530,11 @@ static unsigned int sat_val2runs(struct SatRuns *pr, unsigned int n)
 static unsigned int sat_lt(struct SatName *name,
                           struct SatState *ps,
                                  uint64_t r,
-                                 uint64_t *a, unsigned int an,
+                           const uint64_t *a, unsigned int an,
                              unsigned int n)
 {
 	unsigned int idx, nruns, adds = 0, curr;
 		// adds: total nr. of entries we add; curr: current building blk
-
 	struct SatRuns runs = SAT_RUNS_INIT0;
 	char cfmt[ STC_STR_MAX_BYTES +1 ];
 	struct SatClause *pc;
@@ -1544,7 +1557,7 @@ static unsigned int sat_lt(struct SatName *name,
 	}
 
 	cb  = snprintf(cfmt, sizeof(cfmt), "N[%ub]<CONST(%u)", an, n);
-	idx = ps->c_used;                        // idx. of first clause we add
+	idx = sat_state2clausecnt(ps);
 
 	curr = sat_comment(ps, cfmt, cb);
 	if (!curr)
@@ -1558,8 +1571,6 @@ static unsigned int sat_lt(struct SatName *name,
 		return curr ? (adds + curr) : 0;
 	}
 
-printf("xxx %u/%u: %u,%u,%u\n", an, runs.total, runs.bits[0], runs.bits[1],
-       runs.bits[2]);
 
 					// OR(all bits above leading 1's run)
 					// MUST be all-0, otherwise comparison
@@ -1584,13 +1595,122 @@ printf("xxx %u/%u: %u,%u,%u\n", an, runs.total, runs.bits[0], runs.bits[1],
 
 
 /*--------------------------------------
+ * are the two 'an'-bit values equal? (or not equal, with 'invert')
+ */
+static unsigned int sat_eq(struct SatName *name,
+                          struct SatState *ps,
+                                 uint64_t r,
+                           const uint64_t *a, unsigned int an,
+                           const uint64_t *b,
+                                      int invert)
+{
+	uint64_t xors[ STC_CLS_MAX_ELEMS ] = { 0, };
+	char descr[ STC_STR_MAX_BYTES +1 ];
+	struct SatName eq = SAT_NAME_INIT0;
+	unsigned int idx0, i;
+	size_t cb;
+
+	if (!ps || !a || !an || (an > STC_CLS_MAX_ELEMS) || !b)
+		return 0;
+
+	idx0 = sat_state2clausecnt(ps);
+
+	cb = snprintf(descr, sizeof(descr), "%s" "EQ(%u)",
+	              invert ? "NOT-" : "", an);
+		/**/
+	if (!sat_comment(ps, descr, cb))
+		return 0;
+
+	for (i=0; i<an; ++i) {
+		if (!sat_xor1(&eq, ps, 0, a[i], b[i], 0))
+			return 0;
+		xors[i] = eq.cs;
+	}
+
+			// == means none of the XORs is True         -> NOR
+			// != means at least one of the XORs is true -> OR
+
+	if (!sat_or(name, ps, r, xors, an, !invert))
+		return 0;
+
+	return sat_state2clausecnt(ps) - idx0;
+}
+
+
+/*--------------------------------------
+ * are the two numbers equal, or either is all-0?
+ *
+ * turns into  NOR(a[]) | NOR(b[]) | NOT-EQ(a[], b[])   ->
+ *                          OR(XOR(bits/1) ... XOR(bits/N))
+ *      (1) NOR of any all-0 satisfies or
+ *      (2) at least one of the XOR's is True -> a[] != b[]
+ */
+static unsigned int sat_neq_or0(struct SatName *name,
+                               struct SatState *ps,
+                                      uint64_t r,
+                                const uint64_t *a, unsigned int an,
+                                const uint64_t *b)
+{
+	struct SatName nor1 = SAT_NAME_INIT0,
+	               nor2 = SAT_NAME_INIT0,
+	                 eq = SAT_NAME_INIT0;
+	char descr[ STC_STR_MAX_BYTES +1 ];
+	unsigned int idx, idx0;
+	struct SatClause *pc;
+	size_t cb;
+
+	if (!ps || !a || !an || (an > STC_CLS_MAX_ELEMS) || !b)
+		return 0;
+
+	if (!r) {
+		if (!sat_new_var(name, ps))
+			return 0;
+		r = name->cs;
+	}
+
+	idx0 = ps->c_used;
+
+	cb = snprintf(descr, sizeof(descr), "EQ-OR-ZERO(%u)", an);
+		/**/
+	if (!sat_comment(ps, descr, cb))
+		return 0;
+
+	if (!sat_or(&nor1, ps, 0, a, an, 1 /* NOR */) ||
+	    !sat_or(&nor2, ps, 0, b, an, 1 /* NOR */) ||
+	    !sat_eq(&eq,   ps, 0, a, an, b, 1 /* != */))
+		return 0;
+
+	// nor1, nor2, eq are NOR(a[]), NOR(b[]), (a[] <=> b[]), respectively
+
+	pc = sat_add_clauses(ps, &idx, 1);
+	if (!pc)
+		return 0;
+
+	                               // NOR(a[]) | NOR(b[]) | -NXOR(a[], b[])
+	pc[ idx ].used = 3;
+	pc[ idx ].neg[ 0 ] = ((uint64_t) 0x20) << 56;               // + + -
+
+	pc[ idx ].soffset[ 0 ] = cstring2offset(nor1.cs);           // NOR(a[])
+	pc[ idx ].sbytes [ 0 ] =  cstring2bytes(nor1.cs);
+
+	pc[ idx ].soffset[ 1 ] = cstring2offset(nor2.cs);           // NOR(b[])
+	pc[ idx ].sbytes [ 1 ] =  cstring2bytes(nor2.cs);
+
+	pc[ idx ].soffset[ 2 ] = cstring2offset(eq.cs);             // -EQ(b[])
+	pc[ idx ].sbytes [ 2 ] =  cstring2bytes(eq.cs);
+
+	return idx - idx0;
+}
+
+
+/*--------------------------------------
  * common sanity check for array-input, N+1-clause functions (n-plus-1 -> np1)
  */
 static unsigned int
 valid_np1_params(const struct SatName *name,
                 const struct SatState *ps,
                              uint64_t r,
-                             uint64_t *a, unsigned int an)
+                       const uint64_t *a, unsigned int an)
 {
 	unsigned int i;
 
@@ -1627,11 +1747,13 @@ valid_np1_params(const struct SatName *name,
 static unsigned int sat_or(struct SatName *name,
                           struct SatState *ps,
                                  uint64_t r,
-                                 uint64_t *a, unsigned int an,
+                           const uint64_t *a, unsigned int an,
                                       int invert)
 {
+	char descr[ STC_STR_MAX_BYTES +1 ];
 	struct SatClause *pc;
 	unsigned int idx, i;
+	size_t cb;
 
 	if (!valid_np1_params(name, ps, r, a, an))
 		return 0;
@@ -1673,18 +1795,19 @@ static unsigned int sat_or(struct SatName *name,
 		return 2;
 	}
 
+	if (!an)
+		return 0;          // explicit check for >=1 input/s
+
 	pc = sat_add_clauses(ps, &idx, an+1);
 	if (!pc)
 		return 0;
 
-	pc[ idx ].comment = sat_str_append(&( ps->comments ),
-	                                   invert ? "NOR" : "OR",
-	                                   invert ? 3     : 2);
+	cb = snprintf(descr, sizeof(descr), "%s" "OR(%u)",
+	              invert ? "N" : "", an);
+		/**/
+	pc[ idx ].comment = sat_str_append(&( ps->comments ), descr, cb);
 	if (!pc[ idx ].comment)
 		return 0;
-
-	if (!an)
-		return 0;          // explicit check for >=1 input/s
 
 
 	pc[ idx ].used = an+1;
@@ -1937,7 +2060,9 @@ static unsigned int sat_1ofn(struct SatName *name,
                                    uint64_t *a, unsigned int an,
                                         int allow0)
 {
+	char descr[ STC_STR_MAX_BYTES +1 ];
 	unsigned int nzused;
+	size_t db;
 
 	if (!valid_np1_params(name, ps, r, a, an))
 		return 0;
@@ -1948,15 +2073,10 @@ static unsigned int sat_1ofn(struct SatName *name,
 
 	nzused = ps->nzclauses;
 
-	{
-	char descr[ STC_STR_MAX_BYTES +1 ];
-	size_t db;
-
 	db = snprintf(descr, sizeof(descr), "%s1-of-N(%u)",
 	                                    allow0 ? "0/" : "", an);
 	if (!sat_comment(ps, descr, db))
 		return 0;
-	}
 
 	if (an == 2) {
 		return allow0 ? sat_nand(name, ps, r, a, an)
@@ -1987,33 +2107,42 @@ static unsigned int sat_1ofn(struct SatName *name,
 
 
 /*--------------------------------------
- * appends single-line comment
+ * registers single-entry comment to last used entry of 'ps'
+ *
+ * returns >0  if comment has been registered and appended
+ *         0   if anything failed
+ */
+static uint64_t sat_comment1(struct SatState *ps,
+                                  const char *c, size_t cbytes)
+{
+	unsigned int idx = ps ? ps->c_used : ~((unsigned int) 0);
+
+	if (!ps || !ps->c || !c || !cbytes || !idx ||
+	    (idx > ps->c_used)                     ||
+	    (ps->c_used > ps->c_allocd))
+		return 0;
+
+	ps->c[ idx -1 ].comment = sat_str_append(&( ps->comments ), c, cbytes);
+
+	return ps->c[ idx -1 ].comment;
+}
+
+
+/*--------------------------------------
+ * appends single-line comment as new entry
  */
 static unsigned int sat_comment(struct SatState *ps,
                                      const char *c, size_t cbytes)
 {
-	struct SatClause *pc;
-	unsigned int idx;
-	uint64_t cs;
-
 	if (!ps || !c || !cbytes)
 		return 0;
 
 	if (sat_ensure_clauses(ps, 1) <0)
 		return 0;
 
-	pc  = ps->c;
-	idx = ps->c_used;
-
-	cs = sat_str_append(&( ps->comments ), c, cbytes);
-	if (!cs)
-		return 0;
-
-	pc[ idx ].comment = cs;
-
 	ps->c_used++;
 
-	return ps->c_used;
+	return sat_comment1(ps, c, cbytes) ? 1 : 0;
 }
 
 
@@ -2383,6 +2512,9 @@ int main(int argc, char **argv)
 
 	sat_lt(&nn, &psat, 0, arr, 6, 12);
 	sat_lt(&nn, &psat, 0, arr, 6, 25);
+
+	sat_neq_or0(&nn, &psat, 0, arr, 3, &(arr[3]));
+	sat_eq(&nn, &psat, 0, arr, 3, &(arr[3]), 0 /* ==? */);
 
 if (0) {
 				// XORs are restricted to STC_CLS_MAX_ELEMS
