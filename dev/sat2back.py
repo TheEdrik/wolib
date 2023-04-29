@@ -57,7 +57,8 @@ reVARDEF = re.compile('(?P<id> [a-zA-Z0-9] [a-zA-Z0-9_]*) \[ (?P<nr> \d+) \]',
 ## match "d0t4v0[14]" -> id = d0t4v0, nr = 14
 
 
-reOK = re.compile('^ s \s+ SATISFIABLE$ ', re.VERBOSE)
+reOK   = re.compile('^ s \s+ SATISFIABLE$ ',   re.VERBOSE)
+reFAIL = re.compile('^ s \s+ UNSATISFIABLE$ ', re.VERBOSE)
 
 reRESPONSES = re.compile('^ v \s+', re.VERBOSE)
 
@@ -281,7 +282,7 @@ def list2str(lst):
 		return ",".join(str(v)  for v in arr)
 
 
-##--------------------------------------
+##----------------------------------------------------------------------------
 ## is the recovered set of dicts-of-variables consistent?
 ## excepts if arrays are trivially malformed
 ##
@@ -335,8 +336,16 @@ def vars2check(dicts):
 			## vehicle ID rows MUST be all-False, except for
 			## one time unit, for each delivery
 
+			## (1) exactly one time active for each delivery
+			## (2) all non-delivery windows
+	for d in delvs:
+		dts = list(sorted(t  for t in
+					dicts[ 'delv-time-vid' ][d].keys()))
 
-##--------------------------------------
+		print('xxx.D', d, dts)
+
+
+##----------------------------------------------------------------------------
 def verify(res):
 	v = solv2vars(res)
 	vars2check(v)
@@ -364,8 +373,29 @@ if __name__ == '__main__':
                 sys.exit(1)
 
 	lines = list(fileinput.input())
-	ok    = list(li  for li, l  in enumerate(lines)  if re.match(reOK, l))
-	if (len(ok) != 1):
+
+	ok    = list(li  for li, l  in enumerate(lines)  if re.match(reOK,   l))
+	fail  = list(li  for li, l  in enumerate(lines)  if re.match(reFAIL, l))
+
+## exit(2) for unexpected response structures
+
+	if min(len(ok), len(fail)) != 0:
+		sys.stderr.write(f"ERROR: ambiguous SAT response\n")
+		sys.exit(2)
+
+	if max(len(ok), len(fail)) != 1:
+		sys.stderr.write(f"ERROR: multiple SAT responses?\n")
+		sys.exit(2)
+
+	if len(ok) == len(fail):
+		sys.stderr.write(f"ERROR: both pass/fail SAT responses\n")
+		sys.exit(2)
+
+	if fail:
+		sys.stderr.write(f"NO SOLUTION FOUND\n")
+		sys.exit(1)
+
+	if not ok:
                 sys.stderr.write(f"ERROR: does not look like a solved "
 				"SAT problem response\n")
                 sys.exit(1)
