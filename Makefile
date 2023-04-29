@@ -1,3 +1,6 @@
+## see gen-packnroute.py for some of the auxiliary files
+
+
 			## 5-column list of orders
 			## primary weight,  X,  Y,  time window/s,  delv.ID
 ORDERS := orders1.txt
@@ -61,6 +64,15 @@ sat: packnroute.txt
 
 $(BASEXY_C): $(BASEXY)
 	$(shell tr '\t' , < $^ > $@)
+
+
+##--------------------------------------
+## retrieve XY list -> turn into distances' table
+##
+## not automatically remade; think of adjusted/corrected tables
+##
+$(DISTANCES): $(ORDERS)
+	MAX1=99999999999 XY2TABLE=1 ./pack.py $(ORDERS) > $@
 
 
 ##--------------------------------------
