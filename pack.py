@@ -136,6 +136,8 @@
 
 
 ## pack-and-route:
+##   NOTE: setting PACK_N_ROUTE_SKIP in env falls back to SAT solver
+##
 ##   - vehicles' data structure:
 ##     - X,Y coordinates
 ##     - earliest minute when they may leave (X,Y)
@@ -4734,8 +4736,9 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 	if (not use_satsolver()) or sat == None:
 		return
 
+			## such as: bypassed backtracking scan
 	if not tVID2TIME in arrivals:
-		raise ValueError("arrival plan lacks vehicle-to-time field")
+		arrivals[ tVID2TIME ] = {}
 
 	if not xy2dist_table:
  		terminate("SAT solver requires XY-to-distance DB")
@@ -4782,7 +4785,7 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 	debugmsg(f'## SAT.VEHICLES={ sat_vehicles }', 1)
 	debugmsg(f'## SAT.VEHICLE.ID.BITS={ satvbits }', 1)
 
-	if (satvbits > 3):
+	if (satvbits > 4):
 		raise ValueError("predefined less-than-N SAT forms are " +
 				"available up to V=3 vehicle-ID bits")
 
@@ -4951,71 +4954,6 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 	dels = copy.deepcopy(aux)
 
-## TODO: any pieces not yet in satsolv_rest()?
-## 	##-----  SAT-pairs list  ---------------------------------------------
-## 				## full list of (delivery, time unit) pairs
-## 	dts = { }
-##
-## 	##-----  store delivery/time variables
-## 	if use_satsolver():
-## 		if not xy2dist_table:
-## 			terminate("SAT solver requires XY-to-distance DB")
-##
-## 		for d in dels:
-## 			t = d[ "time2vec" ]
-## 					##
-## 			dts[ d[ "index" ] ] = {
-## 				"t":  t,
-## 				"tu": list( timevec2units(t) ),
-## 			}
-##
-## 		vbitlist = range(satvbits)      ## bit indexes for vehicle IDs
-## 		                                ## v0..v(N-1) in descriptions
-##
-## 		for d in dels:
-## 			dvars = []
-## 			didx  = d[ "index" ]
-## ## TODO: retrieve from above table, now that we populate it
-##
-## 				## register dXXtYY and dXXtYYvZZ
-## 				##   - delivery XX, time unit YY
-## 				##   - delivery XX, time unit YY,
-## 				##     vehicle-ID ZZ
-## 				## 'vehicle ZZ' covers bits, not counters
-## 				## (binary-encoded index of vehicle assigned)
-## 				##
-## 				## with 4 vehicles, v0 and v1; variables:
-## 				##     dXX-tYY-v0
-## 				##     dXX-tYY-v1
-## 				## combinations of v0+v1 used to count
-## 				## (1-based) delivery index
-##
-## 			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
-##
-## 			for t in tu:
-## 				tb = timevecbit2offset(t)
-## 				tbits.append(tb)
-##
-## 				dvars.append(satsolv_add_delvtime(sat,
-## 				             didx, tb))
-##
-## 				for v in satvbitnrs:
-## 					satsolv_add_delvtime(sat,
-## 					             didx, tb, vnumber=v)
-##
-## 			satsolv_add_delvs1(sat, dvars, d)
-##
-## 			for t in tbits:
-## 				satsolv_delv2time(sat, didx, t, vbitlist)
-##
-## 			satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
-##
-## 		satsolv_delv_window_2x_deps(sat, dels, xy2dist_table,
-## 		                            dts, satvcount)
-##
-## 	del(dts)
-## 	##-----  /SAT-pairs list  --------------------------------------------
-
 	##------------------------------
 	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
 	mins_min, mins_max = dels[0]['MIN_TIME_ALL'], dels[0]['MAX_TIME_ALL']
@@ -5167,6 +5105,10 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 		debugmsg(f'## PLAN.VEH.NR={ len(vplans) }', 2,
 		         type=vTRC_SCHED)
+
+		##-----  set up all initial vars; may terminate  -------------
+		if ('PACK_N_ROUTE_SKIP' in os.environ):
+			break            ## TODO: proper setup for early skip
 
 				## redundant copies of vplans[] fields
 		x, y = None, None
@@ -5804,6 +5746,14 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 		if are_in_timeout(tstart):
 			print("TIMED.OUT")
 			break
+
+	if ('PACK_N_ROUTE_SKIP' in os.environ):
+
+						## solve the rest through SAT
+		satsolv_rest(sat, dels, arrivals, vcost,
+		             satvcount, xy2dist_table)
+		satsolv_report(sat)
+		sys.exit(0)
 
 	tstart = timediff_log_now(tbacktrack0,
 		'BFD.ASSIGN.ALL'  if done  else 'BFD.ASSIGN.PARTIAL')
