@@ -34,6 +34,8 @@ def vals2strs(v):
 ##   DIFF         2x N-bit values    -- A != B ?
 ##                                   -- essentially, an OR of XORs
 ##   DIFF-NZ      2x N-bit values    -- A != B  or  A == 0  or  B == 0 ?
+##                                   -- used when comparison must treat
+##                                   -- 0 as unassigned/unknown (-> !different)
 ##
 def truthtable(fn, n, vars='v', limit=0):
 	fn   = fn.upper()
@@ -88,7 +90,8 @@ def truthtable(fn, n, vars='v', limit=0):
 		elif (fn == 'DIFF'):
 			r = 1  if (vb != v2b)  else 0
 		elif (fn == 'DIFF-NZ'):
-			r = 1  if (vb != v2b)  else 0
+			r = 1  if ((vb != v2b) or
+					(min(max(vb), max(v2b)) == 0))  else 0
 
 		else:
 			raise ValueError("unknown function")
@@ -130,5 +133,8 @@ if True:
 	truthtable('diff', 3)
 	truthtable('diff', 4)
 	truthtable('diff', 5)
+	truthtable('diff-nz', 3)
+	truthtable('diff-nz', 4)
+	truthtable('diff-nz', 5)
 	sys.exit(0)
 
