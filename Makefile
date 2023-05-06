@@ -99,7 +99,26 @@ $(DISTANCES): $(ORDERS)
 ##       sed '1,/SAT:/d;/\/SAT=/{d;q}' cnffail.txt | tee cnffail.sat
 ##
 ## the first failing combination will be saved cnffail.sat, including
-## its context in cnffail.txt.
+## its context in cnffail.txt:
+##
+## ERROR: invalid combination:
+##   input=[-1, -2, 3, -4, -5, 6, -7][orig: [0, 0, 1, 0, 0, 1, 0]]
+## ===SAT:=============================
+## p cnf 13 28
+## c
+## c CONSTRAINTS:
+## c   NEQ-OR0[3b](v0_00,v0_01,v0_02 / v1_00,v1_01,v1_02)
+## c /CONSTRAINTS:
+## ...
+## c VARIABLES:
+## c   v0_00[1] v0_01[2] v0_02[3] v1_00[4] v1_01[5] v1_02[6] NEQ[7]
+## c   NOR1[8] NOR2[9] XOR3[10] XOR4[11] XOR5[12] NEQ6[13]
+## c /VARIABLES 
+## c
+## 1 2 3 8 0
+## -1 8 0 
+## -2 8 0 
+## ...
 
 
 ##--------------------------------------
