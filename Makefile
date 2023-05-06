@@ -76,6 +76,33 @@ $(DISTANCES): $(ORDERS)
 
 
 ##--------------------------------------
+## sample SAT/truth table cross-check:
+##   (1) generate SAT expression as template. only expression, standalone;
+##       assign inputs as 1..N-1, and output bits as N [N+1...].  in other
+##       words, leave intermediate bits after any of these
+##
+##     (1.1) output is ...template... below
+##
+##   (2) enumerate truth tables; expect this to be ~arbitrarily large
+##
+##     (2.1) see dev/truthtable-cnf.py for function-to-truth.table conversions
+##
+##   (3) use dev/truthtable2assign.py to check all truth table combinations
+##       against template.  internally, each combination is added as a set
+##       of clauses and passed through a solver.  any failing combination
+##       stops the stream.
+##
+## assume ...template... is already available, and truthtable-cnf.py is
+## configured to output the full truth table without any parameters:
+##
+##   dev/truthtable-cnf.py | dev/truthtable2assign.py | tee cnffail.txt && \
+##       sed '1,/SAT:/d;/\/SAT=/{d;q}' cnffail.txt | tee cnffail.sat
+##
+## the first failing combination will be saved cnffail.sat, including
+## its context in cnffail.txt.
+
+
+##--------------------------------------
 CLEAN := packnroute.txt p.sat p.solv pnr.log pnr2.log
 
 clean: $(wildcard $(CLEAN))
