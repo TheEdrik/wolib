@@ -3835,13 +3835,13 @@ def satsolv_or1(var1, var2, result, negate=False):
 
 
 ##-----------------------------------------
-## sample: A; B; N = A | B
-##     1) A | B | not(N)             N -> (A | B)
-##     2) not(A) | N       together: (A | B) -> N
-##     3) not(B) | N
+## sample: A; B; ...; R = A | B | ...
+##     1) A | B | not(R)      not(A) & not(B) -> not(R)
+##     2) not(A) | R          A -> R; B -> R  ...
+##     3) not(B) | R
 ##        ...
 ##
-## NOR with 'negate' (negates N in all clauses)
+## NOR with 'negate' (negates R in all clauses)
 ##
 ## returns list of clauses + control variable + comment
 ##
@@ -3853,7 +3853,7 @@ def satsolv_or(base, vars, result=None, negate=False):
 		result = base + sNALL0
 
 	rsign1, rsign2 = ('', '-')  if negate  else ('-', '')
-		## sign(R) in all-enclosing (1) and per-variable (2) lines
+		## sign(R) in all-enclosing (1) and per-variable (2...) lines
 
 ## see also: satsolv_or1()
 	all = list((base +b)  for b in  v)
