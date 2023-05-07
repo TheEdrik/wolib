@@ -95,8 +95,9 @@ $(DISTANCES): $(ORDERS)
 ## assume ...template... is already available, and truthtable-cnf.py is
 ## configured to output the full truth table without any parameters:
 ##
-##   dev/truthtable-cnf.py | dev/truthtable2assign.py | tee cnffail.txt && \
-##       sed '1,/SAT:/d;/\/SAT=/{d;q}' cnffail.txt | tee cnffail.sat
+##   dev/truthtable-cnf.py | dev/truthtable2assign.py ...template... | \
+##       tee cnffail.txt && sed '1,/SAT:/d;/\/SAT=/{d;q}' cnffail.txt | \
+##       tee cnffail.sat
 ##
 ## the first failing combination will be saved cnffail.sat, including
 ## its context in cnffail.txt:

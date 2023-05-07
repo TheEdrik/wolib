@@ -20,6 +20,16 @@ def vals2strs(v):
 
 
 ##--------------------------------------
+## returns string + int form (all 0/1 or equivalent)
+##
+def int2bits(v, bits):
+	vb0s = f'{ v :0{bits}b}'
+	vb   = list(int(b)  for b in vb0s)
+
+	return vb0s, vb
+
+
+##--------------------------------------
 ## please do not comment on splitting-through-string, or repeatedly
 ## evaluating expression in loop
 ##
@@ -36,6 +46,7 @@ def vals2strs(v):
 ##   DIFF-NZ      2x N-bit values    -- A != B  or  A == 0  or  B == 0 ?
 ##                                   -- used when comparison must treat
 ##                                   -- 0 as unassigned/unknown (-> !different)
+##   SUM          N bits -> ceil(log2(N)) bits
 ##
 def truthtable(fn, n, vars='v', limit=0):
 	fn   = fn.upper()
@@ -53,8 +64,7 @@ def truthtable(fn, n, vars='v', limit=0):
 		n += n
 
 	for v in range(1 << n):
-		vb0s = f'{ v :0{n}b}'
-		vb   = list(int(b)  for b in vb0s)
+		vb0s, vb = int2bits(v, n)
 
 		if is2x:
 			vms, vls = vb0s[ : n//2 ], vb0s[ n//2 : ] ## most+least
@@ -72,6 +82,8 @@ def truthtable(fn, n, vars='v', limit=0):
 			r = 1 - min(vb)
 		elif fn == 'NOR':
 			r = 1 - max(vb)
+		elif fn == 'SUM':
+			r = int2bits(sum(vb), n.bit_length())[1]
 
 							## compound functions
 		elif (fn == '1OFN') or (fn == '1-OF-N'):
@@ -92,13 +104,16 @@ def truthtable(fn, n, vars='v', limit=0):
 		elif (fn == 'DIFF-NZ'):
 			r = 1  if ((vb != v2b) or
 					(min(max(vb), max(v2b)) == 0))  else 0
-
 		else:
 			raise ValueError("unknown function")
 
 		if is2x:
 			vb.extend(v2b)
-		vb.append(r)
+
+		if isinstance(r, list) or isinstance(r, tuple):
+			vb.extend(r)
+		else:
+			vb.append(r)
 
 		print(" ".join(str(v) for v in vb))
 	print('')
@@ -107,12 +122,18 @@ def truthtable(fn, n, vars='v', limit=0):
 
 
 ##============================================================================
-## Quine McCluskey minimization of CNF truth table
-##
-
-
-##--------------------------------------
 if True:
+	bits = 8
+	truthtable('sum', bits)
+	sys.exit(0)
+
+	bits = 8
+	if 'BITS' in os.environ:
+		bits = int(os.environ['BITS'])
+
+	truthtable('diff-nz', bits)
+	sys.exit(0)
+
 	truthtable('xor',  3)
 	truthtable('xnor', 3)
 	truthtable('and',  3)
