@@ -3810,6 +3810,13 @@ def satsolv_nand1(var1, var2, result=None):
 
 
 ##-----------------------------------------
+## single net clause setting bit to 'value'
+##
+def satsolv_const(sat, var, value=True):
+        return f'{ var }'  if value  else f'-{ var }'
+
+
+##-----------------------------------------
 ## raw clauses for two-input OR
 ##
 ## returns assigned variable and clauses
@@ -4146,7 +4153,7 @@ def satsolv_less_than(sat, vars, n):
 ##
 ## returns list of clauses, result variable, comment
 ##
-def satsolv_neq_or0(sat, v1, v2, result=None):
+def satsolv_neq_or0(sat, v1, v2, result=None, force=False):
 				## TODO: OR extra bits which are
 				## in v1 or v2 only -> extra term in top clause
 	if len(v1) != len(v2):
@@ -4191,6 +4198,9 @@ def satsolv_neq_or0(sat, v1, v2, result=None):
 	cls5, _, _ = satsolv_or('', [ nor1, nor2, neq ], result=result)
 
 	cls.extend(cls5)
+
+	if force:
+		cls.append(satsolv_const(neq))
 
 	cmt = f'NEQ-OR0({ ",".join(v1) } / { ",".join(v2) })'
 
