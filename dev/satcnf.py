@@ -1,8 +1,13 @@
 #!/usr/bin/python3
 
 ## construct SAT-solver expressions for solving vehicle routing subproblems
+##
+## parses multibit fields from solver->sat2back result if 'FILTER'
+## is set in environment
+##
+## setting VERBOSE produces human-readable form of reassembled fields
 
-import re, sys
+import re, sys, os, fileinput
 
 
 ##--------------------------------------
@@ -211,7 +216,7 @@ def satsolv_xor1(var1, var2, result=None, negate=False):
 ## None 'result' auto-assigns variable name
 ## returns list of clauses + comment
 ##
-## TODO: merge with AND
+## TODO: merge with AND, such as NOR was merged with added 'negate'
 ##
 def satsolv_nand1(var1, var2, result=None):
 	cls  = []
@@ -233,31 +238,68 @@ def satsolv_nand1(var1, var2, result=None):
 
 
 ##-----------------------------------------
-## sample: A; B; N = A | B
-##     1) A | B | not(N)             N -> (A | B)
-##     2) not(A) | N       together: (A | B) -> N
-##     3) not(B) | N
+## raw clauses for two-input OR
 ##
-## None 'result' auto-assigns variable name
-## returns list of clauses, name of final variable, + comment
+## returns assigned variable and clauses
+## TODO: sync assign-in results, then adapt to that
 ##
-def satsolv_or(base, vars, result=None):
+def satsolv_or1(var1, var2, result, negate=False):
+## TODO: obsoleted if split properly -> separate ''/- fields
+	rsign1, rsign2 = ('', '-')  if negate  else ('-', '')
+		## sign(R) in all-enclosing (1) and per-variable (2) lines
+
+	return result, [
+#		[ ' ', var1, ' ', var2, '-', result ],
+#		[ '-', var1, ' ', result,           ],
+#		[ '-', var1, ' ', result,           ],
+
+		f' {var1} {var2} { rsign1 }{result}',
+		f'-{var1} { rsign2 }{result}',
+		f'-{var2} { rsign2 }{result}',
+	]
+
+
+##-----------------------------------------
+## sample: A; B; R = A | B | ...
+##     1) A | B | ... | not(R)     R -> (A | B | ...)
+##     2) not(A) | R               together: (A | B | ...) -> R
+##     3) not(B) | R
+##        ...
+##
+## returns list of clauses + control variable + comment
+##
+## NOR with 'negate' (negates R in all clauses)
+## TODO: organized propagation of +- signs (in-band)
+##
+def satsolv_or(base, vars, result=None, negate=False):
 	cls = []
 	v   = sorted(vars)
 
 	if result == None:
 		result = base + sNALL0
 
+#	if len(vars) == 2:
+#		return satsolv_or1(vars[0], vars[1], result, negate=negate)
+
+## see also: satsolv_or1()
+	rsign1, rsign2 = ('', '-')  if negate  else ('-', '')
+		## sign(R) in all-enclosing (1) and per-variable (2) lines
+
 	all = list((base +b)  for b in  v)
-	all.append(f'-{ result }')
+	all.append(f"{ rsign1 }{ result }")
 		##
 	cls.append( " ".join(all) )                   ## A | B | not(N)
 
 	terms = list((base +b)  for b in v)
 
-	cls.extend((f'-{ t } { result }')  for t in terms)
+	cls.extend((f'-{ t } { rsign2 }{ result }')  for t in terms)
 
-	return cls, result, f'{ result } := (' +(" OR ".join(terms)) +')'
+	if negate:
+		req = f'NOR(' +(",".join(terms)) +')'
+	else:
+		req = f'(' +(" OR ".join(terms)) +')'
+
+	return cls, result, f'{ result } := { req }'
 
 
 ##-----------------------------------------
@@ -534,7 +576,71 @@ def nof1(n):
 
 
 ##-----------------------------------------------------------
+## "  v7_b2: False"    assume indentation is optional
+##
+reVBITS = re.compile('^ \s* v (?P<var> \d+) _b (?P<bit> \d+) : \s+ ' +
+                     ' (?P<value> True | False)$',
+                     re.VERBOSE | re.IGNORECASE)
+
+
+##--------------------------------------
+## retrieve and group multibit 'fields'
+## variables which match 'v{...digits...}_b{...digits...}'
+##
+## group and report multibit values; check if they all differ (which is a
+## test for many of their uses) if 'alldiff'
+##
+def result2filter(alldiff=True):
+	res    = {}                  	## res[ variable ] = ...value...
+	maxbit = -1
+
+	for l in (l.rstrip('\n') for l in fileinput.input(openhook=
+	                                  fileinput.hook_encoded("utf-8"))):
+		vb = re.search(reVBITS, l)
+		if not vb:
+			continue
+
+		v, b = int(vb.group('var')), int(vb.group('bit'))
+		val  = (vb.group('value') == 'True')
+				## TODO: check for canonical convert-to-Boolean
+
+		if not v in res:
+			res[v] = 0
+
+		if val:
+			res[v] |= (1 << b)
+
+		maxbit = max(maxbit, b+1)
+
+	if maxbit < 0:
+		return -1
+
+	if 'VERBOSE' in os.environ:
+		xdigits = ((maxbit.bit_length() +7) // 8) *2
+
+		for v in sorted(res.keys()):
+			print(f"## VAR[{v}]={ res[v] }" +
+				f"[x{ res[v] :0{xdigits}x}]")
+
+	if alldiff:                               ## are the values all-unique?
+		rv = res.values()
+		if len(rv) != len(set(rv)):
+			sys.stderr.write(f"## NOT UNIQUE: { sorted(rv) }\n")
+			sys.stderr.flush()
+			return -1
+
+		sys.stderr.write(f"## ALL UNIQUE: { len(rv) } " +
+				f"(of { 1 << maxbit })\n")
+		sys.stderr.flush()
+
+	return 0
+
+
+##-----------------------------------------------------------
 if __name__ == '__main__':
+	if 'FILTER' in os.environ:
+		sys.exit(result2filter())
+
 	print(satsolv_and("base", [ "A", "B", "C", ]))
 	print(satsolv_and("base", [ "A", "B", "C", ], result='AND_ABC'))
 	print(satsolv_or("base", [ "A", "B", "C", ]))
