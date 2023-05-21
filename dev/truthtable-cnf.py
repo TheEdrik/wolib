@@ -30,6 +30,12 @@ def int2bits(v, bits):
 
 
 ##--------------------------------------
+tOPR_2x = [
+	'DIFF', 'DIFF-NZ', 'LT', 'LE', 'ADD', 'ADD_NC',
+]
+
+
+##--------------------------------------
 ## please do not comment on splitting-through-string, or repeatedly
 ## evaluating expression in loop
 ##
@@ -47,11 +53,12 @@ def int2bits(v, bits):
 ##                                   -- used when comparison must treat
 ##                                   -- 0 as unassigned/unknown (-> !different)
 ##   SUM          N bits -> ceil(log2(N)) bits
+##   ADD          2x N bits -> N +1
+##   ADD_NC       2x N bits -> N, ignoring carry
 ##
 def truthtable(fn, n, vars='v', limit=0):
 	fn   = fn.upper()
-	is2x = ((fn == 'DIFF') or (fn == 'DIFF-NZ') or (fn == 'LT') or
-	        (fn == 'LE'))
+	is2x = (fn in tOPR_2x)
 
 	if ((fn == 'LESSTHAN')    or (fn == 'LESS-THAN') or
 	    (fn == 'LESSTHAN_NZ') or (fn == 'LESS-THAN-NZ')):
@@ -84,6 +91,10 @@ def truthtable(fn, n, vars='v', limit=0):
 			r = 1 - max(vb)
 		elif fn == 'SUM':
 			r = int2bits(sum(vb), n.bit_length())[1]
+
+		elif (fn == 'ADD') or (fn == 'ADD_NC'):
+			r = int2bits(sum(vb), n.bit_length())[1]
+## TODO: non-carry addition variant
 
 							## compound functions
 		elif (fn == '1OFN') or (fn == '1-OF-N'):
@@ -123,13 +134,16 @@ def truthtable(fn, n, vars='v', limit=0):
 
 ##============================================================================
 if True:
-	bits = 8
-	truthtable('sum', bits)
-	sys.exit(0)
+#	bits = 8
+#	truthtable('sum', bits)
+#	sys.exit(0)
 
 	bits = 8
 	if 'BITS' in os.environ:
 		bits = int(os.environ['BITS'])
+
+	truthtable('1-of-n', bits)
+	sys.exit(0)
 
 	truthtable('diff-nz', bits)
 	sys.exit(0)

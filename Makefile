@@ -120,6 +120,16 @@ $(DISTANCES): $(ORDERS)
 ##    -1 8 0 
 ##    -2 8 0 
 ##    ...
+##
+## since expressions may become unsatisfiable independent of any result,
+## truth table checking cross-checks UNSATISFIABLE responses, and tolerates
+## them if they match the expected False result. As an example, an 1-of-N
+## check may include pairwise prohibitions on input bits:
+##    ...
+##    -v0[1] -v1[2]
+##    -v0[1] -v2[3]
+##    -v1[2] -v2[3]
+##        -> any input combination with >1 of v0/v1/v2 is UNSATISFIABLE
 
 
 ##--------------------------------------
