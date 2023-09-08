@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>            // temporary; sqrt() only
 
 #undef   SYS_NO_LMDB
 #define  SYS_NO_LMDB  1  /* workaround: needs rest of transaction/logic */
@@ -41,6 +42,17 @@ typedef enum {
 #define  HSH_FS_FQNAME_MAX_BYTES  128
 
 #define  HSH_READONLY  1
+
+/* temp. variable names are '...operation(ID)...' '...addl-variable count...'
+ * define limits for both, excluding any terminating \0
+ */
+#define  SAT_ID_MAX_BYTES  ((size_t) 8)  /* operation/ID limit */
+#define  SAT_NR_MAX_BYTES  ((size_t) 8)
+
+typedef enum {
+	SAT_FL_INVERT  = 1,    // OR -> NOR, AND -> NAND etc.
+	SAT_FL_ADD_VAR = 2     // add clause forcing the aggregate variable
+} SAT_Flag_t ;
 
 
 #if !defined(SYS_NO_LMDB)  /*=====  delimiter: LMDB access  ================*/
@@ -612,18 +624,21 @@ struct SatClause {
 
 		// offset+size into single shared concatenated-string
 		//
-	uint32_t soffset[ STC_VEC_SIGN_U64S *64 ];
-	unsigned char sbytes[ STC_VEC_SIGN_U64S *64 ];
+	uint32_t soffset[ STC_CLS_MAX_ELEMS ];
+	unsigned char sbytes[ STC_CLS_MAX_ELEMS ];
 
 // TODO: once we increase length limit, it is prob. simpler to just store
 // arrays of compact strings
+
+		// != 0 if actual variable number is known
+	int32_t varnr[ STC_CLS_MAX_ELEMS ];
 
 	uint64_t comment;
 
 	unsigned int used;
 } ;
 //
-#define SAT_CLAUSE0  { {0,}, {0,}, {0,}, 0, 0, }
+#define SAT_CLAUSE0  { {0,}, {0,}, {0,}, {0,}, 0, 0, }
 
 
 struct SatName {
@@ -659,6 +674,15 @@ struct SatStrings {
 
 
 //--------------------------------------
+struct SAT_Summary {
+	unsigned int vars;
+	unsigned int clauses;
+} ;
+//
+#define SAT_SUMMARY_INIT0 { 0, 0, }
+
+
+//--------------------------------------
 struct SatState {
 	struct PNR_DB db;
 
@@ -669,6 +693,8 @@ struct SatState {
 	struct SatClause *c;
 	unsigned int c_used;          // nr. of clauses already populated
 	unsigned int c_allocd;
+
+	struct SAT_Summary vinfo;
 
 	unsigned int vars;          // total nr. of variables added
 	unsigned int addvars;       // number of additional, indirect etc.
@@ -1335,6 +1361,15 @@ static inline void sat_register_clauses(struct SatState *ps, unsigned int incr)
 }
 
 
+/*--------------------------------------
+ * are 'flags' restricted to 1-bits of 'what'?
+ */
+static inline unsigned int flags_only(unsigned int flags, unsigned int what)
+{
+	return ((flags & ~what) == 0);
+}
+
+
 //--------------------------------------
 static unsigned int sat_comment(struct SatState *ps,
                                      const char *c, size_t cbytes) ;
@@ -1351,7 +1386,7 @@ static unsigned int sat_or(struct SatName *name,
                           struct SatState *ps,
                                  uint64_t r,
                            const uint64_t *a, unsigned int an,
-                                      int invert) ;
+                             unsigned int flags) ;
 
 
 /*----------------------------------------------------------------------------
@@ -1579,7 +1614,8 @@ static unsigned int sat_lt(struct SatName *name,
 		struct SatName discard = SAT_NAME_INIT0;
 // only need clauses, but not implied variable
 
-		sat_or(&discard, ps, 0, a, an - runs.total, 1/*NOR*/);
+		sat_or(&discard, ps, 0, a, an - runs.total,
+		       SAT_FL_INVERT /* NOR */);
 	}
 // RRR
 (void) idx;
@@ -1602,7 +1638,7 @@ static unsigned int sat_eq(struct SatName *name,
                                  uint64_t r,
                            const uint64_t *a, unsigned int an,
                            const uint64_t *b,
-                                      int invert)
+                             unsigned int flags)
 {
 	uint64_t xors[ STC_CLS_MAX_ELEMS ] = { 0, };
 	char descr[ STC_STR_MAX_BYTES +1 ];
@@ -1613,10 +1649,13 @@ static unsigned int sat_eq(struct SatName *name,
 	if (!ps || !a || !an || (an > STC_CLS_MAX_ELEMS) || !b)
 		return 0;
 
+	if (!flags_only(flags, (SAT_FL_INVERT | SAT_FL_ADD_VAR)))
+		return 0;
+
 	idx0 = sat_state2clausecnt(ps);
 
 	cb = snprintf(descr, sizeof(descr), "%s" "EQ(%u)",
-	              invert ? "NOT-" : "", an);
+	              (SAT_FL_INVERT & flags) ? "NOT-" : "", an);
 		/**/
 	if (!sat_comment(ps, descr, cb))
 		return 0;
@@ -1630,7 +1669,8 @@ static unsigned int sat_eq(struct SatName *name,
 			// == means none of the XORs is True         -> NOR
 			// != means at least one of the XORs is true -> OR
 
-	if (!sat_or(name, ps, r, xors, an, !invert))
+	if (!sat_or(name, ps, r, xors, an,
+	            SAT_FL_INVERT ^ (SAT_FL_INVERT & flags)))
 		return 0;
 
 	return sat_state2clausecnt(ps) - idx0;
@@ -1675,9 +1715,9 @@ static unsigned int sat_neq_or0(struct SatName *name,
 	if (!sat_comment(ps, descr, cb))
 		return 0;
 
-	if (!sat_or(&nor1, ps, 0, a, an, 1 /* NOR */) ||
-	    !sat_or(&nor2, ps, 0, b, an, 1 /* NOR */) ||
-	    !sat_eq(&eq,   ps, 0, a, an, b, 1 /* != */))
+	if (!sat_or(&nor1, ps, 0, a, an, SAT_FL_INVERT /* NOR */) ||
+	    !sat_or(&nor2, ps, 0, b, an, SAT_FL_INVERT /* NOR */) ||
+	    !sat_eq(&eq,   ps, 0, a, an, b, SAT_FL_INVERT /* != */))
 		return 0;
 
 	// nor1, nor2, eq are NOR(a[]), NOR(b[]), (a[] <=> b[]), respectively
@@ -1742,13 +1782,16 @@ valid_np1_params(const struct SatName *name,
  *     ...
  *     -H | R
  *
- * 'invert' flips sign of R, turns OR into NOR
+ * 'flags' may contain SAT_FL_INVERT (-> NOR) or SAT_FL_ADD_VAR
+ *
+ * returns 0 if anything invalid (which, unfortunately, could be
+ * valid with 1-bit input)
  */
 static unsigned int sat_or(struct SatName *name,
                           struct SatState *ps,
                                  uint64_t r,
                            const uint64_t *a, unsigned int an,
-                                      int invert)
+                             unsigned int flags)
 {
 	char descr[ STC_STR_MAX_BYTES +1 ];
 	struct SatClause *pc;
@@ -1756,6 +1799,9 @@ static unsigned int sat_or(struct SatName *name,
 	size_t cb;
 
 	if (!valid_np1_params(name, ps, r, a, an))
+		return 0;
+
+	if (!flags_only(flags, (SAT_FL_INVERT | SAT_FL_ADD_VAR)))
 		return 0;
 
 	if (!r) {
@@ -1779,7 +1825,7 @@ static unsigned int sat_or(struct SatName *name,
 		if (name)
 			name->cs = a[0];        // OR(A) -> A  or  NOR(A) -> -A
 
-		if (invert) {
+		if (SAT_FL_INVERT & flags) {
 			if (name)
 				name->invert = 1;
 
@@ -1803,7 +1849,7 @@ static unsigned int sat_or(struct SatName *name,
 		return 0;
 
 	cb = snprintf(descr, sizeof(descr), "%s" "OR(%u)",
-	              invert ? "N" : "", an);
+	              (SAT_FL_INVERT & flags) ? "N" : "", an);
 		/**/
 	pc[ idx ].comment = sat_str_append(&( ps->comments ), descr, cb);
 	if (!pc[ idx ].comment)
@@ -1819,7 +1865,7 @@ static unsigned int sat_or(struct SatName *name,
 	pc[ idx ].soffset[ an ] = cstring2offset(r);
 	pc[ idx ].sbytes [ an ] =  cstring2bytes(r);
 		//
-	pc[ idx ].neg[ 0 ] = ((uint64_t) !invert) << (63 - an);
+	pc[ idx ].neg[ 0 ] = ((uint64_t) !(SAT_FL_INVERT & flags)) << (63 - an);
 						// NOT(R) (=OR) or R (=NOR)
 
 
@@ -1830,7 +1876,8 @@ static unsigned int sat_or(struct SatName *name,
 		pc[ idx +1 +i ].sbytes [ 1 ] =  cstring2bytes(r);
 						// NOT(A) | R ... NOT(H) | R
 
-		pc[ idx +1 +i ].neg[ 0 ] = ((uint64_t) (2 | !!invert)) << 62;
+		pc[ idx +1 +i ].neg[ 0 ] =
+			((uint64_t) !!(SAT_FL_INVERT & flags)) << 62;
 						// R (=OR) or NOT(R) (=NOR)
 
 		pc[ idx +1 +i ].used     = 2;
@@ -2066,7 +2113,6 @@ static unsigned int sat_1ofn(struct SatName *name,
 
 	if (!valid_np1_params(name, ps, r, a, an))
 		return 0;
-
 	                                               // trivial special cases
 	if (an == 1)
 		return 0;            // var stands for itself, needs no clauses
@@ -2104,6 +2150,338 @@ static unsigned int sat_1ofn(struct SatName *name,
 
 	return (ps->nzclauses -nzused);
 }
+
+
+/*--------------------------------------
+ * 1-of-N, special cases in the beginning
+ * returns >0  if accepted (1+nr of real clauses appended to 'ps')
+ *         ~0  if input is inconsistent
+ *          0  if not recognized as special case; caller must process
+ */
+static unsigned int sat_1ofn_few(struct SatName *name,
+                                struct SatState *ps,
+                                       uint64_t r,
+                                       uint64_t *a, unsigned int an,
+                                            int allow0)
+{
+	unsigned int rc = 0;
+
+	if (!valid_np1_params(name, ps, r, a, an))
+		return ~((unsigned int) 0);
+
+	if (an == 1) {
+		if (allow0) {            // var is 0/1
+			return 1;        // stands for itself, needs no clauses
+
+		} else {                 // var is 1
+			if (!sat_comment(ps, "1-of-N(v)->v", 12) ||
+			    !sat_const(ps, a[0], 1))
+				return ~((unsigned int) 0);
+			return 2;
+		}
+	}
+
+	if (an == 2) {
+		rc = allow0 ? sat_nand(name, ps, r, a, an)
+		            : sat_xor1(name, ps, r, a[0], a[1], 0);
+		return rc ? rc+1 : ~((unsigned int) 0);
+	}
+
+// RRR
+	if (an == 3) {
+	}
+
+	return 0;
+}
+
+
+/*--------------------------------------
+ * find P+Q for reasonable P*Q decoding of 'n' entries
+ *
+ * TODO: table-driven, or pick optimal P+Q based on cost estimates
+ * which, as a side effect, remove math.h dependency on sqrt
+ */
+static unsigned int sat_1ofn_prod_pq(unsigned int *q, unsigned int n)
+{
+	unsigned int p, resq;
+
+	if (q)
+		*q = 0;
+
+	p = (unsigned int) sqrt(n);
+
+	if (p * p == n) {
+		resq = p;
+
+	} else if (p * (p+1) >= n) {
+		resq = p+1;
+
+	} else if ((p + 1) * (p + 1) >= n) {
+		++p;
+		resq = p; 
+
+	} else if ((p + 1) * (p + 2) >= n) {
+		++p;
+		resq = p+1; 
+	} else {
+		p = 0;                // sort-of-assert
+	}
+
+	if (q)
+		*q = resq;
+
+	return p;
+}
+
+
+/*--------------------------------------
+ * 'force' adds explicit clause ensuring 'result' is True
+ *
+ * 'two-product encoding of 0/1-of-N'
+ *   1) construct P*Q matrix with P*Q >= N
+ *   2) variables 1..N <-> entries in matrix
+ *   3) 1-of-N: ensure 1-of-P (X) and 1-of-Q (Y)
+ *     3.1) selected entry is intersection
+ *   4) 0-of-N: allow NOR(P) AND NOR(Q) (==NOT(P OR Q)) as well
+ *   5) only N product variables are used if N<P*Q
+ *
+ * note: hierarchical decomposition of 1-of-P/Q
+ * TODO: use template for small P/Q which we expect to encounter
+ *
+ * see:
+ * Chen: A new SAT encoding of the at-most-one constraint
+ * 2010-07
+ * TODO: URL
+ */
+static unsigned int sat_1ofn_prod(struct SatName *name,
+                                 struct SatState *ps,
+                                        uint64_t r,
+                                        uint64_t *a, unsigned int an,
+                                             int allow0)
+{
+	unsigned int rc = 0, p = 0, q = 0;
+
+	if (!valid_np1_params(name, ps, r, a, an))
+		return 0;
+
+	rc = sat_1ofn_few(name, ps, r, a, an, allow0);
+
+	do {
+	if (rc == ~((unsigned int) 0)) {
+		rc = 0;                                     // something failed
+	} else if (rc) {
+		--rc;                  // success: 1-based to 0-based reporting
+		break;
+	}
+
+	p = sat_1ofn_prod_pq(&q, an);
+	if (!p || !q)
+		break;                 // rc=0, from above
+
+// N <= P * Q
+// RRR
+#if 0
+			## 'frame' variables, rows (Q) and columns (P)
+			##
+	pvars = [sat_new_varname2(sat, prefix=f'XY{ len(vars) }C')
+	                              for i in range(p)]
+			##
+	qvars = [sat_new_varname2(sat, prefix=f'XY{ len(vars) }R')
+	                              for i in range(q)]
+#endif
+
+	} while (0);
+
+	return rc;
+}
+
+
+#if 0   // 1-of-N, product-based decoder   ----------------------------------
+##-----------------------------------------
+## hardwired 0/1-of-N for small N with trivial expressions
+##
+## returns None if not handled
+##         [ top-level variable, [ newly added variables, ], clauses, comment ]
+##             if solution is applicable
+##
+def satsolv_1n_few(sat, vars, nr=0, allow0=False, result=None, force=False):
+	if len(vars) == 1:
+		if allow0:                                ## A=0/1 -> no clause
+			return [ [], [], [], '', ]
+		else:
+				## explicit clause forcing var to True
+				## do not bother trimming replicated clauses
+				##
+			cls = [ vars[0] ]  if force  else []
+
+			return [ vars[0], [], cls, '', ]      ## 1-of-N(A) == A
+
+
+	##------------------------------
+	if len(vars) == 2:                          ## 1-of-A/B  or  0/1-of-A/B
+		if allow0:                     ## reject simultaneous True only
+			if result == None:
+				result = sat_new_varname2(sat, 'NAND')
+
+			cls = [ f'-{ vars[0] } -{ vars[1] }', ]
+			cmt = f'at-most-1({result})=>NAND({vars[0]},{vars[1]})'
+			return [ [], [], cls, cmt, ]
+						## only clause, no new variable
+## TODO: merge return paths
+		if result == None:
+			result = sat_new_varname2(sat, 'N1xXOR')
+
+		cls, _, _ = satsolv_xor1(vars[0], vars[1], result=result)
+		cmt = f'at-most-1({result}) => ({vars[0]} XOR {vars[1]})'
+
+		if force:
+			cls.append(satsolv_const(result))        ## XOR is true
+
+		return [ result, [ result, ], cls, cmt, ]
+
+
+	##------------------------------
+	if len(vars) == 3:
+## TODO: use a more compact encoding than OR+not-pairs
+				## no pair of variables is simultaneously true
+		cls = [ f'-{v1} -{v2}'  for v1, v2  in allpairs(vars) ]
+		or3 = []
+## TODO: proper signs and indexing
+
+		if not allow0:
+			result = sat_new_varname2(sat,'THREE2ONEx')
+			cls0, or3, _ = satsolv_or('', vars, result)
+
+			cls.extend(cls0)
+##			cls.append(satsolv_const(result))
+##							## at least one is true
+
+			or3 = [ or3, ]
+
+		return [ result, or3, cls, '', ]
+
+
+	return None
+
+
+##-----------------------------------------
+## 1-of-N or 0-of-N (selected by 'allow0')
+##
+## returns [ control variable, [ new/intermediate variables],
+##           [ new clauses ], comment ]  tuple
+##
+## 'force' adds explicit clause ensuring 'result' is True
+##
+## 'two-product encoding of 0/1-of-N'
+##   1) construct P*Q matrix with P*Q >= N
+##   2) variables 1..N <-> entries in matrix
+##   3) 1-of-N: ensure 1-of-P (X) and 1-of-Q (Y)
+##     3.1) selected entry is intersection
+##   4) 0-of-N: allow NOR(P) AND NOR(Q) (==NOT(P OR Q)) as well
+##   5) only N product variables are used if N<P*Q
+##
+## note: hierarchical decomposition of 1-of-P/Q
+## TODO: use template for small P/Q which we expect to encounter
+##
+## see:
+## Chen: A new SAT encoding of the at-most-one constraint
+## 2010-07
+## TODO: URL
+##
+def satsolv_1ofn_2prod(sat, vars, result=None, force=False, allow0=False):
+## sat next vars -> nr
+	nr, comm, expr = 0, '', []
+
+## TODO: trim added-vs-original variables properly
+
+				## before-after: new/intermediate variables
+	nvars_orig = satsolv_nr_of_added_vars(sat)
+
+	expr = f'1-OF-[{ len(vars) }]({ ",".join(vars) })'
+
+	r = satsolv_1n_few(sat, vars, nr=nr, allow0=allow0, result=result)
+	if r:
+		return r[0], r[1], r[2], r[3]
+
+			## assume ~square P*Q is optimal
+			## TODO: minimize (cost(P) + cost(Q)) -> select P, Q
+			##
+	p = int(math.sqrt(len(vars)))
+	if (p ** 2 == len(vars)):
+		q = p
+	elif (p * (p+1) >= len(vars)):
+		q = p + 1
+	elif ((p + 1) ** 2 >= len(vars)):
+		p, q = p + 1, p + 1
+	elif ((p + 1) * (p + 2) >= len(vars)):
+		p, q = p + 1, p + 2
+	else:
+		assert(0)  ## ...optimal selection would eliminate selection...
+
+	if result == None:
+		result = sat_new_varname2(sat,
+		                 prefix='N01:' if allow0 else 'N1x')
+
+	comm = f'{ 0  if allow0  else 1 }-of-{ len(vars) } <-> {p}*{q}'
+	cls, nvars = [], []
+
+			## 'frame' variables, rows (Q) and columns (P)
+			##
+	pvars = [sat_new_varname2(sat, prefix=f'XY{ len(vars) }C')
+	                              for i in range(p)]
+			##
+	qvars = [sat_new_varname2(sat, prefix=f'XY{ len(vars) }R')
+	                              for i in range(q)]
+
+					## group inputs as p-times-q product
+					##
+	xyvars = [vars[ i*p : (i+1)*p ]  for i in range(q)]
+					##
+					## last row may contain less
+					## variables (if N < P*Q)
+
+	if True:
+		print(f'## P=1-of-{p} x Q=1-of-{q}')
+		print(f'## VARS(P)[{ len(pvars) }]={ pvars }')
+		print(f'## VARS(Q)[{ len(qvars) }]={ qvars }')
+
+	pv, pnvars, pcls, _ = satsolv_1ofn_2prod(sat, pvars, allow0=allow0)
+	qv, qnvars, qcls, _ = satsolv_1ofn_2prod(sat, qvars, allow0=allow0)
+	print(f'## VAR.P={ pv } [{ len(pcls) }] ', pcls)
+	print(f'## VAR.Q={ qv } [{ len(qcls) }] ', qcls)
+
+	cls.extend(pcls)
+	cls.extend(qcls)
+	nvars.extend(pnvars)
+	nvars.extend(qnvars)
+
+				## both MUST be true for 1-by-1 intersection
+				##
+	pq_clauses, _, _ = satsolv_and('', [ pv, qv, ], result=result)
+	cls.extend(pq_clauses)
+
+				## at-most-1(vars): each 'var' corresponds to
+				## not more than one pvar/qvar ->
+				##     (NOT(v) OR p) AND (NOT(v) OR q)
+				##
+	for ri, row in enumerate(xyvars):                  ## loop(q), row
+		for ci, col in enumerate(row):             ## loop(p), column
+			cls.append(f'-{ col } { pvars[ci] }')
+			cls.append(f'-{ col } { qvars[ri] }')
+
+	nvars_after = satsolv_nr_of_added_vars(sat)
+
+	if force:
+		cls.append(f'{ result }')   ## 0/1-of-N must hold at this level
+
+	print(f'## ADDED.VARS=+{ satsolv_nr_of_added_vars(sat) - nvars_orig }')
+		##
+	if nvars_after > nvars_orig:
+		vlist = ", ".join(sat["vars"][ nvars_orig:nvars_after ])
+		print(f'## ADDED.VARS=[{ vlist }]')
+
+	return result, [], cls, comm
+#endif   // /product-based 1-of-N decoder
 
 
 /*--------------------------------------
@@ -2422,6 +2800,342 @@ static void sat_dispose(struct SatState *ps)
 #endif   /*=====  !delimiter: SAT converter  ===============================*/
 
 
+#if 1   /*=====  delimiter: SAT template-to-CNF converter  =================*/
+// we assume there will be one section per primitive
+//
+#include "cnf-templates.h"
+
+
+//--------------------------------------
+// see also sat.py, which can generate the including table entries
+//
+static const struct CNFTemplate {
+	unsigned int bits;     // 1-of-N: this is N (replicated as _INPUT_VARS)
+	unsigned int varbits;  // nr. of bits encoding each variable
+
+	                  // masks
+	uint32_t mask;    // elem & mask is variable index >0
+	uint32_t neg;     // entry is <0
+	uint32_t added;   // entry corresponds to added/intermediate varialbe
+
+	unsigned int input_vars;
+	unsigned int addl_vars; // first one is overall output
+	unsigned int clauses;
+	unsigned int maxvars;   // worst-case clause, excl. terminating 0
+
+	const void *table;      // array of uint<...>_t types, see .varbits
+	unsigned int elems;
+} sat_templ_1ofn[] = {
+#if defined(SAT_TEMPL_1_OF_N3_VARBITS)
+	SAT_TEMPL_1_OF_N3_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N4_VARBITS)
+	SAT_TEMPL_1_OF_N4_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N6_VARBITS)
+	SAT_TEMPL_1_OF_N6_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N12_VARBITS)
+	SAT_TEMPL_1_OF_N12_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N16_VARBITS)
+	SAT_TEMPL_1_OF_N16_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N18_VARBITS)
+	SAT_TEMPL_1_OF_N18_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N20_VARBITS)
+	SAT_TEMPL_1_OF_N20_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N24_VARBITS)
+	SAT_TEMPL_1_OF_N24_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N28_VARBITS)
+	SAT_TEMPL_1_OF_N28_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N30_VARBITS)
+	SAT_TEMPL_1_OF_N30_FULL,
+#endif
+#if defined(SAT_TEMPL_1_OF_N32_VARBITS)
+	SAT_TEMPL_1_OF_N32_FULL,
+#endif
+} ;
+
+
+/*--------------------------------------
+ * generators stepping through different-sized uint..._t lists
+ */
+struct SAT_UList {
+	const void *ptr;
+
+	unsigned int unitbytes;
+
+	unsigned int offs;
+	unsigned int maxoffs;
+} ;
+//
+#define SAT_ULIST_INIT0  { NULL, 0, 0, 0, }
+
+
+/*--------------------------------------
+ * initialize generator from 'ptempl'
+ */
+static inline int sat_ulist_init(struct SAT_UList *pu,
+                         const struct CNFTemplate *ptempl)
+{
+	if (!pu || !ptempl || !ptempl->varbits || !ptempl->table ||
+	    !ptempl->elems)
+		return 0;
+
+// TODO: sane/power-of-two/etc checks
+
+	*pu = (struct SAT_UList) SAT_ULIST_INIT0;
+
+	pu->ptr       =  ptempl->table;
+	pu->unitbytes = (ptempl->varbits +7) /8;
+	pu->maxoffs   =  ptempl->elems;
+				// .off is 0-inited above
+
+	return pu->unitbytes;
+}
+
+
+/*--------------------------------------
+ * exhausted stream is reported as invalid
+ */
+static inline unsigned int is_valid_ulist(const struct SAT_UList *pu)
+{
+	return (pu && pu->ptr && pu->unitbytes && (pu->offs < pu->maxoffs));
+}
+
+
+/*--------------------------------------
+ * returns >0 if 'pu' is still not exhausted after advance
+ */
+static unsigned int sat_ulist_advance(struct SAT_UList *pu, unsigned int adv)
+{
+	if (is_valid_ulist(pu))
+		pu->offs += adv;
+
+	return is_valid_ulist(pu);
+}
+
+
+/*--------------------------------------
+ * does 'pu' contain at least 'adv' unread units?
+ *
+ * returns >0 if 'pu' is in valid state, not yet at end of input
+ *         0  if already exhausted, or state is otherwise invalid
+ * result is LS 32 bits of response
+ */
+static inline uint64_t sat_ulist_current(const struct SAT_UList *pu,
+                                                   unsigned int adv)
+{
+	if (is_valid_ulist(pu) && (pu->offs +adv < pu->maxoffs)) {
+		uint64_t rc = UINT64_C(1) << 32;
+
+		switch (pu->unitbytes) {
+		case 1:
+			return rc | (((const uint8_t *) pu->ptr)
+					[ pu->offs +adv ]);
+
+		case 2:
+			return rc | (((const uint16_t *) pu->ptr)
+					[ pu->offs +adv ]);
+
+		case 4:
+			return rc | (((const uint32_t *) pu->ptr)
+					[ pu->offs +adv ]);
+
+		default:
+			break;
+		}
+	}
+
+	return 0;
+}
+
+
+//--------------------------------------
+static inline struct SAT_Summary *sat_summary_init0(struct SAT_Summary *ps)
+{
+	if (ps)
+		*ps = (struct SAT_Summary) SAT_SUMMARY_INIT0;
+
+	return ps;
+}
+
+
+//--------------------------------------
+static inline
+struct SAT_Summary *sat_summary_add(struct SAT_Summary *ps,
+                                         unsigned long vars,
+                                         unsigned long clauses)
+{
+	if (ps) {
+		ps->vars    += vars;
+		ps->clauses += clauses;
+	}
+
+	return ps;
+}
+
+
+//--------------------------------------
+static unsigned char scratch[ 1024 *1024 ];
+
+// fill template from (pt, ptelems)
+// inputs bits are (var0, var0 +inputs -1)
+// output bit is 'addvar0'
+//
+// 0 'addvar0' uses variables just after 'var0' (+inputs)
+// zero-initializes, then sets non-NULL 'psum'
+//
+// non-NULL 'maxvar' updated to 1-based index of last referenced variable
+//
+static size_t sat_1ofn_template2mem(void *res, size_t rbytes,
+                      struct SAT_Summary *psum,
+                const struct CNFTemplate *pt,
+                            unsigned int ptelems,
+                            unsigned int inputs,
+                            unsigned int var0,
+                            unsigned int addvar0)
+{
+	unsigned int idx = 0, maxidx = 0;
+	char *pr = (char *) res;
+	size_t wr = 0;
+
+	if (!pr || !rbytes || !pt || !ptelems || !var0)
+		return 0;
+
+	sat_summary_init0(psum);
+
+	if (!addvar0) {
+		addvar0 = var0 +inputs;
+	} else if (var0 +inputs > addvar0) {
+		return 0;                   // variable ranges MUST NOT overlap
+	}
+
+	while ((idx < ARRAY_ELEMS(sat_templ_1ofn) &&
+	       (sat_templ_1ofn[ idx ].bits != inputs)))
+		++idx;
+
+	if (idx >= ARRAY_ELEMS(sat_templ_1ofn))
+		return 0;
+
+	{
+	struct SAT_UList clauses = SAT_ULIST_INIT0;
+	uint32_t vmask, neg, is_added;
+	unsigned int cls = 0;
+
+	if (!sat_ulist_init(&clauses, &(sat_templ_1ofn[ idx ])))	
+		return 0;
+
+	sat_ulist_advance(&clauses, CNF_TEMPLATEHDR_ELEMS);
+// TODO: cross-check table
+
+	vmask    = sat_templ_1ofn[ idx ].mask;
+	neg      = sat_templ_1ofn[ idx ].neg;
+	is_added = sat_templ_1ofn[ idx ].added;
+
+	for (cls = 0; sat_templ_1ofn[ idx ].clauses; ++cls) {
+		unsigned int currvars = 0, c;
+		size_t currwr;
+
+		if (clauses.offs >= clauses.maxoffs)
+			break;
+
+		if (!((uint32_t) sat_ulist_current(&clauses, 0)))
+			break;              // no variable in clause: early end
+// TODO: handle errors, which SNH
+
+		while ((currvars <= sat_templ_1ofn[ idx ].elems) &&
+		       ((uint32_t) sat_ulist_current(&clauses, currvars)))
+			++currvars;
+
+// TODO: cross-check (max. also in table)
+
+		for (c = 0; c < currvars; ++c) {
+			uint32_t var = (uint32_t)sat_ulist_current(&clauses, c);
+			int32_t vidx;
+					// 'var' was verified as >0 above
+
+			vidx = vmask & var;     // net index, w/o modifier bits
+
+			if (!vidx) {
+				// SNH: net variable index MAY NOT be 0
+				break;
+			}
+
+			vidx += ((is_added & var) ? addvar0 : var0) -1;
+
+			if (maxidx < (uint32_t) vidx)
+				maxidx = vidx;
+
+			if (neg & var)
+				vidx = -vidx;
+
+			currwr = snprintf(pr +wr, rbytes -wr,
+			                  "%s" "%" PRId32,
+			                  c ? " " : "", vidx);
+// TODO: count remaining buffer
+
+			wr += currwr;
+		}
+		currwr = snprintf(pr +wr, rbytes -wr, " 0\n");
+		wr    += currwr;
+
+		sat_ulist_advance(&clauses, currvars +1);
+	}
+	}
+
+	if (wr && psum) {
+		psum->vars    = maxidx;
+		psum->clauses = sat_templ_1ofn[ idx ].clauses;
+	}
+
+	return wr;
+}
+
+
+//--------------------------------------
+static size_t sat_template(unsigned int copies)
+{
+	struct SAT_Summary ssum = SAT_SUMMARY_INIT0;
+	unsigned char vbits = 12;
+	size_t wr = 0;
+
+	if (!copies)
+		copies = 1;
+
+	if (getenv("BITS"))
+		vbits = (unsigned char) cu_readuint(getenv("BITS"), 0);
+
+	wr = sat_1ofn_template2mem(scratch, sizeof(scratch), &ssum,
+	                           sat_templ_1ofn, ARRAY_ELEMS(sat_templ_1ofn),
+	                           vbits, 1, 0);
+	if (wr) {
+		unsigned char hdr[ 2048 +1 ] = { 0, };
+		size_t hdrb;
+
+		hdrb = snprintf((char *) hdr, sizeof(hdr),
+		                "p cnf %u %u\n"
+		                "c 1-of-%u (result->%u)\n"
+		                "c\n",
+		                ssum.vars, ssum.clauses,
+		                vbits, vbits +1);
+
+		fwrite(hdr, 1, hdrb, stdout);
+
+		fwrite(scratch, 1, wr, stdout);
+	}
+
+	return 0;
+}
+
+#endif   /*=====  !delimiter: SAT template-to-CNF converter  ===============*/
+
+
 //----------------------------------------------------------------------------
 int main(int argc, char **argv)
 {
@@ -2433,6 +3147,13 @@ int main(int argc, char **argv)
 
 	memset(&db,   0, sizeof(db));
 	memset(&psat, 0, sizeof(psat));
+
+#if defined(CNF_TEMPLATES_H__)
+	if (1) {
+		sat_template(1);
+		return 0;
+	}
+#endif
 
 	do {
 #if !defined(SYS_NO_REDIS)
@@ -2472,6 +3193,7 @@ int main(int argc, char **argv)
 	{
 	char tmpname[ 32 +1 ] = { 0, };
 
+if (0) {
 	for (i=0; i<ARRAY_ELEMS(varr); ++i) {
 		size_t wr;
 
@@ -2481,19 +3203,23 @@ int main(int argc, char **argv)
 		if (!varr[i])
 			return -1;
 	}
+}
 	}
 
 	{
 	uint64_t arr[6] = { a, b, c, d, e0, f1 };
 	struct SatName nn;
 
+	sat_neq_or0(&nn, &psat, 0, arr, 3, &(arr[3]));
+
+if (0) {
 	sat_xor1(&nn, &psat, 0, c, d, 0);
 	sat_xor1(&nn, &psat, 0, a, c, 1);
 
 	sat_or(NULL, &psat, r, arr, ARRAY_ELEMS(arr), 0);
-	sat_or(NULL, &psat, r, arr, ARRAY_ELEMS(arr), 1/*NOR*/);
+	sat_or(NULL, &psat, r, arr, ARRAY_ELEMS(arr), SAT_FL_INVERT);
 	sat_or(&nn, &psat, 0, arr, ARRAY_ELEMS(arr), 0);
-	sat_or(&nn, &psat, 0, arr, ARRAY_ELEMS(arr), 1/*NOR*/);
+	sat_or(&nn, &psat, 0, arr, ARRAY_ELEMS(arr), SAT_FL_INVERT);
 
 	sat_and(&nn, &psat, 0, arr, ARRAY_ELEMS(arr));
 	sat_and(&nn, &psat, 0, arr, ARRAY_ELEMS(arr));
@@ -2527,7 +3253,7 @@ if (0) {
 		}
 	}
 }
-
+}
 	sat_const(&psat, e0, 0);
 	sat_const(&psat, f1, 1);
 
@@ -2547,10 +3273,456 @@ if (0) {
 		rds_hash0(psat.db.rd.ctx, HSH_MAINHASH);
 		rds_hash0(psat.db.rd.ctx, HSH_ADDLHASH);
 	}
+// TODO: control purging
 
 	db_release(&db);
 	sat_dispose(&psat);
 
 	return (rc < 0) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
+
+
+#if 0  //=====================================================================
+#define  USE_READALL       1
+#define  USE_READINT       1
+#define  USE_ERR_ANNOTATE  1
+#define  USE_ENV_DEFS      /* common-base prerequisite */
+//
+#include "common-base.h"
+#include "common-util.h"
+
+#define  SNHbreak  break   /* marker for should-not-happen errors */
+
+// simplified version of DIMACS solver
+//     www.satcompetition.org/2004/format-solvers2004.html
+// multiple cross-referencing specs exist; this above is a
+// reasonable self-contained summary
+
+
+// note: ASCII only
+// TODO: Unix-only LF (although we use Linux-specific memmem() already)
+//
+#define  SATSOLV_NO_SOLUTION       "s" "\x20" "UNSATISFIABLE" "\n"
+#define  SATSOLV_HAS_SOLUTION      "s" "\x20" "SATISFIABLE"   "\n"
+#define  SATSOLV_UNKNOWN_SOLUTION  "s" "\x20" "UNKNOWN"       "\n"
+// TODO: we treat this as unsolved
+//
+#define  SATSOLV_VARLINE_START     "v" "\x20"
+//
+// these MUST also check if preceding char is either '\n' OR at start
+//
+#define  SATSOLV_PREFIX_BYTES  ((unsigned int) 2)
+// for any of the result-line prefixes
+
+
+#define  ASCII_LF  '\n'
+
+
+#define  SATSOLV_INVOCATION0  "kissat"
+//
+// kissat invocation:
+//
+static const char *const satsolv_invoc_args[] = {
+	"--verbose",
+	"--statistics",   // we ignore them now; allow logging at least
+	"--sat",          // optimize for solvable case
+	NULL,
+} ;
+
+typedef void procfn_t (int writefd, int readfd) ;
+
+/* streams to and from another process */
+struct ProcComms {
+	FILE *tochild;
+	FILE *fromchild;
+} ;
+/**/
+#define  PROCCOMMS_INIT0  { NULL, NULL, }
+
+#define  PIPEDIR_READ   0
+#define  PIPEDIR_WRITE  1
+
+
+//--------------------------------------
+// reworked equivalent of:
+//     stackoverflow.com/questions/3884103/can-popen-make-
+//         bidirectional-pipes-like-pipe-fork
+
+/*--------------------------------------
+ * create child process, with bidirectional communications to and from it
+ * popen() equivalent with simultaneous read+write pipes
+ *
+ * returns pid >0, filling 'pcomm', for invoking parent
+ * calls 'procfn' from child, which does not return
+ *
+ * TODO: may leak file descriptors if f.ex. one of the fdopen() calls
+ * fails, but not all do.
+ */
+static pid_t procstart(struct ProcComms *pcomm, procfn_t childfn)
+{
+	int p2child[2], p2parent[2];                     /* read[0] write[0] */
+	pid_t parent;
+
+	if (!pcomm)
+		return -1;
+	*pcomm = (struct ProcComms) PROCCOMMS_INIT0;
+
+	if (pipe(p2child) || pipe(p2parent))
+		return -1;
+
+	parent = fork();
+	if (parent > 0) {                                          /* parent */
+		close(p2child [ PIPEDIR_READ  ]);
+		close(p2parent[ PIPEDIR_WRITE ]);
+
+		pcomm->tochild   = fdopen(p2child [ PIPEDIR_WRITE ], "w");
+		pcomm->fromchild = fdopen(p2parent[ PIPEDIR_READ  ], "r");
+
+		return (pcomm->tochild && pcomm->fromchild) ? parent : -1 ;
+
+	} else if (!parent) {
+		close(p2child [ PIPEDIR_WRITE ]);
+		close(p2parent[ PIPEDIR_READ  ]);
+
+		childfn(p2parent[ PIPEDIR_WRITE ], p2child [ PIPEDIR_READ ]);
+
+		exit(0);
+	}
+
+	return -1;
+}
+
+
+//--------------------------------------
+struct Proc_child {
+	pid_t other;
+
+	FILE *tochild;
+	FILE *fromchild;
+} ;
+//
+#define PROC_CHILD_INIT0 { 0, NULL, NULL, }
+
+
+/*--------------------------------------
+ * connect a SAT solver which takes DIMACS input and responds
+ * with DIMACS solution form
+ *
+ * instead of worrying about subprocess-related failures, our caller
+ * just parses DIMACS results. therefore, opportunistic error handling
+ * is sufficient.
+ */
+static void satsolver1(int writefd, int readfd)
+{
+	if ((dup2(writefd, STDOUT_FILENO) <0) ||
+	    (dup2(readfd,  STDIN_FILENO) <0))
+		return;
+
+			// writefd -> (stdin) ...solver... (stdout) -> readfd
+
+	execvp(SATSOLV_INVOCATION0, (char * const *) satsolv_invoc_args);
+}
+
+
+/*--------------------------------------
+ * is byte at 'offset' start of a line?
+ * start-of-input also interpreted as line start
+ *
+ * out-of-input reported as not-at-start
+ *
+ * TODO: restricted to Unix-only lines
+ */
+static int is_at_line_start(const void *data, size_t dbytes, size_t offset)
+{
+	const unsigned char *pd = (const unsigned char *) data;
+
+	if (!data || (dbytes <= offset))
+		return 0;
+
+	if (!offset)
+		return 1;
+
+	if (pd[ offset -1 ] == ASCII_LF)
+		return 1;                    // Unix: LF only
+
+// any CR+LF-specific checking etc. would come here
+
+	return 0;
+}
+
+
+/*--------------------------------------
+ * retrieve SAT-solver satisfiability response; Boolean only
+ *
+ * returns >0 if instance is satisfiable
+ *         0  if reported unsatisfiable
+ *         <0 if any other failure, incl. not finding expected solution type
+ */
+static int satsolver_result(const void *res, size_t rbytes)
+{
+	const unsigned char *fnd;
+
+	if (!res || !rbytes)
+		return -1;
+
+	fnd = memmem(res, rbytes, SATSOLV_NO_SOLUTION,
+	             sizeof(SATSOLV_NO_SOLUTION)-1);
+	if (!fnd) {
+		fnd = memmem(res, rbytes, SATSOLV_UNKNOWN_SOLUTION,
+		             sizeof(SATSOLV_UNKNOWN_SOLUTION)-1);
+	}
+
+	if (fnd) {
+		return is_at_line_start(res, rbytes,
+		                        fnd - (const unsigned char *) res)
+		       ? 0 /*known not to be solved*/ : -1 /* TODO: */;
+
+/* TODO: check response w/ filtering out of comment-only lines */
+	}
+
+	return memmem(res, rbytes, SATSOLV_HAS_SOLUTION,
+	              sizeof(SATSOLV_HAS_SOLUTION)-1)
+	       ? 1 : -1 /* not recognized */;
+}
+
+
+//--------------------------------------
+#define  SATSOLV_DIMACS_BITMASK    ((uint64_t) -1)  /* bitmask too small */
+#define  SATSOLV_DIMACS_INVALID64  ((uint64_t) -2)
+
+
+/*--------------------------------------
+ * only recognized, native-encoded whitespace characters
+ */
+static size_t whitespace_bytes(const unsigned char *data, size_t dbytes)
+{
+	if (!data || !dbytes) {
+		return 0;
+
+	} else if (data[0] == ' ') {                  // space
+		return 1;
+
+	} else if (data[0] == '\t') {                 // tab
+		return 1;
+
+	} else if (data[0] == '\n') {                 // (Unix) LF
+		return 1;
+
+	} else if ((dbytes > 1) && (data[0] == '\r') && (data[1] == '\n')) {
+		return 2;                             // (telnet/Windows) CR+LF
+
+	} else if (data[0] == '\0') {                 // \0, as honorary w.space
+		return 1;
+	};
+
+	return 0;
+}
+
+
+//--------------------------------------
+static inline int is_satsolver_error(uint64_t rc)
+{
+	switch (rc) {
+	case SATSOLV_DIMACS_BITMASK:
+	case SATSOLV_DIMACS_INVALID64:
+		return 1;
+
+	default:
+		return 0;
+	}
+}
+
+
+/*--------------------------------------
+ * called with one line of variable-index entries, net-net content
+ * (DIMACS prefix already removed):
+ *     "-643 -644 -645 -646 -647 -648 -649 650 -651 -652 -653"
+ *
+ * returns maximum 1-based index of variables picked up;
+ * SATSOLV_DIMACS_... errors if anything failed
+ */
+static uint64_t satsolver_register_vars(unsigned char *bits,  size_t bbytes,
+                                  const unsigned char *vline, size_t vlbytes)
+{
+	size_t offs = 0;
+	uint64_t rc = 0;
+
+	if (!vline || !vlbytes)
+		return 0;
+
+	while (offs < vlbytes) {
+		unsigned int is_negative = (vline[ offs ] == '-');
+		size_t endoffs;
+		uint64_t curr;
+
+		offs += !!is_negative;
+
+		endoffs = offs;
+
+		while ((endoffs < vlbytes) &&
+		       !whitespace_bytes(vline +endoffs, 1))
+		{
+			++endoffs;
+		}
+
+		curr = cu_readuint((const char *) vline +offs, endoffs -offs);
+
+		if (curr == CU_INVD_UINT64) {
+			rc = SATSOLV_DIMACS_INVALID64;
+			break;
+		}
+
+		if (!curr)
+			break;              // '0' variable terminates var-list
+// printf("val=%lu\n", (unsigned long) curr);
+
+		rc = (rc < curr) ? curr : rc;             // max(variable list)
+
+		if (bits && bbytes) {
+		}
+
+		offs = endoffs;
+
+		while ((offs < vlbytes) && (vline[ offs ] == ' '))
+			++offs;
+// DIMACS spec: only space as separator
+	}
+
+	return rc;
+}
+
+
+/*--------------------------------------
+ * retrieve 0-based bitmask of results from DIMACS response
+ * each result bit is 2x wide: <bit seen> || <bit retrieved>
+ *
+ * returns largest index retrieved
+ *         (u64)-1  if result does not fit (non-NULL) bitmask
+ *         (u64)-2  if DIMACS output was deemed malformed
+ *
+ * big-endian bitmask; bits are in the following order: 0x80, 0x40, ... 0x01,
+ * 00 0x80, 00 0x40 ...
+ * since variable 0 is never used, 0x80 and 0x40 of first bitmask
+ * byte are never set
+ *
+ * tolerates NULL 'bits', just searches for largest index
+ *
+ * TODO: single-bit response, through 'bbytes' modification, in case
+ * we ever worry about gigabit-sized bitmasks
+ */
+static uint64_t satsolver_result_vars(unsigned char *bits, size_t bbytes,
+                                         const void *res,  size_t rbytes)
+{
+	const unsigned char *pr = (const unsigned char *) res;
+	uint64_t rc = 0;
+	size_t offs = 0;
+
+	if (!res || !rbytes)
+		return 0;
+
+	if (bits && bbytes)
+		memset(bits, 0, bbytes);
+
+	while (offs < rbytes) {
+		const unsigned char *end, *fnd =
+			memmem(pr +offs, rbytes -offs, SATSOLV_VARLINE_START,
+			       sizeof(SATSOLV_VARLINE_START) -1);
+		uint64_t curr;
+		size_t lbytes;
+
+		if (!fnd)
+			break;
+
+				// hits in comments, not solution/var-list
+		if (fnd && !is_at_line_start(pr, rbytes, fnd -pr)) {
+			offs = fnd -pr +1;
+			continue;
+		}
+		offs = fnd - pr;       // [offs] is 1st byte of variables'-line
+
+		offs += SATSOLV_PREFIX_BYTES;         // ...1st net-net byte...
+
+				// either next linefeed byte, or end of
+				// input
+		end = memchr(pr +offs, ASCII_LF, rbytes -offs);
+
+		if (offs >= rbytes)
+			SNHbreak;
+				// "v <end-of-file>" is a malformed
+				// terminating variable-list line
+
+		lbytes = end ? (end -pr -offs) : (rbytes -offs);
+
+		curr = satsolver_register_vars(bits, bbytes, pr +offs, lbytes);
+		if (is_satsolver_error(curr)) {
+			rc = curr;
+			break;
+		}
+
+		rc = (rc < curr) ? curr : rc;        // max(variable list)
+
+		if (!end)
+			break;
+
+		offs = end -pr +1;
+	}
+
+	return rc;
+}
+
+
+//--------------------------------------
+// since SAT solvers work with full input files, 'res' and 'cnf' SHOULD
+// work reliably when they are identical.
+//
+static size_t satsolver_invoke(unsigned char *res, size_t rbytes,
+                         const unsigned char *cnf, size_t cbytes)
+{
+	size_t rc = ~((size_t) 0);
+
+	do {                                  // set rc, break if leaving early
+	if (!res || !cnf || !rbytes || !cbytes)
+		break;
+
+	{
+	struct ProcComms solver;
+	size_t offs = 0, curr;
+
+	fflush(stdout);                     // empty streams before sub-process
+
+	if (procstart(&solver, satsolver1) <0)
+		break;
+
+	while ((offs < cbytes) && !ferror(solver.tochild)) {
+		curr =  fwrite(cnf +offs, 1, cbytes - offs, solver.tochild);
+		offs += curr;
+	}
+	if (ferror(solver.tochild))
+		break;
+
+	fclose(solver.tochild);
+
+	offs = 0;
+
+	while ((offs < rbytes) && !ferror(solver.fromchild) &&
+	       !feof(solver.fromchild))
+	{
+		curr =  fread(res +offs, 1, rbytes - offs, solver.fromchild);
+		offs += curr;
+	}
+
+	if (ferror(solver.fromchild))
+		break;
+
+			// opportunistic, possibly redundant 0-termination
+	if (offs < rbytes)
+		res[ offs ] = '\0';
+
+	rc = offs;
+	}
+	} while (0);
+
+	return rc;
+}
+#endif  //====================================================================
 
