@@ -15,3 +15,7 @@ a[0-9].*
 p.*
 pnr*.log
 
+## generated XY-to-distance tables etc.
+distance.c
+distance*.log
+

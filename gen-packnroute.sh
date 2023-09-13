@@ -46,10 +46,10 @@ DIST=distance
 RNITEMS=$ITEMS RNTIME=1 RNCOORDS=${BORDER} ./pack.py > $DELIVERIES
 
 ## table for XY(pair)-to-distance lookup
-MAX1=99999999 XY2TABLE=1 ./pack.py $DELIVERIES > $DIST.json
+MAX1=99999999999 XY2TABLE=1 ./pack.py $DELIVERIES > $DIST.json
 
 ## C table, include-ready structures for standalone solver
-MAX1=99999999 XY2TABLE=1 TO_C=1 ./pack.py $DELIVERIES > $DIST.c
+MAX1=99999999999 XY2TABLE=1 TO_C=1 ./pack.py $DELIVERIES > $DIST.c
 
 ## pack-and-route, using base from 'bases1.txt', and above generated
 ## XY-to-distance lookup table

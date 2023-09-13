@@ -2,4 +2,11 @@
 - mismatched array/int types (calling report after early termination)
 - terminate with exception from inner loop upon hitting 0-slack exact solution
 
+- add: specify delivery/vehicle compatibility
+  - processing already deals with compat matrix/bitmask; may not specify it
+
+- SAT: recurring expressions
+  - ...bit.combination... is (not) all-0
+    - recurring theme in Delivery+Time.Unit(bits) comparisons
+    - each is simple N/OR; cache and remember them
 
