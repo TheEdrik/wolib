@@ -4499,6 +4499,11 @@ def satsolv_1ofn(sat, vars, force=False):
 	return top
 
 
+##--------------------------------------
+def allpairs(vars):
+	return itertools.combinations(vars, 2)
+
+
 ##----------------------------------------------------------------------------
 ## hardwired 0/1-of-N for small N with trivial expressions
 ##
@@ -4735,6 +4740,36 @@ def satsolv_1ofn(sat, vars, result=None):
 
 
 ##-----------------------------------------
+## 1-of-N or 0-of-N, hierarchical decomposition: pick P+Q matrix sizes
+## returns p, q per-axis sizes
+##
+def matrix2pq(vars):
+			## assume ~square P*Q is optimal
+			## TODO: minimize (cost(P) + cost(Q)) -> select P, Q
+			##
+	p = int(math.sqrt(len(vars)))
+	if (p ** 2 == len(vars)):
+		q = p     
+			  
+	elif (p * (p+1) >= len(vars)):
+		q = p + 1
+
+	elif ((p + 1) ** 2 >= len(vars)):
+		p, q = p + 1, p + 1
+
+	elif ((p + 1) * (p + 2) >= len(vars)):
+		p, q = p + 1, p + 2
+
+	else:
+		assert(0)  ## ...optimal selection would eliminate selection...
+
+	if debug_is_active(2, vTRC_SCHED):
+		print(f'## 1-of-N:[{ len(vars) }]->{p}x{q}')
+
+	return p, q
+
+
+##-----------------------------------------
 ## 1-of-N or 0-of-N (selected by 'allow0')
 ##
 ## returns [ control variable, [ new/intermediate variables],
@@ -4773,20 +4808,7 @@ def satsolv_1ofn_2prod(sat, vars, result=None, force=False, allow0=False):
 	if r:
 		return r[0], r[1], r[2], r[3]
 
-			## assume ~square P*Q is optimal
-			## TODO: minimize (cost(P) + cost(Q)) -> select P, Q
-			##
-	p = int(math.sqrt(len(vars)))
-	if (p ** 2 == len(vars)):
-		q = p
-	elif (p * (p+1) >= len(vars)):
-		q = p + 1
-	elif ((p + 1) ** 2 >= len(vars)):
-		p, q = p + 1, p + 1
-	elif ((p + 1) * (p + 2) >= len(vars)):
-		p, q = p + 1, p + 2
-	else:
-		assert(0)  ## ...optimal selection would eliminate selection...
+	p, q = matrix2pq(vars)
 
 	if result == None:
 		result = satsolv_new_varname2(sat,
@@ -4851,7 +4873,6 @@ def satsolv_1ofn_2prod(sat, vars, result=None, force=False, allow0=False):
 		print(f'## ADDED.VARS=[{ vlist }]')
 
 	return result, [], cls, comm
-
 
 
 ##-----------------------------------------------------------
@@ -5157,9 +5178,12 @@ def satsolv_vars2ints(sat, vars):
 
 
 ##--------------------------------------
-## register constraint on hitting one delivery window for 'delv'
+## register constraint on hitting exactly one delivery window for 'delv'
 ## 'dvars' contains IDs (names) of delivery+unit Booleans
-## returns, as a list
+##
+## registers base-variable expressions
+##
+## TODO: 0-of-N in case delivery may be delayed to not-yet-seen time
 ##
 ## all variable names MUST have already been registered to 'sat'
 ##
@@ -5170,7 +5194,12 @@ def satsolv_add_delvs1(sat, dvars, delv):
 	comm =  f'delivery #{didx} scheduled({delv[ "time" ]}) '
 	comm += '(vars=' +(' '.join(dvars)) +')'
 
-	top = satsolv_1ofn(sat, dvars)
+	top, _, cls, comm = satsolv_1ofn_2prod(sat, dvars, force=True)
+##	top = satsolv_1ofn(sat, dvars)
+##
+	for c in cls:
+		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
+		comm = ''
 
 	return top
 
