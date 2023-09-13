@@ -2855,6 +2855,8 @@ def msbit(t):
 
 
 ##--------------------------------------
+## returns 1-based index of t bit
+##
 ## not checking for t being single bit
 ##
 ## equivalent bit2offset( msbit(t) ) if t is not power-of-two
@@ -5307,7 +5309,7 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 
 		tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
 		for t in tu:
-			tb = timevecbit2offset(t)
+			tb = timevecbit2offset(t) -1
 			tbits.append(tb)
 ## TODO: factor out
 ## RRR
