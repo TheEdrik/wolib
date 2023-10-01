@@ -22,6 +22,8 @@ sSAT_SYM_PREFIX = 'RAW='  ## prefix for clauses which are stored as strings,
                           ## 'raw' CNF:  "D1 D2 -D3"
 
 import os, textwrap, sys, math, itertools, re
+from functools import cache                   ## memoization
+
 
 ##=====  Utilities  ==========================================================
 ## integer log-10, for positive input
@@ -40,6 +42,12 @@ def log10(n):
 ##--------------------------------------
 def allpairs(vars):
 	return itertools.combinations(vars, 2)
+
+
+##--------------------------------------
+## memoize identical-input combinations
+##
+tTEMPLATE = []
 
 
 ##============================================================================
@@ -532,14 +540,14 @@ def template_rebase(t, vars=0, addl_vars=0):
 	ni, na = t[ 'inputs' ],  t[ 'add.vars' ]
 	bi, ba = t[ 'in.base' ], t[ 'add.base' ]
 
-	if min(ti, ta) < 0:
+	if min(ni, na) < 0:
 		raise ValueError('invalid template-variable count')
 
 	if max(bi, ba) > 0:
 		raise ValueError('template already rebased')
 
 	res = {
-		'descr':    t[' descr '],
+		'descr':    t[ 'descr' ],
 		'inputs':   ni,
 		'add.vars': na,
 		'in.base':  bi +vars,
@@ -550,14 +558,15 @@ def template_rebase(t, vars=0, addl_vars=0):
 	shift = vars +addl_vars
 
 	for c in t[ 'clauses' ]:
-		oorange = [ i  for i in c  if (abs(i) > ti+ta+ni+na) ]
+		oorange = [ i  for i in c  if (abs(i) > bi+ba+ni+na) ]
 		if bi+ba:
 			oorange.extend(i  for i in c  if (abs(c) < ni+na))
 
 		if oorange != []:
 			raise ValueError(f'invalid template-var index ({c})')
 
-		cls.append([ i +shift  if (i>0)  else i -shift ])
+		cls.append([ ((i +shift)  if (i>0)  else i -shift)
+		             for i in c ])
 
 	res[ 'clauses' ] = cls
 
@@ -596,19 +605,21 @@ def satsolv_1ofn_2prod_few_template(vars, allow0=False, force=False):
 
 	elif len(vars) <= 4:
 				## no pair of variables is simultaneously true
-		r[ 'descr' ] += f'==NO.PAIRS'
+		r[ 'descr' ] += '==NO.PAIRS'
 		r[ 'clauses' ] = [
 			[ sat_not(v1), sat_not(v2), ]
 				for v1, v2  in allpairs(vars)
 		]
 
 		if not allow0:
+			r[ 'descr' ] += '+OR'
+
 			r1 = satsolv_or_template(vars, force=force)
-			##
+				##
 			r[ 'add.vars' ] += r1[ 'add.vars' ]
 			r[ 'clauses'  ].extend(r1[ 'clauses' ])
-			##
-			## inputs are shared: no clause/index to rebase
+				##
+				## inputs are shared: no clause/index to rebase
 
 		return r
 
@@ -622,6 +633,7 @@ def satsolv_1ofn_2prod_few_template(vars, allow0=False, force=False):
 ##
 ## see satsolv_1ofn_2prod(): shares much of the same logic
 ##
+@cache
 def satsolv_1ofn_2prod_template(vars, varbase=0, addbase=0, allow0=False,
                                 force=False):
 	rstr = ('0/1'  if allow0  else '1') + '-of-N'
@@ -634,29 +646,71 @@ def satsolv_1ofn_2prod_template(vars, varbase=0, addbase=0, allow0=False,
 		if few:
 			return few
 
-		p, q = matrix2pq(vars)
-		comm = f'{ rstr }({ len(vars) }->{ p }x{ q })'
+		ivcount = len(vars)    ## input-var-count; recurring expression
 
-					## adds P+Q axis variables,
+		p, q = matrix2pq(vars)
+		comm = f'{ rstr }({ ivcount }->{ p }x{ q })'
+
+					## adds P+Q axis variables, here
 					## w/o any subsequent expressions' vars
+		r[ 'add.vars' ] += p +q
+
+						## one var each for P*Q matrix
+						## elements
+		xyvars = [vars[ i*p : (i+1)*p ]  for i in range(q)]
+						##
+						## last row may contain less
+						## variables, if N < P*Q
+
+		assert(not allow0)
+## TODO: check if force/allow0 preconditions hold below; then remove
+
+					## P, Q axis-index variables,
+					## appended immediately after inputs,
+					## in this order
 		pvar = list(range(p))
 		qvar = list(range(p, q+p))
 		##
-		pt = satsolv_1ofn_2prod_template(p)
-		qt = satsolv_1ofn_2prod_template(q)
+		pt = satsolv_1ofn_2prod_template(p, force=True)
+		qt = satsolv_1ofn_2prod_template(q, force=True)
 		##
 		comm += f',({ pt[ "descr" ] })'
 		comm += f'x({ qt[ "descr" ] })'
+		##
+		## rebase axis-index variables to their final position,
+		## just after input indexes
+		pvar = list(i +1 +ivcount     for i in pvar)
+		qvar = list(i +1 +p +ivcount  for i in qvar)
 
-		print('xxx//', comm)
-		print('xxx.p.var', pvar)
-		print('xxx.q.var', qvar)
-		print('xxx.pt', pt)
-		print('xxx.qt', qt)
-		print('##')
-## RRR
-		r[ 'add.vars' ] += len(pvar) +len(qvar)
-		r[ 'add.vars' ] += +pt[ 'add.vars' ] + qt[ 'add.vars' ]
+## TODO: force base0 variable assignment; then we do not need
+## to subsequently rebase
+
+## TODO: merged in_base=...; use that without need to rebase
+				## ...original inputs... || vars(P) || vars(Q)
+				## plus additional variables from P
+				##
+		pt = template_rebase(pt, ivcount   )
+		qt = template_rebase(qt, ivcount +p +pt[ 'add.vars' ])
+
+		r[ 'add.vars' ] += pt[ 'add.vars' ] + qt[ 'add.vars' ]
+		r[ 'clauses'  ].extend(pt[ 'clauses' ])
+		r[ 'clauses'  ].extend(qt[ 'clauses' ])
+
+			## at-most-1(vars): each 'var' corresponds to
+			## not more than one pvar/qvar ->
+			##     (NOT(v) OR p(column)) AND (NOT(v) OR q(row))
+			##
+			## note: pvar[] and qvar[] are column+row
+			## variables, respectively
+				##
+		for ri, row in enumerate(xyvars):          ## loop(q), row
+			for ci, var in enumerate(row):     ## loop(p), variable
+				r[ 'clauses' ].extend([
+					[ sat_not(qvar[ri]), var, ],
+					[ sat_not(pvar[ci]), var, ],
+				])
+
+		r[ 'comments' ] = comm
 
 		return r
 
@@ -1162,6 +1216,7 @@ def satsolv_1ofn_2prod(sat, vars, result=None, force=False, allow0=False,
 		for ci, col in enumerate(row):             ## loop(p), column
 			cls.append(f'-{ col } { pvars[ci] }')
 			cls.append(f'-{ col } { qvars[ri] }')
+## TODO: sync row+column expressions and notation
 
 	nvars_after = satsolv_nr_of_added_vars(sat)
 
@@ -2175,7 +2230,7 @@ if __name__ == '__main__':
 
 		if '1OFN' in os.environ[ 'TEMPLATE' ]:
 			print(f'[  ## 1-of-N(1..{maxn}) templates, 0-based index')
-			for vb in range(1, 32+1):    ## range(1, maxn+1):
+			for vb in range(1, 64+1):    ## range(1, maxn+1):
 				t = satsolv_1ofn_2prod(None, vb, allow0=False,
 				                force=True, template=True)
 				print('\t', t)
