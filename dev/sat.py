@@ -3,13 +3,13 @@
 # generate SAT expressions for pack/solver
 #
 # 'template' option outputs a compressed template, a list of variable IDs,
-# a C structure which lists 'virtual' register numbers which one can then
+# a structure which lists 'virtual' register numbers which one can then
 # map onto actual SAT variables. See 'Template representation' below.
 #
 # test modes
 #   NONEQ0[=bits:combinations]   generate non-equal-or-any-0 tests
 #
-# Author: Visegrady, Tamas  <tamas.visegrady@gmail.com>
+# Author: Visegrady, Tamas  <tamas@visegrady.ch>
 
 
 sSATPREFIX  = 'SAT='      ## common prefix for data applicable to SAT solvers
@@ -45,6 +45,65 @@ def allpairs(vars):
 ##============================================================================
 ## Template representation
 ##
+## Templates operate on a predefined number of inputs (N), generally
+## add variables of their own (M), and add clauses combining the two.
+## There are two possible representations, one listing symbolic
+## variable names, and one listing only variable indexes.
+##
+## TODO: standardize 'inputs' usage
+##
+## Symbolic template:
+##   { 'descr':    ...comment...
+##     'inputs':   [ ...list of input variables... ],     ## N entries
+##     'add.vars': [ ...list of new variables... ],       ## M entries
+##     'clauses': [
+##       [ clause1... ]
+##       [ clause2... ]
+##       ...
+##                   ## clauses may use -N-M .. -1, 1 .. N+M
+##                   ## no other variable indexes MAY be referenced
+##                   ##
+##                   ## assume [1 .. N] are original inputs; [N+1 .. N+M]
+##                   ## are implicit added variables
+##     ]
+##   }
+##
+## Numeric template:
+##   { 'descr':    ...comment...
+##     'inputs':   [ ...list of input variable indexes... ],     ## N entries
+##     'add.vars': M,                 ## number of new variables
+##     'clauses': [
+##       [ clause1... ]
+##       [ clause2... ]
+##       ...
+##                   ## clauses may use -N-M .. -1, 1 .. N+M
+##                   ## no other variable indexes MAY be referenced
+##     ]
+##   }
+##
+## in both forms, assume [1 .. N] are original inputs; [N+1 .. N+M] are
+## implicit added variables
+##
+## 'in.base' and 'add.base', when >0, indicate template has been
+## rebased: input and additional-variable index starts at >0
+##
+## clauses' ordering conveys some idea about any hierarchical
+## problem decomposition; there is no real implied order.
+
+
+##--------------------------------------
+## empty construct for SAT solver aux. data
+##
+def template0(descr='UNDEFINED', inputs=0, in_base=0):
+	return {
+		'descr':     descr,
+		'inputs':    inputs,
+		'add.vars':  0,
+		'in.base':   in_base,
+		'add.base':  0,
+		'clauses':   [],
+		'comments':  [],
+	}
 
 
 ##--------------------------------------
@@ -96,12 +155,12 @@ def sat_new_varname2(sat, prefix=sSAT_2ND_VAR):
 ##-----------------------------------------
 ## return 2x list, of signs ('-' or empty) and of sign-less IDs
 ## input is list of text IDs
-## 
+##
 def satsolv_str2ids(ids):
         sgns = list(('-'  if (i[0] == '-')  else '')  for i in ids)
         curr = list(re.sub('^-', '', i)  for i in ids)
-                        
-        return sgns, curr       
+
+        return sgns, curr
 
 
 ##--------------------------------------
@@ -179,6 +238,26 @@ sNALL1 = 'ALL1'                   ## suffix for all-(values-)one +variable
 
 
 ##-----------------------------------------
+## polymorphic negation
+##   - integers: swap sign; 0 is invalid input
+##   - strings/symbolic names: add or remove leading '-'
+##
+def sat_not(var):
+	if isinstance(var, int):
+		if var == 0:
+			raise ValueError("SAT-negate(0)")
+
+		return -var
+
+			## symbolic name
+
+	if var[:2] == '--':
+		raise ValueError("multi-negated symbolic variable")
+
+	return var[:1]  if (var[:1] == '-')  else '-' +var
+
+
+##-----------------------------------------
 ## returns clause forcing variable to 'value'
 ## just a trivial macro to mark context
 ##
@@ -222,6 +301,27 @@ def satsolv_xor1(var1, var2, result=None, negate=False):
 
 
 ##-----------------------------------------
+def satsolv_xor1_template(var1, var2, negate=False, force=False):
+	res  = template0('XNOR(2)'  if negate  else 'XOR(2)', inputs=2)
+	##
+	res[ 'add.vars' ] = 1
+
+	rv = -3  if negate  else 3
+
+	res[ 'clauses' ] = [             ## truth table for "{var1} XOR {var2}"
+		[         var1,          var2,  sat_not(rv), ],
+		[ sat_not(var1),         var2,          rv,  ],
+		[         var1,  sat_not(var2),         rv,  ],
+		[ sat_not(var1), sat_not(var2), sat_not(rv), ],
+	]
+
+	if force:
+		res[ 'clauses' ].append([ rv ])
+
+	return res
+
+
+##-----------------------------------------
 ## NAND, for two bits
 ##
 ## sample: A; B; N = not(A & B)
@@ -232,7 +332,7 @@ def satsolv_xor1(var1, var2, result=None, negate=False):
 ## None 'result' auto-assigns variable name
 ## returns list of clauses + comment
 ##
-## TODO: merge with AND
+## TODO: merge with AND (or into _and1)
 ##
 def satsolv_nand1(var1, var2, result=None, template=False):
 	cls  = []
@@ -260,12 +360,24 @@ def satsolv_nand1(var1, var2, result=None, template=False):
 ## returns assigned variable and clauses
 ## TODO: sync assign-in results, then adapt to that
 ##
-def satsolv_or1(var1, var2, result, negate=False):
-		## sign for -R/R
+def satsolv_or2(var1, var2, result, negate=False, template=False):
+						## negate: sign for -R/R
 
 ## TODO: obsoleted if split properly -> separate ''/- fields
 	rsign1, rsign2 = ('', '-')  if negate  else ('-', '')
 		## sign(R) in all-enclosing (1) and per-variable (2) lines
+
+	if template:
+## TODO: numeric only; add symbolic form
+## TODO: use template0() calls and remove standalone pieces
+		return {
+			'inputs':   2,
+			'add.vars': 1,
+			'clauses': [
+				[],
+			]
+		}
+
 
 	return result, [
 #		[ ' ', var1, ' ', var2, '-', result ],
@@ -276,6 +388,280 @@ def satsolv_or1(var1, var2, result, negate=False):
 		f'-{var1} { rsign2 }{result}',
 		f'-{var2} { rsign2 }{result}',
 	]
+
+
+##-----------------------------------------
+## clause possibly forcing a variable to True/False 'value'
+## []  if not forced
+##
+def clause2set(var, value, force=True):
+	if force:
+		return [ var  if value  else -var ]
+	return []
+
+
+##-----------------------------------------
+## numeric 'vars' implies non-symbolic template generation
+## see 'Template representation'
+##
+def satsolv_and_template(vars, negate=False, force=False):
+	vars = vars2varlist(vars)
+	res  = template0('AND', inputs=len(vars))
+
+	if isinstance(vars[0], int):               ## numeric list, 'vars' == N
+		val2set = []           ## set to [ variable, value ] if forced
+
+		if len(vars) == 1:
+			if force:                ## OR(1) -> force one variable
+				res[ 'descr' ] += '(1)->force'
+				val2set = [ vars[0], not negate ]
+
+			else:          ## NOP: single variable, arbitrary state
+				res[ 'descr' ] += '(1)->NOP'
+		else:
+			res[ 'descr'    ] += f'({ len(vars) })'
+			res[ 'add.vars' ] = 1
+
+				## 1) not(A) | not(B) | R   (A & B) -> R
+				## 2) A | not(R)            not(A) -> not(R);...
+				## 3) B | not(R)
+
+## TODO: changes w/ symbolic form
+			rv = -len(vars)-1  if negate  else len(vars)+1
+
+			res[ 'clauses' ] = [ [ sat_not(v)  for v in vars ] ]
+			res[ 'clauses' ][-1].append(rv)
+
+			nrv = sat_not(rv)
+
+			res[ 'clauses' ].extend(
+				[ [ v, nrv ]  for v in vars ]
+			)
+
+			if force:
+				val2set = [ len(vars) +1, not negate ]
+
+## TODO: factor out
+		if val2set:
+			res[ 'clauses' ].append(
+				clause2set(val2set[0], val2set[1], force=force)
+			)
+		return res
+
+	assert(0)
+
+
+##-----------------------------------------
+## if variable spec is a single integer >0, it implies 1..N
+##
+def vars2varlist(vars):
+	if isinstance(vars, int):                  ## scalar: N (nr. of inputs)
+		if vars <= 0:
+			raise ValueError('invalid input count')
+		return list(range(1, vars+1))
+
+	if not isinstance(vars, list):
+		raise ValueError('expected variable-list')
+
+	if isinstance(vars[0], int):               ## scalar: N (nr. of inputs)
+		if 0 in vars:
+			raise ValueError('input-variable list contains 0')
+		return vars
+
+## rest: string list
+	return vars
+
+
+##-----------------------------------------
+## numeric 'vars' implies non-symbolic template generation
+## see 'Template representation'
+##
+def satsolv_or_template(vars, negate=False, force=False):
+	vars = vars2varlist(vars)
+	res  = template0('OR', inputs=len(vars))
+
+	if isinstance(vars[0], int):               ## numeric list, 'vars' == N
+		val2set = []           ## set to [ variable, value ] if forced
+
+		if len(vars) == 1:
+			if force:                ## OR(1) -> force one variable
+				res[ 'descr' ] = f'OR(1)->force'
+				val2set = [ vars[0], not negate ]
+
+			else:          ## NOP: single variable, arbitrary state
+				res[ 'descr' ] = f'OR(1)->NOP'
+		else:
+			res[ 'descr'    ] = f'OR({ len(vars) })'
+			res[ 'add.vars' ] = 1
+
+				## 1) A | B | not(R)  not(A) & not(B) -> not(R)
+				## 2) not(A) | R      A -> R; B -> R  ...
+				## 3) not(B) | R
+
+			rv = -len(vars)-1  if negate  else len(vars)+1
+
+			res[ 'clauses' ] = [ vars[:] ]
+			res[ 'clauses' ][-1].append(-rv)
+
+			res[ 'clauses' ].extend(
+				[ [ -v, rv ]  for v in vars ]
+			)
+
+			if force:
+				val2set = [ len(vars) +1, not negate ]
+
+		if val2set:
+			res[ 'clauses' ].append(
+				clause2set(val2set[0], val2set[1], force=force)
+			)
+
+		return res
+
+	assert(0)
+
+
+##-----------------------------------------
+## numeric templates assume 1..V base variables and V+1..V+A additional ones
+## shift template for base to start at 'vars' and additional ones
+## at 'addl_vars'
+##
+## NOP, checking only 't' with 'vars' and 'addl_vars' both 0
+## TODO: currently, we do not rebase repeatedly
+##
+def template_rebase(t, vars=0, addl_vars=0):
+	ni, na = t[ 'inputs' ],  t[ 'add.vars' ]
+	bi, ba = t[ 'in.base' ], t[ 'add.base' ]
+
+	if min(ti, ta) < 0:
+		raise ValueError('invalid template-variable count')
+
+	if max(bi, ba) > 0:
+		raise ValueError('template already rebased')
+
+	res = {
+		'descr':    t[' descr '],
+		'inputs':   ni,
+		'add.vars': na,
+		'in.base':  bi +vars,
+		'add.base': ba +addl_vars,
+	}
+	cls = []
+
+	shift = vars +addl_vars
+
+	for c in t[ 'clauses' ]:
+		oorange = [ i  for i in c  if (abs(i) > ti+ta+ni+na) ]
+		if bi+ba:
+			oorange.extend(i  for i in c  if (abs(c) < ni+na))
+
+		if oorange != []:
+			raise ValueError(f'invalid template-var index ({c})')
+
+		cls.append([ i +shift  if (i>0)  else i -shift ])
+
+	res[ 'clauses' ] = cls
+
+	return res
+
+
+##-----------------------------------------
+## predefined templates for small-N "0/1-of-N" expressions
+##
+## see satsolv_1n_few(), which shares logic
+##
+def satsolv_1ofn_2prod_few_template(vars, allow0=False, force=False):
+	res, r = [], template0(('0/1'  if allow0  else '1') +
+	                       f'-of-N({ len(vars) })')
+	r[ 'inputs' ] = len(vars)
+
+## TODO: clean up res/r/sub-object assignments
+## TODO: does _and_template() etc. already contain small-N templates?
+
+	if len(vars) == 1:                ## 0/1: anything; 1: var must be True
+		r[ 'descr'] += ('->NOP'  if allow0  else  '->force')
+		if not allow0:
+			r[ 'clauses' ] = [ [ vars[0] ] ]
+		return r
+
+	elif len(vars) == 2:                        ## 1-of-A/B  or  0/1-of-A/B
+		rd = r[ 'descr' ] + ('->NAND'  if allow0  else  '->XOR')
+		if allow0:                     ## reject simultaneous True only
+			res = satsolv_and_template(vars, negate=True)
+			assert(0)
+		else:
+			res = satsolv_xor1_template(vars[0], vars[1],
+			                            force=force)
+		res[ 'descr' ] = rd
+		return res
+
+	elif len(vars) <= 4:
+				## no pair of variables is simultaneously true
+		r[ 'descr' ] += f'==NO.PAIRS'
+		r[ 'clauses' ] = [
+			[ sat_not(v1), sat_not(v2), ]
+				for v1, v2  in allpairs(vars)
+		]
+
+		if not allow0:
+			r1 = satsolv_or_template(vars, force=force)
+			##
+			r[ 'add.vars' ] += r1[ 'add.vars' ]
+			r[ 'clauses'  ].extend(r1[ 'clauses' ])
+			##
+			## inputs are shared: no clause/index to rebase
+
+		return r
+
+	return None
+
+	return res
+
+
+##-----------------------------------------
+## 0/1-of-N template
+##
+## see satsolv_1ofn_2prod(): shares much of the same logic
+##
+def satsolv_1ofn_2prod_template(vars, varbase=0, addbase=0, allow0=False,
+                                force=False):
+	rstr = ('0/1'  if allow0  else '1') + '-of-N'
+	vars = vars2varlist(vars)
+	r    = template0(f'{ rstr }({ len(vars) })', inputs = len(vars))
+
+	if isinstance(vars[0], int):                            ## numeric list
+		few = satsolv_1ofn_2prod_few_template(vars, allow0=allow0,
+		                                      force=force)
+		if few:
+			return few
+
+		p, q = matrix2pq(vars)
+		comm = f'{ rstr }({ len(vars) }->{ p }x{ q })'
+
+					## adds P+Q axis variables,
+					## w/o any subsequent expressions' vars
+		pvar = list(range(p))
+		qvar = list(range(p, q+p))
+		##
+		pt = satsolv_1ofn_2prod_template(p)
+		qt = satsolv_1ofn_2prod_template(q)
+		##
+		comm += f',({ pt[ "descr" ] })'
+		comm += f'x({ qt[ "descr" ] })'
+
+		print('xxx//', comm)
+		print('xxx.p.var', pvar)
+		print('xxx.q.var', qvar)
+		print('xxx.pt', pt)
+		print('xxx.qt', qt)
+		print('##')
+## RRR
+		r[ 'add.vars' ] += len(pvar) +len(qvar)
+		r[ 'add.vars' ] += +pt[ 'add.vars' ] + qt[ 'add.vars' ]
+
+		return r
+
+## TODO: symbolic mapping
+	assert(0)
 
 
 ##-----------------------------------------
@@ -292,18 +678,22 @@ def satsolv_or1(var1, var2, result, negate=False):
 ## TODO: organized propagation of +- signs (in-band)
 ## TODO: manage 'force'
 ##
-def satsolv_or(base, vars, result=None, negate=False, force=False):
+def satsolv_or(base, vars, result=None, negate=False, force=False,
+               template=False):
+
+	if template:
+		return satsolv_or_template(vars, negate=negate, force=force)
 	cls = []
 	v   = sorted(vars)
+	all = list((base +b)  for b in  v)
 
 	if result == None:
 		result = base + sNALL0
 
-## see also: satsolv_or1()
+## see also: satsolv_or2()
 	rsign1, rsign2 = ('', '-')  if negate  else ('-', '')
 		## sign(R) in all-enclosing (1) and per-variable (2...) lines
 
-	all = list((base +b)  for b in  v)
 	all.append(f"{ rsign1 }{ result }")
 		##
 	cls.append( " ".join(all) )                   ## A | B | not(N)
@@ -333,14 +723,18 @@ def satsolv_or(base, vars, result=None, negate=False, force=False):
 ##
 ## manages AND-of-one variable (just passes through or turns to NOT)
 ##
-def satsolv_and(base, vars, result=None, negate=False):
+def satsolv_and(base, vars, result=None, force=False, negate=False,
+                template=False):
+	if template:
+		return satsolv_and_template(vars, negate=negate, force=force)
+
 	cls = []
 	v   = sorted(vars)
 
 	if len(vars) == 1:
 		return vars[0], vars[0], f'AND({ vars[0] }) == { vars[0] }'
 
-	rsign1, rsign2 = '', '-'  if negate  else '-', ''
+	rsign1, rsign2 = ('', '-')  if negate  else ('-', '')
 
 	if result == None:
 		result = base + sNALL1
@@ -392,17 +786,22 @@ def satsolv_1n_few(sat, vars, nr=0, allow0=False, result=None, force=False):
 	##------------------------------
 	if len(vars) == 2:                          ## 1-of-A/B  or  0/1-of-A/B
 		if allow0:                     ## reject simultaneous True only
+			if result == None:
+				result = sat_new_varname2(sat, 'NAND')
+
 			cls = [ f'-{ vars[0] } -{ vars[1] }', ]
 			cmt = f'at-most-1({result})=>NAND({vars[0]},{vars[1]})'
 			return [ [], [], cls, cmt, ]
 						## only clause, no new variable
 ## TODO: merge return paths
-
 		if result == None:
 			result = sat_new_varname2(sat, 'N1xXOR')
 
 		cls, _, _ = satsolv_xor1(vars[0], vars[1], result=result)
 		cmt = f'at-most-1({result}) => ({vars[0]} XOR {vars[1]})'
+
+		if force:
+			cls.append(satsolv_const(result))        ## XOR is true
 
 		return [ result, [ result, ], cls, cmt, ]
 
@@ -416,13 +815,38 @@ def satsolv_1n_few(sat, vars, nr=0, allow0=False, result=None, force=False):
 ## TODO: proper signs and indexing
 
 		if not allow0:
-			cls0, or3, _ = satsolv_or('', vars,
-			           result = sat_new_varname2(sat,'THREE2ONEx'))
+			result = sat_new_varname2(sat,'THREE2ONEx')
+			cls0, or3, _ = satsolv_or('', vars, result)
+
 			cls.extend(cls0)
+##			cls.append(satsolv_const(result))
+##							## at least one is true
+
 			or3 = [ or3, ]
 
-		return [ [], or3, cls, '', ]
+		return [ result, or3, cls, '', ]
 
+
+	return None
+
+
+##-----------------------------------------
+## template-generating equivalent of satsolv_1n_few()
+## returns None if special case is not recognized
+##
+## 'vars' is inputs' list, all-numeric or symbolic
+##
+def satsolv_1n_few_template(vars, allow0=False, force=False):
+	if len(vars) == 1:
+		if allow0:                                ## A=0/1 -> no clause
+			return [ [], [], [], '', ]
+		else:
+				## explicit clause forcing var to True
+				## do not bother trimming replicated clauses
+				##
+			cls = [ vars[0] ]  if force  else []
+
+			return [ vars[0], [], cls, '', ]      ## 1-of-N(A) == A
 
 	return None
 
@@ -531,7 +955,7 @@ def satsolv_1n(sat, vars, nr=0, allow0=False, result=None):
 		if sub == []:           ## non-hierarchical, pass-through var
 			continue
 
-		_, c2 = satsolv_or1(sub[-2], sub[-1], c)
+		_, c2 = satsolv_or2(sub[-2], sub[-1], c)
 		cls.extend(c2)
 					## commander=OR(...variables...)
 
@@ -596,6 +1020,49 @@ def satsolv_1ofn(sat, vars, result=None):
 
 
 ##-----------------------------------------
+## predefined P+Q matrix sizes, in case we know relative costs etc.
+##
+tMATRIX2PQ = {
+	5: [ 2, 3, ],
+	6: [ 2, 3, ],
+
+	7: [ 2, 4, ],       ## less levels than 3x3 decomposition?
+	8: [ 2, 4, ],       ## less levels than 3x3 decomposition?
+	9: [ 3, 3, ],
+}
+
+
+##-----------------------------------------
+## 1-of-N or 0-of-N, hierarchical decomposition: pick P+Q matrix sizes
+## returns p, q per-axis sizes
+##
+def matrix2pq(vars):
+			## assume ~square P*Q is optimal
+			## TODO: minimize (cost(P) + cost(Q)) -> select P, Q
+			##
+	if len(vars) in tMATRIX2PQ:
+		return tMATRIX2PQ[ len(vars) ]
+
+	p = int(math.sqrt(len(vars)))
+	if (p ** 2 == len(vars)):
+		q = p
+
+	elif (p * (p+1) >= len(vars)):
+		q = p + 1
+
+	elif ((p + 1) ** 2 >= len(vars)):
+		p, q = p + 1, p + 1
+
+	elif ((p + 1) * (p + 2) >= len(vars)):
+		p, q = p + 1, p + 2
+
+	else:
+		assert(0)  ## ...optimal selection would eliminate selection...
+
+	return p, q
+
+
+##-----------------------------------------
 ## 1-of-N or 0-of-N (selected by 'allow0')
 ##
 ## returns [ control variable, [ new/intermediate variables],
@@ -616,35 +1083,34 @@ def satsolv_1ofn(sat, vars, result=None):
 ##
 ## see:
 ## Chen: A new SAT encoding of the at-most-one constraint
-## 2010-07
-## TODO: URL
+##   2010-07
+##   www.it.uu.se/research/group/astra/ModRef10/papers/
+##       Jingchao%20Chen.%20A%20New%20SAT%20Encoding%20of%20the
+##       %20At-Most-One%20Constraint%20-%20ModRef%202010.pdf
 ##
-def satsolv_1ofn_2prod(sat, vars, result=None, force=True, allow0=False):
-## sat next vars -> nr
-	nr, comm = 0, ''
+def satsolv_1ofn_2prod(sat, vars, result=None, force=False, allow0=False,
+                       template=False):
+	if template:
+		return satsolv_1ofn_2prod_template(vars, allow0=allow0,
+		                                   force=force)
 
-			## before-after: new/intermediate variables
+## sat next vars -> nr
+	nr, comm, expr = 0, '', []
+
+## TODO: trim added-vs-original variables properly
+
+				## before-after: new/intermediate variables
 	nvars_orig = satsolv_nr_of_added_vars(sat)
 
-	r = satsolv_1n_few(sat, vars, nr=nr, allow0=allow0, result=result,
-	                   force=force)
+	expr = f'1-OF-[{ len(vars) }]({ ",".join(vars) })'
+
+## see also: satsolv_1ofn_2prod_template()
+
+	r = satsolv_1n_few(sat, vars, nr=nr, allow0=allow0, result=result)
 	if r:
 		return r[0], r[1], r[2], r[3]
 
-			## assume ~square P*Q is optimal
-			## TODO: minimize (cost(P) + cost(Q)) -> select P, Q
-			##
-	p = int(math.sqrt(len(vars)))
-	if (p ** 2 == len(vars)):
-		q = p
-	elif (p * (p+1) >= len(vars)):
-		q = p + 1
-	elif ((p + 1) ** 2 >= len(vars)):
-		p, q = p + 1, p + 1
-	elif ((p + 1) * (p + 2) >= len(vars)):
-		p, q = p + 1, p + 2
-	else:
-		assert(0)  ## ...optimal selection would eliminate selection...
+	p, q = matrix2pq(vars)
 
 	if result == None:
 		result = sat_new_varname2(sat,
@@ -655,11 +1121,11 @@ def satsolv_1ofn_2prod(sat, vars, result=None, force=True, allow0=False):
 
 			## 'frame' variables, rows (Q) and columns (P)
 			##
-	pvars = [sat_new_varname2(sat, prefix=f'XY{ len(vars) }C')
-	                              for i in range(p)]
+	pvars = [ sat_new_varname2(sat, prefix=f'XY{ len(vars) }C')
+	                              for i in range(p) ]
 			##
-	qvars = [sat_new_varname2(sat, prefix=f'XY{ len(vars) }R')
-	                              for i in range(q)]
+	qvars = [ sat_new_varname2(sat, prefix=f'XY{ len(vars) }R')
+	                              for i in range(q) ]
 
 					## group inputs as p-times-q product
 					##
@@ -683,6 +1149,11 @@ def satsolv_1ofn_2prod(sat, vars, result=None, force=True, allow0=False):
 	nvars.extend(pnvars)
 	nvars.extend(qnvars)
 
+				## both MUST be true for 1-by-1 intersection
+				##
+	pq_clauses, _, _ = satsolv_and('', [ pv, qv, ], result=result)
+	cls.extend(pq_clauses)
+
 				## at-most-1(vars): each 'var' corresponds to
 				## not more than one pvar/qvar ->
 				##     (NOT(v) OR p) AND (NOT(v) OR q)
@@ -695,7 +1166,7 @@ def satsolv_1ofn_2prod(sat, vars, result=None, force=True, allow0=False):
 	nvars_after = satsolv_nr_of_added_vars(sat)
 
 	if force:
-		cls.append(f'{ result }')
+		cls.append(f'{ result }')   ## 0/1-of-N must hold at this level
 
 	print(f'## ADDED.VARS=+{ satsolv_nr_of_added_vars(sat) - nvars_orig }')
 		##
@@ -1261,6 +1732,26 @@ def sat_nr_clauses(sat):
 
 	return nrc
 
+##--------------------------------------
+## print 'VAR.NAME(index)' pairs as SAT comments
+##
+## do not change VARIABLES framing
+## or update dev/sat2back.py too
+##
+def sat_report_vars(sat, prefix=sSATPREFIX):
+	vstr = ' '.join(f'{ v }[{ vi+1 }]'
+	                for vi, v in enumerate(sat[ "vars" ]))
+
+					## do not change VARIABLES framing
+					## or update dev/sat2back.py too
+	print(prefix +'c VARIABLES:')
+
+	for v in textwrap.wrap(vstr, width=64):
+		print(prefix +'c   ' +v)
+
+	print(prefix +'c /VARIABLES')
+	print(prefix +'c')
+
 
 ##--------------------------------------
 def satsolv_report(sat):
@@ -1282,18 +1773,10 @@ def satsolv_report(sat):
 			print(sSATPREFIX +'c   ' +commstr[1])
 			comments += 1
 
-	vstr = ' '.join(f'{ v }[{ vi+1 }]'
-	                for vi, v in enumerate(sat[ "vars" ]))
 	print(sSATPREFIX +'c /CONSTRAINTS')
 	print(sSATPREFIX +'c')
 
-					## do not change VARIABLES framing
-					## or update dev/sat2back.py too
-	print(sSATPREFIX +'c VARIABLES:')
-	for v in textwrap.wrap(vstr, width=64):
-		print(sSATPREFIX +'c   ' +v)
-	print(sSATPREFIX +'c /VARIABLES')
-	print(sSATPREFIX + 'c')
+	sat_report_vars(sat)
 
 					##-----  end of header  --------------
 
@@ -1391,8 +1874,8 @@ vTEMPLATE_HDR_ENTRIES = 4
 sCNF_TEMPLHDR_ID = 'CNF_TEMPLATEHDR_ELEMS'
 
 ## defined variables: replace prefix:
-##   #define  __VAR__1_OF_N=23_IS_NEGATIVE  UINT8_C(0x80)
-##   #define  __VAR__1_OF_N=23_IS_ADDED_VAR UINT8_C(0x40)
+##   #define  SAT_TEMPL_1_OF_N=23_IS_NEGATIVE  UINT8_C(0x80)
+##   #define  SAT_TEMPL_1_OF_N=23_IS_ADDED_VAR UINT8_C(0x40)
 ##            ^^^^^^^^^^^^^^^^ prefix, up to ...N=23
 ##
 ##   static const uint8_t __TEMPL__1_OF_N=23__[286] = {
@@ -1410,7 +1893,10 @@ sCNF_TEMPLHDR_ID = 'CNF_TEMPLATEHDR_ELEMS'
 ##     TODO: multi-valued variant, where this is a list
 ##
 ## returns [ [ clauses1 ], [ clauses2 ], ... ], total elem.count,
-##           nr. of clauses, nr. added variables (A), unit.bitcount
+##           nr. of clauses, nr. added variables (A), max.variables
+##           (worst-case clause), unit.bitcount
+##
+## TODO: return proper dict/struct
 ##
 ## elem.count includes 0-padding, plus header:
 ##     (1) nr. of input variables (V)
@@ -1474,7 +1960,7 @@ def clauses2template(cls, vars, nvars, result):
 
 	intxdigits = ((intbits //8) * 2)
 
-	res, maxcls = [], 0
+	res, maxcvars = [], 0
 
 			## constants to mark variables, aligned to MS(intbits)
 			##   0x8...  variable is negated (<0)
@@ -1492,45 +1978,54 @@ def clauses2template(cls, vars, nvars, result):
 						## append sign separately
 
 		ints = list(satsolv_vars2ints(s, [ i ])[0]  for i in ids)
-		print('//', signs, ids, ints)
 
 		res.append([])
 
-				## signs, ids, ints of uniform element count	
+						## pretty-print
+		pprint = (f"{ sig }{ id }[{ i }]"  for sig, id, i
+		          in zip(signs, ids, ints))
+
+		print('//', " ".join(pprint))
+
+				## signs, ids, ints of uniform element count
 				## ('-' or ''); name; variable index>0
 
 		for sig, id, i in zip(signs, ids, ints):
-				## extra bits
+				## set extra bits
 				##
-			r =  0  if (sig == '')       else neg
-			r += 0  if (i <= len(vars))  else added
+			r = 0  if (sig == '')  else neg
 
-			assert((r == 0) or (r > i))
+## TODO: track variable type, turn into base-index
+
+			if (i > len(vars)):          ## added variable ->
+			                             ## rebase to 1..A
+				i -= len(vars)       ## ADDED(0) -> absolute 1
+				r |= added
 
 				## MS bits MUST NOT conflict with index
 			r = f'0x{ r+i :0{intxdigits}x}'
 
 			res[-1].append(r)
 
-		maxcls = max(maxcls, len(ids))
+		maxcvars = max(maxcvars, len(ids))
 		res[-1].append(fmt0)
 
 				## do not expect this with sane data:
 				## _lots_ of clauses with few variables
 				##
-	if (maxcls > neg):
+	if (maxcvars > neg):
 		raise ValueError("nr. of clauses does not fit bitwidth")
 
 		## lead/header: total nr. of entries, nr. of inputs
 		##
 	res.insert(0, [ f'0x{ len(vars)    :0{intxdigits}x}',
 	                f'0x{ len(addvars) :0{intxdigits}x}',
-	                f'0x{ maxcls       :0{intxdigits}x}',
-	                f'0x{ 0            :0{intxdigits}x}', ])
+	                f'0x{ len(cls)     :0{intxdigits}x}',
+	                f'0x{ maxcvars     :0{intxdigits}x}', ])
 
 	units = sum(len(r)  for r in res)
 
-	return res, units, len(r) -1, len(addvars), intbits
+	return res, units, len(cls), len(res), len(addvars), maxcvars, intbits
 
 
 ##--------------------------------------
@@ -1538,19 +2033,23 @@ def clauses2template(cls, vars, nvars, result):
 ## TODO: multi-valued output MUST accommodate list
 ##
 def clauses2print(cls, vars, nvars, r):
-	ct, ccnt, _, addvars, cbits = clauses2template(cls, vars, nvars,
-	                                               result=r)
+	ct, ccnt, nrcls, units, addvars, maxv, cbits = clauses2template(cls,
+	                                                vars, nvars, result=r)
+
+	nrvars = len(vars)
 
 	if len(ct[0]) != vTEMPLATE_HDR_ENTRIES:
 		raise("first clause->template does not look like header")
 
 	print('//')
-	print('// {')
+	print('// { ///')    ## leave trailing '///'
+	                     ## it is a 'do not count indentation' marker
+	                     ## for our reformatters
 	print('// GENERATED.SRC:')
 
 	print(f"#if !defined({ sCNF_TEMPLHDR_ID })")
 	print("/* first elements storing input/additional-var count (2)")
-	print(" * and max-nr-of-variables per clause (+1)") 
+	print(" * and max-nr-of-variables per clause (+1)")
 	print(" */")
 		##
 	print(f"#define { sCNF_TEMPLHDR_ID } " +
@@ -1563,19 +2062,42 @@ def clauses2print(cls, vars, nvars, r):
 					## full listing, one clause per line
 
 	print(f'// CLAUSES[TYPE={ ctype }]' +
-		f'[{ len(vars) }+{ addvars }(x{ len(vars) :x}+' +
-		f'x{ addvars :x})({ len(vars) +addvars }/' +
-		f'x{ len(vars) +addvars :x}) variables]:')
+		f'[{ nrvars }+{ addvars }(x{ nrvars :x}+' +
+		f'x{ addvars :x})({ nrvars +addvars }/' +
+		f'x{ nrvars +addvars :x}) variables]' +
+		f'x[max { maxv } vars/cls]:')
 
+	negbit   = 1 << (cbits -1)     ## negation, additional-var bits
+	addvbit  = 1 << (cbits -2)
+	maskbits = addvbit -1
+
+
+				## bit width, masking macros
 	print("/**/")
-	print(f'#define  __VAR__1_OF_N={ len(vars) }_IS_NEGATIVE  ' +
+	print(f'#define  SAT_TEMPL_1_OF_N{ len(vars) }_MASK         ' +
+			f'UINT{ cbits }_C(0x{ (1 << (cbits -2)) -1 :x})')
+		##
+	print(f'#define  SAT_TEMPL_1_OF_N{ len(vars) }_IS_NEGATIVE  ' +
 			f'UINT{ cbits }_C(0x{ 1 << (cbits -1) :x})')
 		##
-	print(f'#define  __VAR__1_OF_N={ len(vars) }_IS_ADDED_VAR ' +
+	print(f'#define  SAT_TEMPL_1_OF_N{ len(vars) }_IS_ADDED_VAR ' +
 			f'UINT{ cbits }_C(0x{ 1 << (cbits -2) :x})')
 	print("/**/")
 
-	print(f'static const {ctype} __TEMPL__1_OF_N={ len(vars) }__' +
+	print(f'#define  SAT_TEMPL_1_OF_N{ nrvars }_INPUT_VARS   ' +
+			f'((unsigned int) { nrvars })')
+	print(f'#define  SAT_TEMPL_1_OF_N{ nrvars }_ADDL_VARS    ' +
+			f'((unsigned int) { addvars })')
+	print(f'#define  SAT_TEMPL_1_OF_N{ nrvars }_CLAUSES      ' +
+			f'((unsigned int) { nrcls })')
+	print(f'#define  SAT_TEMPL_1_OF_N{ nrvars }_MAX_CLS_VARS ' +
+			f'((unsigned int) { maxv  })')
+	print(f'#define  SAT_TEMPL_1_OF_N{ nrvars }_VARBITS      ' +
+			f'((unsigned int) { cbits })')
+	print(f'#define  SAT_TEMPL_1_OF_N{ nrvars }_ELEMS        ' +
+			f'((unsigned int) { ccnt })')
+	print("/**/")
+	print(f'static const {ctype} SAT_TEMPL_1_OF_N{ nrvars }' +
 		f'[{ ccnt }] = {{')
 
 	for ci, c in enumerate(ct):
@@ -1587,12 +2109,40 @@ def clauses2print(cls, vars, nvars, r):
 
 	print('} ;')
 	print('// /CLAUSES')
+
+				## entries to include to template's struct
+				## see sat.c
+				##
+	tentry = [
+		f'#define  SAT_TEMPL_1_OF_N{ nrvars }_FULL \\',
+		f'{{ { nrvars }, \\',
+		f'  SAT_TEMPL_1_OF_N{ nrvars }_VARBITS,      \\',
+		f'  SAT_TEMPL_1_OF_N{ nrvars }_MASK,         \\',
+		f'  SAT_TEMPL_1_OF_N{ nrvars }_IS_NEGATIVE,  \\',
+		f'  SAT_TEMPL_1_OF_N{ nrvars }_IS_ADDED_VAR, \\',
+		f'  SAT_TEMPL_1_OF_N{ nrvars }_INPUT_VARS,   \\',
+		f'  SAT_TEMPL_1_OF_N{ nrvars }_ADDL_VARS,    \\',
+		f'  SAT_TEMPL_1_OF_N{ nrvars }_CLAUSES,      \\',
+		f'  SAT_TEMPL_1_OF_N{ nrvars }_MAX_CLS_VARS, \\',
+		f'  (const void *)                           \\',
+		f'      SAT_TEMPL_1_OF_N{ nrvars },          \\',
+		f'  SAT_TEMPL_1_OF_N{ nrvars }_ELEMS,        \\',
+		'}',
+	]
+	##
+	print('\n'.join(tentry))
+
 	print('// /GENERATED.SRC')
 	print('// }')
 	print()
 
 
 ##============================================================================
+def template2python(t):
+	sys.exit(0)
+
+
+##======================================
 if __name__ == '__main__':
 	sat  = satsolv_init0()
 	vars = []
@@ -1601,24 +2151,68 @@ if __name__ == '__main__':
 	if 'BITS' in os.environ:
 		BITS = int(os.environ['BITS'])
 
+	maxn    = 128
 	vdigits = log10(BITS)
 
-	##----- 1-of-N, 4..60  ------------------
-	maxn = 128
-	vdigits = log10(maxn)
 	vars = [f'v{v:0{vdigits}}'  for v in range(maxn)]
 
+	if 'TEMPLATE' in os.environ:
+		if 'OR' in os.environ[ 'TEMPLATE' ]:
+			print(f'[  ## OR(1..{maxn}) templates, 0-based index')
+			for vb in range(1, maxn+1):
+				t = satsolv_or('', vb, negate=False,
+				               force=False, template=True)
+				print('\t', t)
+			print(']\n')
+
+		if 'AND' in os.environ[ 'TEMPLATE' ]:
+			print(f'[  ## AND(1..{maxn}) templates, 0-based index')
+			for vb in range(1, maxn+1):
+				t = satsolv_and('', vb, negate=False,
+				                force=False, template=True)
+				print('\t', t)
+			print(']\n')
+
+		if '1OFN' in os.environ[ 'TEMPLATE' ]:
+			print(f'[  ## 1-of-N(1..{maxn}) templates, 0-based index')
+			for vb in range(1, 32+1):    ## range(1, maxn+1):
+				t = satsolv_1ofn_2prod(None, vb, allow0=False,
+				                force=True, template=True)
+				print('\t', t)
+			print(']\n')
+
+		sys.exit(0)
+		##-------------------------------
+
+		if os.environ[ 'TEMPLATE' ] == '1OFN':
+			r, nvars, cls, comm = satsolv_1ofn_2prod(sat,
+			                                   vars[ :BITS ])
+		print(f'## 1-of-N[{ BITS }] r={r} cls[{len(cls)}]',
+		      nvars, comm)
+
+		clauses2print(cls, vars[ :BITS ], nvars, r)
+
+		sys.exit(0)
+
+	##----- 1-of-N, 1..65  ------------------
+
 	for vb in range(1, 65):
+		sat  = satsolv_init0()
+
+		satsolv_add_vars(sat, vars[:vb])
+
 		r, nvars, cls, comm = satsolv_1ofn_2prod(sat, vars[:vb])
 		print(f'## 1-of-N[{ vb }] r={r} cls[{len(cls)}]={ cls }',
 		      nvars, comm)
+
+		sat_report_vars(sat, prefix='//')
 
 		clauses2print(cls, vars[:vb], nvars, r)
 
 		if vb < 4:
 			r, nvars, cls, comm = satsolv_1ofn_2prod(sat,
 			                              vars[:vb], allow0=True)
-			print(f'## 0/1-of-N[{ vb }] r={r} cls[{len(cls)}]={cls}',
+			print(f'## 0/1-of-N[{ vb }] r={r} cls[{len(cls)}]',
 			      nvars, comm)
 			print()
 
