@@ -54,6 +54,11 @@ typedef enum {
 	SAT_FL_ADD_VAR = 2     // add clause forcing the aggregate variable
 } SAT_Flag_t ;
 
+#define  SAT_TEMPLTABLE_HDR_UNITS  ((unsigned int) 4)  // per-table header
+#define  SAT_TEMPLHDR_UNITS  ((unsigned int) 4)  // per-template header
+#define  SAT_SIZET_INVD      (~((size_t) 0))
+#define  SAT_UINT_INVD       (~((unsigned int) 0))
+
 
 #if !defined(SYS_NO_LMDB)  /*=====  delimiter: LMDB access  ================*/
 /* see www.lmdb.tech/doc/starting.html for API overview  [accessed 2023-04-14]
@@ -2800,7 +2805,7 @@ static void sat_dispose(struct SatState *ps)
 #endif   /*=====  !delimiter: SAT converter  ===============================*/
 
 
-#if 1   /*=====  delimiter: SAT template-to-CNF converter  =================*/
+#if 0   /*=====  delimiter: SAT template-to-CNF converter (v1)  ============*/
 // we assume there will be one section per primitive
 //
 #include "cnf-templates.h"
@@ -3136,6 +3141,183 @@ static size_t sat_template(unsigned int copies)
 #endif   /*=====  !delimiter: SAT template-to-CNF converter  ===============*/
 
 
+#if 2   /*=====  delimiter: SAT template-to-CNF converter (v2)  ============*/
+#include "1ofn-n128-v2template.c"
+
+/* condensed, v2 templates:
+ *
+ * #define  SAT_TMPL_..._VAR_IS_NEGATED  UINT16_C (0x8000)
+ * #define  SAT_TMPL_..._VAR_IS_CLAUSE_END  UINT16_C (0x4000)
+ * #define  SAT_TMPL_..._VAR_IS_ADDED    UINT16_C (0x2000)
+ * #define  SAT_TMPL_..._VAR_MASK        UINT16_C (0x1fff)
+ * #define  SAT_TMPL_..._MAX_VARS        ((unsigned int) 128)
+ * #define  SAT_TMPL_..._MAX_ADDL_VARS   ((unsigned int)  41)
+ * #define  SAT_TMPL_..._MAX_CLAUSES     ((unsigned int) 342)
+ * #define  SAT_TMPL_..._MAX_VARS_PER_CLAUSE  ((unsigned int) 5)
+ *
+ * static const uint16_t SAT_TMPL_1OFN_templates[50082] = {
+ *     0x0080,0x0029,0x0005,0x0156,    header: max 128(x80) inputs,
+ *                                      41(x29) additional variables,
+ *                                      5 variables per clause,
+ *                                      342 clauses per template
+ *
+ *     0x0001,0x0000,0x0001,0x0001,    // 1+0 vars, 1 cls, nr.vars<=1/cls
+ * [1] ->
+ *         0x4001,
+ *         ^^^^^^ SAT_TMPL_..._VAR_IS_CLAUSE_END | 1
+ *
+ *     0x0002,0x0001,0x0004,0x0003,    // 2+1 vars, 4 cls, nr.vars<=3/cls
+ * [1, 2, -3], [-1, 2, 3], [1, -2, 3], [-1, -2, -3], [3] ->
+ *  2+1 vars -> 1 -> 1, 2 -> 2 (original variables); 3 -> 1 (+variable)
+ *
+ *         [1,    2,     -3]     [-1,   2,     3]      [1,    -2,    3]
+ *         0x0001,0x0002,0xe001, 0x8001,0x0002,0x6001, 0x0001,0x8002,0x6001, ...
+ *                       ^^^^^^ SAT_TMPL_..._VAR_IS_NEGATED |
+ *                              SAT_TMPL_..._VAR_IS_CLAUSE_END | 1 ->
+ *                              additional variable (1) -> global (3)
+ * ...
+ * } ;
+ * 
+ * 
+ * // index list
+ * static const struct {
+ *      unsigned int offset;
+ *      unsigned int count;
+ * } SAT_TMPL_1OFN_INDEX[128] = {
+ *      {     4,   9 },       note: 1-based; starting table header not indexed
+ *      {     9,  16 },
+ *      {    25,  20 },
+ * ...
+ * } ;
+ */
+
+
+/*--------------------------------------
+ * does 1-based 'idx' point to a proper value in (tindex, tcount),
+ * within a 'template_units'-sized array?
+ *
+ * if so, return offset of 1st unit, and nr. in 'units'
+ *               SAT_UINT_INVD any error; any size over 'templ_units' is error
+ *
+ * templates start with SAT_TEMPLHDR_UNITS of limits; always
+ * returns >= units
+ */
+static unsigned int template2index(unsigned int *units,
+                        const struct TemplIndex *tindex, unsigned int icount,
+                                   unsigned int templ_units,
+                                   unsigned int idx)
+{
+	unsigned int offs, u;
+
+	if (units)
+		*units = 0;
+
+	if (!tindex || !idx || (idx > icount))
+		return SAT_UINT_INVD;
+
+// TODO: report 'insufficient table entries'
+
+	offs = tindex[ idx -1 ].offset;
+	u    = tindex[ idx -1 ].count;
+
+	if (u < SAT_TEMPLHDR_UNITS)
+		return SAT_UINT_INVD;               // table inconsistent (SNH)
+
+	if ((offs >= templ_units) || (offs +u > templ_units))
+		return SAT_UINT_INVD;                   // table overflow (SNH)
+
+	if (units)
+		*units = u;
+
+	return offs;
+}
+
+
+/*--------------------------------------
+ * non-NULL 'tindex' implies picking up template from packed one,
+ * using var0 as 1-based index into [tindex, icount]
+ */
+static size_t sat_v2template2mem_16(void *res, size_t rbytes,
+                              const void *template, unsigned int tcount,
+                 const struct TemplIndex *tindex,   unsigned int icount,
+                            unsigned int var0,
+                            unsigned int addvar0)
+{
+	const uint16_t *pt = (const uint16_t *) template;
+	unsigned int i, cls = 0;
+
+	if (!rbytes || !template || !tcount)
+		return 0;
+
+	if (tindex) {
+		unsigned int offs = template2index(&tcount, tindex, icount,
+		                                   tcount, var0);
+		if (offs == SAT_UINT_INVD)
+			return SAT_SIZET_INVD;
+		pt += offs;
+				// tcount updated above; (pt, tcount) is table
+	}
+	if (tcount < SAT_TEMPLHDR_UNITS)
+		return SAT_SIZET_INVD;
+
+	pt     += SAT_TEMPLHDR_UNITS;
+	tcount -= SAT_TEMPLHDR_UNITS;           // (pt, tcount) are all clauses
+
+	{
+	char clause[ 1024 +1 ] = { 0, };
+	size_t cb = 0;
+
+	for (i=0; i<tcount; ++i) {
+		int v = pt[i] & SAT_TMPL_1OFN_VAR_MASK;
+
+		if (pt[i] & SAT_TMPL_1OFN_VAR_IS_ADDED)
+			v += addvar0;
+
+		if (pt[i] & SAT_TMPL_1OFN_VAR_IS_NEGATED)
+			v = -v;
+
+		printf("  [%u/%u]x%" PRIx16 "\n", i, tcount, pt[i]);
+
+		cb += snprintf(&(clause[cb]), sizeof(clause), "%s%d",
+		               cb ? " " : "", v);
+
+		if (pt[i] & SAT_TMPL_1OFN_VAR_IS_CLAUSE_END) {
+			cb += snprintf(&(clause[cb]), sizeof(clause), " 0");
+
+			printf("CLAUSE[%u]=(%s)\n", cls+1, clause);
+
+			cb = 0;
+			++cls;
+		}
+	}
+	}
+printf("\n");
+
+(void) res;
+	return 0;
+}
+
+
+//--------------------------------------
+static size_t sat_v2template2mem(void *res,        size_t rbytes,
+                           const void *template, unsigned int tcount,
+              const struct TemplIndex *tindex,   unsigned int icount,
+                         unsigned int unitbits,
+                         unsigned int var0,
+                         unsigned int addvar0)
+{
+	switch ((template && tcount) ? unitbits : 0) {
+	case 16:
+		return sat_v2template2mem_16(res, rbytes, template, tcount,
+		                             tindex, icount, var0, addvar0);
+	default:
+		return 0;
+	}
+}
+
+#endif   /*=====  !delimiter: SAT template-to-CNF converter  ===============*/
+
+
 //----------------------------------------------------------------------------
 int main(int argc, char **argv)
 {
@@ -3147,6 +3329,26 @@ int main(int argc, char **argv)
 
 	memset(&db,   0, sizeof(db));
 	memset(&psat, 0, sizeof(psat));
+
+#if 1
+	{
+	sat_v2template2mem(NULL, ~0, SAT_TMPL_1OFN_templates,
+	               ARRAY_ELEMS(SAT_TMPL_1OFN_templates),
+	               SAT_TMPL_1OFN_INDEX, ARRAY_ELEMS(SAT_TMPL_1OFN_INDEX),
+	               16, 8, 8);
+
+	sat_v2template2mem(NULL, ~0, SAT_TMPL_1OFN_templates,
+	               ARRAY_ELEMS(SAT_TMPL_1OFN_templates),
+	               SAT_TMPL_1OFN_INDEX, ARRAY_ELEMS(SAT_TMPL_1OFN_INDEX),
+	               16, 12, 9);
+
+	sat_v2template2mem(NULL, ~0, SAT_TMPL_1OFN_templates,
+	               ARRAY_ELEMS(SAT_TMPL_1OFN_templates),
+	               SAT_TMPL_1OFN_INDEX, ARRAY_ELEMS(SAT_TMPL_1OFN_INDEX),
+	               16, 128, 41);
+	return 0;
+	}
+#endif
 
 #if defined(CNF_TEMPLATES_H__)
 	if (1) {

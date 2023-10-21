@@ -19,3 +19,11 @@ pnr*.log
 distance.c
 distance*.log
 
+## compiler output
+*.a
+*.o
+*.su
+*.gcov
+*.gcda
+*.gcno
+

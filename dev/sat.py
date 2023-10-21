@@ -102,6 +102,7 @@ tTEMPLATE = []
 ##                   ##
 ##                   ## assume [1 .. N] are original inputs; [N+1 .. N+M]
 ##                   ## are implicit added variables
+##     'nr.clauses': ...         ## redundant; for debug convenience
 ##     ]
 ##   }
 ##
@@ -121,6 +122,7 @@ tTEMPLATE = []
 ##       ...
 ##                   ## clauses may use -N-M .. -1, 1 .. N+M
 ##                   ## no other variable indexes MAY be referenced
+##     'nr.clauses': ...         ## redundant; for debug convenience
 ##     ]
 ##   }
 ##
@@ -155,8 +157,15 @@ def template0(descr='UNDEFINED', inputs=0, in_base=0):
 		'in.base':    in_base,
 		'add.base':   0,
 		'clauses':    [],
+		'nr.clauses': 0,
 		'comments':   [],
 	}
+
+
+##--------------------------------------
+## update any dependent variables
+def template_sync(t):
+	t[ 'nr.clauses' ] = len(t[ 'clauses' ])
 
 
 ##--------------------------------------
@@ -394,6 +403,7 @@ def satsolv_1output(templ, var, value=None):
 		templ[ 'nr.outputs' ] += 1
 	else:
 		templ[ 'clauses' ].append([ var ])
+		template_sync(templ)
 
 	return templ
 
@@ -456,6 +466,7 @@ def satsolv_xor1_template(var1, var2, negate=False, force=False):
 		[         var1,  sat_not(var2),         rv,  ],
 		[ sat_not(var1), sat_not(var2), sat_not(rv), ],
 	]
+	template_sync(res)
 
 	return satsolv_1output(res, rv, sat_1output_value(force, not negate))
 
@@ -578,6 +589,7 @@ def satsolv_and_template(vars, negate=False, force=False):
 			res[ 'clauses' ].extend(
 				[ [ v, nrv ]  for v in vars ]
 			)
+			template_sync(res)
 
 			if force:
 				val2set = [ len(vars) +1, not negate ]
@@ -589,6 +601,7 @@ def satsolv_and_template(vars, negate=False, force=False):
 			res[ 'clauses' ].append(
 				clause2set(val2set[0], val2set[1], force=force)
 			)
+			template_sync(res)
 		return res
 
 	assert(0)
@@ -649,6 +662,7 @@ def satsolv_or_template(vars, negate=False, force=False):
 			res[ 'clauses' ].extend(
 				[ [ -v, rv ]  for v in vars ]
 			)
+			template_sync(res)
 
 			if force:
 				val2set = [ len(vars) +1, not negate ]
@@ -659,6 +673,7 @@ def satsolv_or_template(vars, negate=False, force=False):
 			res[ 'clauses' ].append(
 				clause2set(val2set[0], val2set[1], force=force)
 			)
+			template_sync(res)
 
 		return res
 
@@ -715,6 +730,7 @@ def template_rebase(t, vars=0, addl_vars=0):
 		cls.append(mapped)
 
 	res[ 'clauses' ] = cls
+	template_sync(res)
 
 	return res
 
@@ -738,7 +754,8 @@ def satsolv_1ofn_2prod_few_template(vars, allow0=False, force=False):
 		r[ 'descr'] += ('->NOP'  if allow0  else  '->force')
 		if (not allow0) or force:
 			r[ 'clauses' ] = [ [ vars[0] ] ]
-		return r
+			template_sync(r)
+		return	r
 
 	elif len(vars) == 2:                        ## 1-of-A/B  or  0/1-of-A/B
 		rd = r[ 'descr' ] + ('->NAND'  if allow0  else  '->XOR')
@@ -769,6 +786,7 @@ def satsolv_1ofn_2prod_few_template(vars, allow0=False, force=False):
 			r[ 'clauses'  ].extend(r1[ 'clauses' ])
 				## inputs are shared: no clause/index to rebase
 
+		template_sync(r)
 		r[ 'nr.outputs' ] = 0  if force  else 1
 
 		return r
@@ -935,6 +953,7 @@ def satsolv_1ofn_2prod_template(vars, varbase=0, addbase=0, allow0=False,
 		r[ 'comments'   ] = comm
 		r[ 'nr.outputs' ] = 0  if force  else 1
 ## TODO: ensure overall variable is last one
+		template_sync(r)
 
 		return r
 
@@ -2151,7 +2170,8 @@ def many_noneq0(bits, combs=0, non0=True):
 
 
 ##--------------------------------------
-vTEMPLATE_HDR_ENTRIES = 4       ## fixed prefix in template table
+vFULLTEMPLATE_HDR_ENTRIES = 4   ## fixed prefix in table-of-templates
+vTEMPLATE_HDR_ENTRIES = 4       ## fixed prefix in each template
                                 ## at least this many units are present
 
 vTEMPLATE_ADDL_BITS   = 3       ## in-band bits: negative; additional var;
@@ -2377,6 +2397,25 @@ def uconst(bits):
 
 
 ##--------------------------------------
+## return C conditional-define wrappers:
+##   #if !defined(...)
+##   #define ...
+##   #endif wrappers
+##
+def cond_define(var, value, terminator='//'):
+	res = [
+		f'#if !defined({ var })',
+		f'#define  { var }  { value }',
+		'#endif',
+	]
+
+	if terminator != None:
+		res.append(terminator)
+
+	return res
+
+
+##--------------------------------------
 def markbits(bits):
 	negd   = 1 << (bits -1)     ## variable is negated
 	clsend = 1 << (bits -2)     ## last-in-clause
@@ -2586,13 +2625,20 @@ def templates2c(templs, tid, condense=True, unitbits=0):
 				## in-band terminator markers
 		ctext = []
 		elems = []      ## collect (start index, nr. of entries) pairs
+
+		maxvars    = -1
+		maxaddvars = -1
 		maxcvars   = -1 ## max. nr. of variables per clause
 		maxclauses = -1
+
+		elems = [ [ 0, vFULLTEMPLATE_HDR_ENTRIES ] ]
 
 		for t in templs:
 			cls = template2c(t, header=True, intbits=maxubits)
 
 			maxclauses = max(maxclauses, len(t['clauses']))
+			maxvars    = max(maxvars,    (t[ 'inputs'   ]))
+			maxaddvars = max(maxaddvars, (t[ 'add.vars' ]))
 
 			cunits = 0
 			for ci, c in enumerate(cls):
@@ -2617,72 +2663,71 @@ def templates2c(templs, tid, condense=True, unitbits=0):
 			ctext.append('')
 
 				## nr. of preceding entries; current count
-			if elems == []:
-				elems.append([ 0 ])
-			else:
-				elems.append([ elems[-1][0] +elems[-1][1] ])
-			##
-			elems[-1].append( cunits )
+			elems.append([ elems[-1][0] +elems[-1][1], cunits ])
+
+		elems.pop(0)    ## currently, not indexed (1-based v.count idx)
 
 		negbit, clsendb, addv = markbits(maxubits)
 		maskbits = min(negbit, clsendb, addv) -1
 
-		res = [
-			'#if !defined(RRR_VAR_NEGATED)',
-			(f'#define RRR_VAR_NEGATED       { uconst(maxubits) }' +
-				f'(0x{ negbit :x})'),
-			'#endif',
-			'//',
+		res = []
+		res.extend(cond_define('RRR_VAR_IS_NEGATED',
+		                  f'{ uconst(maxubits) } (0x{ negbit :x})'))
 
-			'#if !defined(RRR_VAR_IS_CLAUSE_END)',
-			(f'#define RRR_VAR_IS_CLAUSE_END { uconst(maxubits) }' +
-				f'(0x{ clsendb :x})'),
-			'#endif',
-			'//',
+		res.extend(cond_define('RRR_VAR_IS_CLAUSE_END',
+		                 f'{ uconst(maxubits) } (0x{ clsendb :x})'))
 
-			'#if !defined(RRR_VAR_IS_ADDED)',
-			(f'#define RRR_VAR_IS_ADDED      { uconst(maxubits) }' +
-				f'(0x{ addv :x})'),
-			'#endif',
-			'//',
+		res.extend(cond_define('RRR_VAR_IS_ADDED',
+		                 f'{ uconst(maxubits) } (0x{ addv :x})'))
 
-			'#if !defined(RRR_VAR_MASK)',
-			(f'#define RRR_VAR_MASK          { uconst(maxubits) }' +
-				f'(0x{ maskbits :x})'),
-			'#endif',
-			'',
+		res.extend(cond_define('RRR_VAR_MASK',
+		                 f'{ uconst(maxubits) } (0x{ maskbits :x})'))
 
-			'#if !defined(RRR_CLAUSES)',
-			'#define RRR_MAX_CLAUSES ' +
-				f'((unsigned int) { maxclauses })',
-			'#endif',
-			'//',
+		res.extend(cond_define('RRR_MAX_VARS',
+		                       f'((unsigned int) { maxvars })'));
 
-			'#if !defined(RRR_MAX_VARS_PER_CLAUSE)',
-			'#define RRR_MAX_VARS_PER_CLAUSE ' +
-				f'((unsigned int) { maxcvars })',
-			'#endif',
-			'',
+		res.extend(cond_define('RRR_MAX_ADDL_VARS',
+		                       f'((unsigned int) { maxaddvars })'));
 
+		res.extend(cond_define('RRR_MAX_CLAUSES',
+		                       f'((unsigned int) { maxclauses })'));
+
+		res.extend(cond_define('RRR_MAX_VARS_PER_CLAUSE',
+		                       f'((unsigned int) { maxcvars })',
+		                       terminator=''));
+
+		res.extend([
 			f'typedef { utype } RRR_Var_t;',
 			'',
-		]
+		])
+
+		nrunits = sum(elems[-1]) + vFULLTEMPLATE_HDR_ENTRIES
 
 		res.extend([
 			f'static const { utype } RRR_templates' +
-				f'[{ sum(elems[-1]) }] = {{',
+				f'[{ nrunits }] = {{',
 		])
+
+		res.extend([
+			"\t" + (",".join(f"{var}" for var in
+				ints2xbits([ maxvars, maxaddvars,
+				     maxcvars, maxclauses, ], maxubits))) +",",
+## TODO: expand
+			'',
+		])
+
 		res.extend(ctext)
 
 		res.extend([
 			'} ;',
 			'',
 
-			'/* index list */',
-			'static const struct {',
+			'/* index list, 1-based var.count to entries */',
+			'static const struct TemplIndex {',
 			'\tunsigned int offset;',
 			'\tunsigned int count;',
-			f'}} RRR_INDEX[{ len(units) }] = {{',
+			f'}} RRR_INDEX[{ len(elems) }] = {{',
+				## 1-based; 0 is global counters' header
 		])
 
 ## TODO: do we have a centralized align-columns() macro?
@@ -2771,7 +2816,7 @@ if __name__ == '__main__':
 			print(f'[  ## 1-of-N(1..{maxn}) templates, 0-based index')
 			print(f'   ## result in variable')
 
-			for vb in range(1, 64+1):    ## TODO: range(1, maxn+1):
+			for vb in range(1, 128+1):    ## TODO: range(1, maxn+1):
 				templs.append(satsolv_1ofn_2prod(None, vb,
 						allow0=False, force=False,
 						template=True))
