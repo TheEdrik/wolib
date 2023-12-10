@@ -56,6 +56,10 @@
 ##   SATDEBUG=...       diagnostics level if >0, SAT-only diagnostics
 ##   SAT_VEHICLES=...   number of vehicles to assume, over BFD-derived limit
 ##                      absolute number, or +...relative to BFD-limit...
+##   CSV=...            report full CSV version of time plan
+##                      sub-options set within 'CSV' value (val1:val2:...):
+##       compact        condensed form: not outputting each vehicle-ID bit
+##       frame          include delivery+time etc. frames
 ##
 ##   TUPLE_N=...  limit the size of element-tuples when attempting to swap
 ##                not-yet-selected and selected elements (see below)
@@ -166,7 +170,8 @@ import socket               ## best-result reporting; ignores all write errors
 import math, random
 import pathtools
 import textwrap
-
+import dev.sat_templates
+			## templates are 0-based based on problem size
 
 ## keep these global; needs dict if working on context-local limits
 ##
@@ -209,6 +214,7 @@ sINDENT  = '    '    ## prefix added per indented level
 sTABLE_BREAK = 10    ## add empty columns/rows every N units in large tables
 
 sSATPREFIX  = 'SAT='      ## common prefix for data applicable to SAT solvers
+sCSVPREFIX  = 'CSV='      ## common prefix for CSV output (schedule)
 sSATCOMMENT = '## SAT='   ## SAT-related comment, for our own tracing
 sSAT_CONSTR_END = ' 0'    ## terminate [term list of] constraint
 sSAT_2ND_VAR    = 'NV'    ## prefix for secondary SAT (CNF) variables
@@ -216,6 +222,11 @@ sSAT_SYM_PREFIX = 'RAW='  ## prefix for clauses which are stored as strings,
                           ## only mapped to integer indexes in the end
                           ## DIMACS CNF: "1 2 -3 0"
                           ## 'raw' CNF:  "D1 D2 -D3"
+sSAT_CONST_TRUE  = '+'    ## hardwired expression value (True)
+sSAT_CONST_FALSE = '-'    ## hardwired expression value (False)
+sSAT_STATIC_CONDS = '--END.STATIC.CONDITIONS--'
+                          ## marker: end of conditions' list which is
+                          ## global, inherent in delivery/time/vehicle set
 
 
 ##----------------------------------------------------------
@@ -1805,6 +1816,42 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 
 
 ##--------------------------------------
+## Constraint Skeleton
+##
+## CNF assignments list variables, optionally negated
+## 'Constraint Skeletons' are assignment which pair
+##    (1) '' or '-' for non/negated variables, respectively
+##    (2) variable names of numbers
+
+
+##--------------------------------------
+## SAT/CNF templates, see dev/sat_templates.py
+##
+## indexed by operation, then 1-based index on nr. of inputs
+##   'descr'         description
+##   'inputs'    (N) number of direct inputs (1..N/-1..-N in formula)
+##   'add.vars'  (M) indirect variables added; N+1..N+M/-N-1..-N-M in formula
+##   'clauses'       list of formulas, with no index <-N-M or >N+M
+##
+## example:
+## 'OR': [
+##     {  ...OR(1-input struct is here...)
+##     },
+##
+##     {                        ## OR(2 inputs, 2nd entry):
+##       'descr':    'OR(2)',
+##       'inputs':   2,         ## 1 and 2 are original inputs
+##       'add.vars': 1,         ## 3 is output
+##       'clauses': [
+##             [1, 2, -3],    ## -1 and -2 -> -3
+##             [-1, 3],       ## 1 -> 3
+##             [-2, 3]        ## 2 -> 3
+##       ]
+##     },
+## ],
+
+
+##--------------------------------------
 ## Plan Constraints
 ##
 ## raw constraints, serves as base for SAT solver version
@@ -1829,6 +1876,27 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##                 ##
 ##                 ## a perfect hash is constructed to map them,
 ##                 ## see ... (TODO)
+##
+##   'constraints': [ TODO: updated spec ]
+##     'OR', variable, ...other variables... ]
+##                 ## predefined dependencies
+##                 ## 'variable' may be sSAT_CONST_TRUE or sSAT_CONST_FALSE,
+##                 ## which forces a fixed value
+##
+##     '1-OF-N', variable, ...other variables... ]
+##                 ## predefined dependencies
+##                 ## 'variable' may be sSAT_CONST_TRUE or sSAT_CONST_FALSE,
+##                 ## which forces a fixed value
+##
+##     'NEQ-OR-0', variable list(1), variable list(2)
+##                 ## two equal-sized variable lists' entries MUST
+##                 ## differ if neither is 0. (any 0 is compatible
+##                 ## with any other value)
+##
+##     '--COMMENT' ## any attached data is ignored
+##
+##   for all constraints, the first variable '+' implies the top-level
+##   value forced to True, '-' forced to False.
 ## }
 ##
 ## implied constraints:
@@ -1836,10 +1904,11 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##
 def plan_constraints0():
 	return {
-		'vehicle2time':   {},
-		'vehicle.idbits': [],
-		'varlist':        [],
-		'vars':           {},
+		'vehicle2time':    {},
+		'vehicle.idbits':  [],
+		'varlist':         [],
+		'vars':            {},
+		'constraints.raw': [],
 	}
 
 
@@ -2010,6 +2079,9 @@ def vehicle2primary(vehicle):
 ##                --
 ##                -- empty constraints are possible; they are used by
 ##                -- comment-only additions f.ex.
+##
+##    'constraints.raw': original form of constraints, before
+##                       CNF expansion
 ## }
 ##
 ## struct stores arbitrary values for 'delv_units' etc.; only their keys matter
@@ -2086,11 +2158,12 @@ def satsolve_vidx_bits(vehicles):
 ##
 def satsolv_init0():
 	return {
-		'delv_units':     {},
-		'delv_veh_units': {},
-		'vars':           [],
-		'added_vars':      0,
-		'constraints':    [],
+		'delv_units':      {},
+		'delv_veh_units':  {},
+		'vars':            [],
+		'added_vars':       0,
+		'constraints':     [],
+		'constraints.raw': [],
 	}
 
 
@@ -2205,6 +2278,7 @@ def satsolv_add_conflict_constraints(sat, constr, veh_count):
 	d1, t1, d2, t2 = constr
 
 	vbits  = satsolve_vidx_bits(veh_count)
+
 #	v1main = satsolv_var_name(d1, time_unit=t1)
 #	v2main = satsolv_var_name(d2, time_unit=t2)
 #	v12nand, nvar, ncomm = satsolv_nand1(v1main, v2main)
@@ -2220,29 +2294,18 @@ def satsolv_add_conflict_constraints(sat, constr, veh_count):
 	v2bits = list(satsolv_var_name(d2, time_unit=t2, vnumber=v)
 	              for v in range(vbits))
 
+					## all these conditions are
+					## always true, kept as such
+					##
+	sat[ 'constraints.raw' ].append([ 'NEQ-OR-0', '+' ])
+					##
+	sat[ 'constraints.raw' ][ -1 ].extend(v1bits)
+	sat[ 'constraints.raw' ][ -1 ].extend(v2bits)
+
 	cls, neq, comm = satsolv_neq_or0(sat, v1bits, v2bits)
 	for c in cls:
 		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
 		comm = ''
-##
-##							## pairwise XORs
-##	for v in range(vbits):
-##		v1bit = satsolv_var_name(d1, time_unit=t1, vnumber=v)
-##		v2bit = satsolv_var_name(d2, time_unit=t2, vnumber=v)
-##		xconstr, xn, xcomm = satsolv_xor1(v1bit, v2bit)
-##
-##		for c in xconstr:
-##			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, ncomm)
-##			xcomm = ''
-##
-##		addvars.extend([ v1bit, v2bit, xn ])
-##
-####
-##				## vehicle-encoding variables MUST differ, or
-##				## at least one MUST be all-0 for
-##				## conflicting (delivery, time.unit) pairs
-##				##
-##	return addvars
 
 
 ##--------------------------------------
@@ -2697,6 +2760,8 @@ def vehicle_may_reach(x, y, timevec, vehicles, dists, delivery,
 
 
 ##--------------------------------------
+## units are 1-based
+##
 def timevec2units(tvec):
 	"generator, returning each unit present in 'tvec' in increasing order"
 
@@ -3794,6 +3859,8 @@ sNALL1 = 'ALL1'                   ## suffix for all-(values-)one +variable
 def satsolv_xor1(var1, var2, result=None, negate=False):
 	cls = []
 
+## TODO: pick up negate-one macro from standalone sat.py
+
 	if result == None:
 		negstr = 'n'  if negate  else ''
 		result = f'{ var1 }_{ negstr }x_{ var2 }'
@@ -4334,7 +4401,7 @@ def list2split(l, k):
 
 
 ##-----------------------------------------
-## comment for 1-of-N to ...result... SAT clause/s
+## comment for 1-OF-N to ...result... SAT clause/s
 ## 'vars' is list of input variables
 ##
 ## TODO: where do we special-case N=1, things like that?
@@ -4342,7 +4409,7 @@ def list2split(l, k):
 def sat_1ofn_comment(res, vars):
 	vlist = ",".join(vars)
 
-	return f'1-of-N[={ len(vars) }]: ({ res }) for ({ vlist })'
+	return f'1-OF-N[={ len(vars) }]: ({ res }) for ({ vlist })'
 
 
 ##-----------------------------------------
@@ -4422,7 +4489,7 @@ def satsolv_1n(sat, vars, nr=0, allow0=False, result=None):
 			curr.append(nv)
 				##
 			satsolv_add_comment(sat,
-				f'  1-of-N {nv} = OR+not-NAND({",".join(g)})')
+				f'  1-OF-N {nv} = OR+not-NAND({",".join(g)})')
 
 		if len(curr) == 1:
 			break
@@ -4469,8 +4536,8 @@ def satsolv_1n(sat, vars, nr=0, allow0=False, result=None):
 
 
 ##-----------------------------------------------------------
-## add clauses for 1-of-N selections over 'vars'
-## returns top-level 'command' variable which is True if and only if 1-of-N
+## add clauses for 1-OF-N selections over 'vars'
+## returns top-level 'command' variable which is True if and only if 1-OF-N
 ##
 ## append comments and clauses to respective lists
 ##
@@ -4492,7 +4559,7 @@ def satsolv_1ofn(sat, vars, force=False):
 		for c in cls:
 			satsolv_add_constraint1(sat, '', '  ORIG=' +c)
 
-						## force 1-of-N by ensuring
+						## force 1-OF-N by ensuring
 						## commander var is True
 	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + top, descr)
 
@@ -4505,7 +4572,7 @@ def allpairs(vars):
 
 
 ##----------------------------------------------------------------------------
-## hardwired 0/1-of-N for small N with trivial expressions
+## hardwired 0/1-OF-N for small N with trivial expressions
 ##
 ## returns None if not handled
 ##         [ top-level variable, [ newly added variables, ], clauses, comment ]
@@ -4521,7 +4588,7 @@ def satsolv_1n_few(sat, vars, nr=0, allow0=False, result=None, force=False):
 				##
 			cls = [ vars[0] ]  if force  else []
 
-			return [ vars[0], [], cls, '', ]      ## 1-of-N(A) == A
+			return [ vars[0], [], cls, '', ]      ## 1-OF-N(A) == A
 
 
 	##------------------------------
@@ -4648,7 +4715,7 @@ def satsolv_1n(sat, vars, nr=0, allow0=False, result=None):
 			curr.append(nv)
 				##
 			satsolv_add_comment(sat,
-				f'  1-of-N command {",".join(g)} -> {nv} ')
+				f'  1-OF-N command {",".join(g)} -> {nv} ')
 
 		if len(curr) == 1:
 			break
@@ -4709,8 +4776,8 @@ def satsolv_add_comment(sat, comment):
 
 
 ##-----------------------------------------------------------
-## add clauses for 1-of-N selections over 'vars'
-## returns top-level 'command' variable which is True if and only if 1-of-N
+## add clauses for 1-OF-N selections over 'vars'
+## returns top-level 'command' variable which is True if and only if 1-OF-N
 ##
 ## append comments and clauses to respective lists
 ##
@@ -4732,7 +4799,7 @@ def satsolv_1ofn(sat, vars, result=None):
 		for c in cls:
 			satsolv_add_constraint1(sat, '', '  ORIG=' +c)
 
-						## force 1-of-N by ensuring
+						## force 1-OF-N by ensuring
 						## commander var is True
 	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + top, descr)
 
@@ -4740,7 +4807,7 @@ def satsolv_1ofn(sat, vars, result=None):
 
 
 ##-----------------------------------------
-## 1-of-N or 0-of-N, hierarchical decomposition: pick P+Q matrix sizes
+## 1-OF-N or 0-of-N, hierarchical decomposition: pick P+Q matrix sizes
 ## returns p, q per-axis sizes
 ##
 def matrix2pq(vars):
@@ -4764,23 +4831,23 @@ def matrix2pq(vars):
 		assert(0)  ## ...optimal selection would eliminate selection...
 
 	if debug_is_active(2, vTRC_SCHED):
-		print(f'## 1-of-N:[{ len(vars) }]->{p}x{q}')
+		print(f'## 1-OF-N:[{ len(vars) }]->{p}x{q}')
 
 	return p, q
 
 
 ##-----------------------------------------
-## 1-of-N or 0-of-N (selected by 'allow0')
+## 1-OF-N or 0-of-N (selected by 'allow0')
 ##
 ## returns [ control variable, [ new/intermediate variables],
 ##           [ new clauses ], comment ]  tuple
 ##
 ## 'force' adds explicit clause ensuring 'result' is True
 ##
-## 'two-product encoding of 0/1-of-N'
+## 'two-product encoding of 0/1-OF-N'
 ##   1) construct P*Q matrix with P*Q >= N
 ##   2) variables 1..N <-> entries in matrix
-##   3) 1-of-N: ensure 1-of-P (X) and 1-of-Q (Y)
+##   3) 1-OF-N: ensure 1-of-P (X) and 1-of-Q (Y)
 ##     3.1) selected entry is intersection
 ##   4) 0-of-N: allow NOR(P) AND NOR(Q) (==NOT(P OR Q)) as well
 ##   5) only N product variables are used if N<P*Q
@@ -4864,7 +4931,7 @@ def satsolv_1ofn_2prod(sat, vars, result=None, force=False, allow0=False):
 	nvars_after = satsolv_nr_of_added_vars(sat)
 
 	if force:
-		cls.append(f'{ result }')   ## 0/1-of-N must hold at this level
+		cls.append(f'{ result }')   ## 0/1-OF-N must hold at this level
 
 	print(f'## ADDED.VARS=+{ satsolv_nr_of_added_vars(sat) - nvars_orig }')
 		##
@@ -4912,6 +4979,7 @@ def common_vehicles(delvs, d1idx, d2idx):
 ## 'delvs'      is full input list
 ## 'dts'        stores delivery+time-window crossbar
 ## 'satvcount'  number of vehicles to allow (+1, all-0, for 'unassigned')
+## 'final'      marks constraints' list as final/static if True
 ##
 ## 'conflicts' collects the following form:
 ##     [ delivery ID(1); time unit(1); delivery ID(2); time unit(2) ]
@@ -4920,7 +4988,8 @@ def common_vehicles(delvs, d1idx, d2idx):
 ## check for maximally lenient deliveries (and filter non-solutions
 ## iteratively)
 ##
-def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
+def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
+                                final=True):
 	dtk = sorted(dts.keys())
 	ds  = list(range(len(dtk)))
 
@@ -5011,7 +5080,7 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 			## for conflicting pairs
 
 		for u1 in d1tu:
-			u1b  = timevecbit2offset(u1)
+			u1b  = timevecbit2offset(u1) -1
 			allt = 0
 
 				## bits(u1) shifted +-[...conflicting range...]
@@ -5028,7 +5097,7 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 			u2clash = list(u  for u in d2tu  if (allt & u))
 
 			for u2b in u2clash:
-				u2bit = timevecbit2offset(u2b)
+				u2bit = timevecbit2offset(u2b) -1
 
 				conflicts.append([d1, u1b, d2, u2bit])
 
@@ -5064,6 +5133,12 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount):
 
 	for c in conflict_pairs:
 		satsolv_add_conflict_constraints(sat, c, satvcount)
+
+	if final:
+		register_sat_condition(sat[ 'constraints.raw' ],
+		                       sSAT_STATIC_CONDS, '')
+
+	sat_conditions_report(sat[ 'constraints.raw' ])
 
 
 ##-----------------------------------------------------------
@@ -5248,6 +5323,118 @@ def satsolv_not_all_identical(sat, combinations, nonzero=True):
 
 
 ##----------------------------------------------------------------------------
+## mark least size which has not been found in template
+##
+tTEMPLATE_NFOUND_SIZES = {
+}
+
+
+##----------------------------------------------------------------------------
+## is this constraint available as template?
+## if so, return assignment form as list of Constraint Skeleton's
+##
+## returns empty list if nothing found
+##
+def constraint2template(sat, constr):
+	if constr == []:
+		return []
+
+	ccp = constr[:]
+	opr = ccp.pop(0)
+
+	if len(ccp) < 1:
+		raise ValueError("empty constraint")
+
+	if ccp[0] == '+':
+		value, _ = True, ccp.pop(0)
+	elif ccp[0] == '-':
+		value, _ = False, ccp.pop(0)
+	else:
+		value = None
+
+	if len(ccp) < 1:
+		raise ValueError("empty constraint(2)")
+
+						## template[ 'OR' ] = ...
+
+	if not opr in dev.sat_templates.tSAT_CNF_TEMPLATES:
+		return []
+
+				## template[ 'OR' ][ nr.of.inputs -1 ] = ...
+
+	if len(ccp) > len(dev.sat_templates.tSAT_CNF_TEMPLATES[ opr ]):
+		if not opr in tTEMPLATE_NSAT_SIZES:
+			tTEMPLATE_NSAT_SIZES[ opr ] = 0
+		if len(ccp) > tTEMPLATE_NSAT_SIZES[ opr ]:
+			tTEMPLATE_NSAT_SIZES[ opr ] = len(ccp)
+			sys.stdout.write(f"missing SAT/CNF template " +
+				f"({opr}): { len(ccp) } entries\n")
+		return []
+
+	ctmpl = dev.sat_templates.tSAT_CNF_TEMPLATES[ opr ][ len(ccp) -1 ]
+
+	print("## SAT.TEMPL.OPR:", opr, ccp)
+
+	if 'descr' in ctmpl:
+		print(f"## SAT.TEMPL.DESCR={ ctmpl[ 'descr' ] }")
+
+			## ccp was inputs so far
+			## append temp.var.names for +ones
+
+## TODO: offline template check
+	assert(ctmpl[ 'inputs' ] == len(ccp))
+
+	ccp.extend(f'NV{ len(ccp) +n +1 }'
+	           for n in range(ctmpl[ 'add.vars' ]))
+
+	for c in ctmpl[ 'clauses' ]:
+		print("## SAT.T.CLAUSE", c)
+
+					## ...variable... or -...variable...
+					## references input || added.vars
+					##
+		try:
+			cmapped = [ ('-'  if (v<0)  else '') +ccp[ abs(v) -1 ]
+			            for v in c ]
+		except:
+			print("## SAT.T.ERROR: out-of-range index " +
+				f"OPR={ opr },SIZE={ len(ccp) }")
+
+			print(f"## SAT.T.ERROR.VARLIST[{ ctmpl[ 'inputs' ]}+" +
+				f"{ ctmpl[ 'add.vars' ] }]={ ccp }")
+			return []
+##
+## TODO: cross-check templates; out-of-range indexes MUST be
+## resolved at template-construction time
+
+		print('## CLAUSE+', cmapped)
+
+## TODO: sanity-check templates offline
+
+##
+##   'inputs'    (N) number of direct inputs (1..N/-1..-N in formula)
+##   'add.vars'  (M) indirect variables added; N+1..N+M/-N-1..-N-M in formula
+##   'clauses'       list of formulas, with no index <-N-M or >N+M
+
+	return [ value, ccp ]
+
+
+##--------------------------------------
+## add any implicit constraints to SAT collection
+## MODIFIES 'constraints'
+##
+## RRR
+##
+def satsolv_implicit(sat, constraints):
+	for c in constraints[ 'constraints.raw' ]:
+		constraint2template(sat, c)
+
+##     'time2vec': 0x1e78,
+
+	return
+
+
+##----------------------------------------------------------------------------
 ## after timeout, solve the rest pf schedule through SAT
 ##
 ## 'vroute' is already assigned delivery routes (see VRoute)
@@ -5395,7 +5582,17 @@ def timebits_allmask(aux):
 
 
 ##--------------------------------------
-## return SAT solver variables used by delivery/time units/vehicle IDs
+## register one OR/1-OF-N/... collection
+##
+def register_sat_condition(cond, opr, var1, terms=[]):
+	cond.append([ opr, var1 ])
+	if terms:
+		cond[ -1 ].extend( terms )
+
+
+##--------------------------------------
+## return SAT solver variables used by delivery/time units/vehicle IDs,
+## and implied OR conditions between them
 ##
 ## 'tbits' contains one bit for each possible unit
 ## 'vbits' is integer, number of vehicle-ID bits, if >0
@@ -5407,6 +5604,8 @@ def plan2varlist(delv, tbits, vbits=0):
 	vl = list(satsolv_var_name(delv, time_unit=t)  for t in tbits)
 				## D[elivery](...) || T[ime](...)
 
+	conds = []
+
 	if debug_is_active(1, vTRC_SCHED):
 		print(f'## DELV={ delv };T.UNITS=[' +
 			f'{ ",".join(str(t) for t in tbits) }]')
@@ -5416,14 +5615,69 @@ def plan2varlist(delv, tbits, vbits=0):
 		          for v in range(vbits))
 				## D[elivery](...) || V[ehicle](...)
 
+
+				## D|V = OR( D|T|V )  ...for T...
+				##
+		for v in range(vbits):
+			register_sat_condition(conds, 'OR',
+				satsolv_var_name(delv, vnumber=v),
+				(satsolv_var_name(delv, time_unit=t, vnumber=v)
+					for t in tbits))
+
+				## in other words, D|V matches |V vehicle-ID
+				## combination (which is >0 for only one row)
+
+
+				## assigned to a vehicle ->
+				## OR(D|V0 .. D|Vn) is True
+				##
+		register_sat_condition(conds, 'OR', sSAT_CONST_TRUE,
+				[ satsolv_var_name(delv, vnumber=v)
+				  for v in range(vbits) ])
+
+
 		for t in tbits:
-			vl.extend(satsolv_var_name(delv, time_unit=t, vnumber=v)
-			          for v in range(vbits))
+			dvts = [ satsolv_var_name(delv, time_unit=t, vnumber=v)
+			         for v in range(vbits) ]
+				##
 				## D[elivery](...) || T[ime](...) || V[ehicle]
 
-## def satsolv_var_name(delv_id, time_unit=None, vnumber=None):
+			vl.extend(dvts)
 
-	return sorted(vl)
+			register_sat_condition(conds, 'OR',
+				satsolv_var_name(delv, time_unit=t), dvts)
+				##
+				## register D||T = OR(D||T||V)  over V
+
+		register_sat_condition(conds, '1-OF-N', sSAT_CONST_TRUE,
+			[ satsolv_var_name(delv, time_unit=t)
+			  for t in tbits ])
+				##
+				## register 1-OF-N(D||T)  <->  one unit
+				## used to scheduled
+				##
+				## would not be forced to True with 0/1-OF-N
+
+	return sorted(vl), conds
+
+
+##--------------------------------------
+## report original, pre-SAT formatted, conditionals
+##
+def sat_conditions_report(conds):
+	static = True
+
+	for ci, c in enumerate(conds):
+		if (c[0] == sSAT_STATIC_CONDS):
+			if not static:
+				raise ValueError("end-of-static conditions " +
+					f"marker repeats? (#{ ci })")
+
+			print("## SAT.COND=END(STATIC.CONDITIONS)")
+			static = False
+			continue
+
+		print(f'## SAT.COND.{ c[0] }:', c[1:])
 
 
 ##----------------------------------------------------------------------------
@@ -5457,11 +5711,14 @@ def plan2constraints(deliveries, aux, bases, vehicles):
 		tbits = bitarr2values( bitmask2bitarr(a[ "time2vec" ]) )
 
 		if not tbits:
-			continue       ## would an empty window survive so far?
+			continue ## TODO: would an empty window survive so far?
 
 		res[ 'vehicle2time' ][ didx ] = tbits
 
-		res[ 'varlist' ].extend( plan2varlist(didx, tbits, vbits) )
+		vlist, conds = plan2varlist(didx, tbits, vbits)
+
+		res[ 'varlist'         ].extend( vlist )
+		res[ 'constraints.raw' ].extend( conds )
 
 	vl = sorted( set(res[ 'varlist' ]) )
 	res[ 'varlist' ] = vl
@@ -5470,6 +5727,127 @@ def plan2constraints(deliveries, aux, bases, vehicles):
 		print(f'## SAT.BASE.VARS[{ len(vl) }]=[{ ",".join(vl) }]')
 
 	return res
+
+
+##--------------------------------------
+## complete the rest of steps
+## invoked either after initial greedy scan, or on full input
+## (if greedy scan is skipped completely)
+##
+def pack_n_route_finish(sat, constrs, delvs, arrivals, vcost, satvcount,
+                        xy2dist_table):
+
+						## register any implicit,
+						## not-yet-processed
+						## conditions
+	satsolv_implicit(sat, constrs)
+
+						## solve the rest through SAT
+	satsolv_rest(sat, delvs, arrivals, vcost, satvcount, xy2dist_table)
+
+	satsolv_report(sat)
+	sys.exit(0)
+##
+## TODO: terminates execution
+
+
+##--------------------------------------
+##     VVVV  VVVV           [1 header]
+## T0  vvvv
+## T1  vvvv  vvvv
+## ..
+## Tn
+##
+## VVVV: vehicle ID bits
+## vvvv: vehicle now-start bits
+##
+def plan_csv_report(dels, aux, satvcount, deffile='schedule.csv'):
+	is_compact, has_frame = False, False
+
+	if not 'CSV' in os.environ:
+		return
+
+	csvopt = os.environ[ 'CSV' ].split(':')
+
+## TODO: pick up from file=...
+	fname = ''
+	if fname == '':
+		fname = deffile
+
+	is_compact = ('compact' in csvopt)
+	has_frame  = ('frame'   in csvopt)
+	leadcol    = 1     ## nr. of leading columns regardless of compact
+
+	wr = open(fname, 'w', newline='')
+	writer = csv.writer(wr)
+
+	nrd = len(dels)
+	satvbits   = satsolve_vidx_bits(satvcount)
+	minu, maxu = aux[0][ 'MIN_TIME_ALL' ], aux[0][ 'MAX_TIME_ALL' ]
+
+	if is_compact:
+		vs = [ '#' ]
+	else:
+		vs = [ f'v{v}'  for v in  range(satvbits) ]           ## v0..vN
+
+	vempty = [ '' ] * len(vs)
+##	if not is_compact:
+##		leadcol += 1
+
+			## in header:
+			## (frame)  D...number...  (rest of columns to skip)
+			##
+	hdrskip = vempty[ leadcol: ]
+
+	rows = []
+
+
+	hdr = [ '', ]
+	for di, d in enumerate(dels):
+		if (not is_compact) or has_frame:
+			hdr.append('')
+
+		hdr.append(f"D{ aux[di][ 'index' ] }")
+		hdr.extend(hdrskip)
+
+	if has_frame and not is_compact:
+		nrow = [ '' ]                              ## time/unit column
+		for di, d in enumerate(dels):
+			nrow.append('')
+
+			dvs = [ f"d{ aux[di][ 'index' ] }{ v }"  for v in vs ]
+			nrow.extend(dvs)
+
+		rows.append(nrow)
+
+
+	ts = list(timevec2wall(1 << (t-1))
+	          for t in range(minu.bit_length(), maxu.bit_length()))
+
+				## row for each time unit
+	for ti, t in enumerate(ts):
+		nrow = [ t ]
+		for di, d in enumerate(dels):
+			is_possible = (1 << ti) & aux[ di ][ 'time2vec' ]
+
+			dtvar = f'd{ di }t{ ti }'  if is_possible  else ''
+
+			if has_frame:
+				nrow.append( dtvar )
+
+			if is_possible:
+				nrow.extend(vs)
+			else:
+				nrow.extend(vempty)
+
+		rows.append(nrow)
+
+
+				## construct CSV
+	writer.writerow(hdr)
+
+	for r in rows:
+		writer.writerow(r)
 
 
 ##--------------------------------------
@@ -5583,12 +5961,16 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	##
 	## generated list is equivalent to what is sent to external solver
 	##
-	constraints = plan2constraints(deliveries, aux, bases, satvcount)
+	constrs = plan2constraints(deliveries, aux, bases, satvcount)
 
 	if use_satsolver():
-		satsolv_add_vars(sat, constraints[ 'varlist' ])
+		satsolv_add_vars(sat, constrs[ 'varlist' ])
 				## register base variables in stable
 				## locations
+
+		sat[ 'constraints.raw' ].extend(constrs[ 'constraints.raw' ])
+
+	plan_csv_report(deliveries, aux, satvcount)
 
 
 	##=====  v1:  ========================================================
@@ -5795,11 +6177,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				report_plan(vcost, vid, marker='?')
 				print("/TIMED.OUT")
 
-						## solve the rest through SAT
-				satsolv_rest(sat, dels, arrivals, vcost,
-				             satvcount, xy2dist_table)
-				satsolv_report(sat)
-				sys.exit(0)
+				pack_n_route_finish(sat, constrs, dels,
+					arrivals, vcost, satvcount,
+					xy2dist_table)
 
 			show_backtrack(backtrack, btrack_alt)
 			debugmsg(f'## MAIN.LOOP.NOW={ minute2wall(now_min) }',
@@ -6399,12 +6779,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 			break
 
 	if ('PACK_N_ROUTE_SKIP' in os.environ):
-
 						## solve the rest through SAT
-		satsolv_rest(sat, dels, arrivals, vcost,
-		             satvcount, xy2dist_table)
-		satsolv_report(sat)
-		sys.exit(0)
+		pack_n_route_finish(sat, constrs, dels, arrivals,
+			vcost, satvcount, xy2dist_table)
 
 	tstart = timediff_log_now(tbacktrack0,
 		'BFD.ASSIGN.ALL'  if done  else 'BFD.ASSIGN.PARTIAL')
