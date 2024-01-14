@@ -10,10 +10,11 @@
 #   OR         OR(...)
 #   OR.FORCE   OR(...), forcing result to True
 #   AND
-#   AND.FORCE
-#   1OFN       1-of-N, forced to be true
+#   AND.FORCE  AND(...), forcing result to True
+#   1OFN       1-of-N, forced to be True
 #   1OFN.VAR   1-of-N, return result in variable (not forced)
 #   C          generate C of all templates
+#   SUM        N inputs, each [0, M]; return their sum
 #
 # test modes
 #   NONEQ0[=bits:combinations]   generate non-equal-or-any-0 tests
@@ -366,6 +367,7 @@ sNALL1 = 'ALL1'                   ## suffix for all-(values-)one +variable
 ## polymorphic negation
 ##   - integers: swap sign; 0 is invalid input
 ##   - strings/symbolic names: add or remove leading '-'
+##     - we ensure negation is always canonical, reducing '--' to ''
 ##
 def sat_not(var):
 	if isinstance(var, int):
@@ -554,11 +556,17 @@ def clause2set(var, value, force=True):
 ## numeric 'vars' implies non-symbolic template generation
 ## see 'Template representation'
 ##
-## never produces >1 result variable
+## 'rvar' specifies result variable if >0
+## does not add >1 additional variable
 ##
-def satsolv_and_template(vars, negate=False, force=False):
+def satsolv_and_template(vars, rvar=0, negate=False, force=False):
 	vars = vars2varlist(vars)
 	res  = template0('AND', inputs=len(vars))
+
+	rvar = len(vars)+1  if (rvar == 0)  else abs(rvar)          ## force >0
+
+## TODO: polymorphic version, picking max(vars)+1 etc. in
+## a type-consistent manner
 
 	if isinstance(vars[0], int):               ## numeric list, 'vars' == N
 		val2set = []           ## set to [ variable, value ] if forced
@@ -570,8 +578,9 @@ def satsolv_and_template(vars, negate=False, force=False):
 
 			else:          ## NOP: single variable, arbitrary state
 				res[ 'descr' ] += '(1)->NOP'
+
 		else:
-			res[ 'descr'    ] += f'({ len(vars) })'
+			res[ 'descr'    ] += f'({ len(vars) })->v{rvar}'
 			res[ 'add.vars' ] = 1
 
 				## 1) not(A) | not(B) | R   (A & B) -> R
@@ -579,29 +588,24 @@ def satsolv_and_template(vars, negate=False, force=False):
 				## 3) B | not(R)
 
 ## TODO: changes w/ symbolic form
-			rv = -len(vars)-1  if negate  else len(vars)+1
+			if negate:
+				rvar = sat_not(rvar)
 
 			res[ 'clauses' ] = [ [ sat_not(v)  for v in vars ] ]
-			res[ 'clauses' ][-1].append(rv)
-
-			nrv = sat_not(rv)
+			res[ 'clauses' ][-1].append(rvar)
 
 			res[ 'clauses' ].extend(
-				[ [ v, nrv ]  for v in vars ]
+				[ [ v, sat_not(rvar) ]  for v in vars ]
 			)
-			template_sync(res)
 
 			if force:
-				val2set = [ len(vars) +1, not negate ]
-
-			res[ 'nr.outputs' ] = 0  if force  else 1
+				val2set = [ rvar, not negate ]
 
 ## TODO: factor out
 		if val2set:
 			res[ 'clauses' ].append(
 				clause2set(val2set[0], val2set[1], force=force)
 			)
-			template_sync(res)
 		return res
 
 	assert(0)
@@ -632,9 +636,11 @@ def vars2varlist(vars):
 ## numeric 'vars' implies non-symbolic template generation
 ## see 'Template representation'
 ##
-def satsolv_or_template(vars, negate=False, force=False):
+def satsolv_or_template(vars, rvar=0, negate=False, force=False):
 	vars = vars2varlist(vars)
 	res  = template0('OR', inputs=len(vars))
+
+	rvar = len(vars)+1  if (rvar == 0)  else abs(rvar)          ## force >0
 
 	if isinstance(vars[0], int):               ## numeric list, 'vars' == N
 		val2set = []           ## set to [ variable, value ] if forced
@@ -647,33 +653,30 @@ def satsolv_or_template(vars, negate=False, force=False):
 			else:          ## NOP: single variable, arbitrary state
 				res[ 'descr' ] = f'OR(1)->NOP'
 		else:
-			res[ 'descr'    ] = f'OR({ len(vars) })'
+			res[ 'descr'    ] = f'OR({ len(vars) })->v{rvar}'
 			res[ 'add.vars' ] = 1
 
 				## 1) A | B | not(R)  not(A) & not(B) -> not(R)
 				## 2) not(A) | R      A -> R; B -> R  ...
 				## 3) not(B) | R
 
-			rv = -len(vars)-1  if negate  else len(vars)+1
+			if negate:
+				rvar = sat_not(rvar)
 
 			res[ 'clauses' ] = [ vars[:] ]
-			res[ 'clauses' ][-1].append(-rv)
+			res[ 'clauses' ][-1].append(sat_not(rvar))
 
 			res[ 'clauses' ].extend(
-				[ [ -v, rv ]  for v in vars ]
+				[ [ sat_not(v), rvar ]  for v in vars ]
 			)
-			template_sync(res)
 
 			if force:
 				val2set = [ len(vars) +1, not negate ]
-
-			res[ 'nr.outputs' ] = 0  if force  else 1
 
 		if val2set:
 			res[ 'clauses' ].append(
 				clause2set(val2set[0], val2set[1], force=force)
 			)
-			template_sync(res)
 
 		return res
 
@@ -962,6 +965,39 @@ def satsolv_1ofn_2prod_template(vars, varbase=0, addbase=0, allow0=False,
 
 
 ##-----------------------------------------
+def satsolv_sum_few(vars, emax, elems):
+	if elems == 1:
+		return None
+
+	if emax == 1:
+		if elems == 1:                        ## SUM(1-bit A) == bit(A)
+			return None
+		if elems == 2:
+			return None
+
+	return None
+
+
+##-----------------------------------------
+## 'vars' is either list of bits, or nr. of variables
+## 'emax' specifies max. value to represent; 0 if full range 
+##
+@cache
+def satsolv_sum_template(vars, emax):
+##	RRR
+	if len(vars) < 1:
+		raise ValueError("SUM: invalid max(elems)")
+
+	r = satsolv_sum_few(vars, emax, elems)
+	if r:
+		return r
+
+	r = template0(f'SUM({ elems } x (0..{ emax }))')
+
+	return r
+
+
+##-----------------------------------------
 ## sample: A; B; ...; R = A | B | ...
 ##     1) A | B | not(R)      not(A) & not(B) -> not(R)
 ##     2) not(A) | R          A -> R; B -> R  ...
@@ -1122,7 +1158,6 @@ def satsolv_1n_few(sat, vars, nr=0, allow0=False, result=None, force=False):
 			or3 = [ or3, ]
 
 		return [ result, or3, cls, '', ]
-
 
 	return None
 
@@ -1549,7 +1584,7 @@ def arr2runs(arr):
 
 ##----------------------------------------------------------------------------
 ## multi-region comparisons, with AND-OR-AND-... alternating regions
-## of V<...constant... comparisons
+## of (multi-bit)V < ...constant... comparisons
 ##
 ## 'n' is the number of regions to compare; rules:
 ##   - not-OR of any bits higher than the most significant 1 (MS AND run)
@@ -1728,7 +1763,7 @@ tCMP_TRUTHTABLES = [           ## indexed by N-1
 ##----------------------------------------------------------------------------
 ## generate truth table for hierarchical decoding of AND-OR-AND...
 ## sequences, which pop up when comparing less-than-X; see
-## satsolv_less_than_2x()
+## satsolv_less_than_template_2x()
 ##
 def cmp_truthtable(n):
 	res = [ [ 0, 0, ] ] * (1 << n)
@@ -1761,22 +1796,291 @@ def cmp_truthtable(n):
 		res[i] = [ ibits, is_le ]
 		print(ibits, is_le)
 
-	print()
+	## print()
 	for rbits, r in res:
 		print(rbits + '.' +('1'  if r  else '0'))
 	print()
 
 
 ##----------------------------------------------------------------------------
-## expressions compare up to two runs' worth of bits, comparing only
-## bits of the most significant runs against the big-endian bit array 'vars'
+## returns:
+##    1) AND/OR terms; list of operation strings
+##    2) number of result variable, after any AND/OR intermediates
+##    3) additional terms: expansion of AND/OR terms from (1)
+##
+## 'nvars' specifies input bit indexes 1..N
+## 'drop_irrelevant' skips [trailing, OR] terms which can not influence
+## ...V bits... < N comparison
+##
+## TODO: return SAT-template directly
+##
+## additional-term list:
+##    [ +- ...index...       integer: original input variable
+##         AND(...)/OR(...)  indirect term:
+##              [8, [1, 3]]  AND()/OR() variable is 8; of original 1..3 inputs
+##
+def runs2terms(runs, nvars, drop_irrelevant=True):
+			## all-1 runs turn into NAND(...) or just NOT(...)
+			## all-1 runs turn into OR(...) or just (1 variable)
+	seen, terms, addl, rv = 1, [], {}, nvars
+
+	may_drop_or = (len(runs) & 1) == 0
+
+			## trailing 0's never decide <...V...
+			##   N<110  <=>  MS(N)<11, regardless of LS bit
+			##   -> drop trailing-all-0 region from comparison
+
+	for ri, r in enumerate(runs):
+		if drop_irrelevant and may_drop_or and (ri >= (len(runs) -1)):
+			break
+
+		inputs, adds = f'{ seen }', 0
+		if len(r) >1:
+			inputs += f'..{ seen+len(r)-1 }'
+
+		if r[0] == 1:                                   ## AND() or var
+			if len(r) == 1:
+				terms.append(seen)              ## AND(v) <=> v
+			else:
+				terms.append(f'AND({ inputs })')
+				adds = 1
+		else:
+			if len(r) == 1:
+				terms.append(seen)               ## OR(v) <=> v
+			else:
+				terms.append(f'OR({ inputs })')
+				adds = 1
+
+		if adds:
+			if terms[-1] in addl:
+				raise ValueError("AND/OR expression not unique")
+
+			addl[ terms[-1] ] = [ nvars +len(addl) +1,
+			              [ seen, seen+len(r)-1 ], ]
+		seen += len(r)
+		rv   += adds
+
+	return terms, rv, addl
+
+
+##--------------------------------------
+## recurring: append <(copy of) prefix | modified tail> to list of clauses
+##
+def arr2merged(prefix, tail):
+	r = prefix[:]
+	r.extend(tail)
+
+	return r
+
+
+##--------------------------------------
+## hierarchical expressions to hierarchical decoder clauses
+## of less-than-X comparison
+## runs on runs2terms() output
+##
+## input is alternating list of AND(...) OR(...) terms, or
+## '=X' if variable 'X' is used directly (AND or OR of itself);
+## 'result' True forces less-than-X to be True
+##          False...             ...to be False
+##
+## non-0 'rvar' specifies the result variable (...may be negated...)
+##
+## see 'sample run-to-terms expansion' expansion for an example
+##
+## assume building AND and OR by default; we invert to NAND/NOR as necessary
+##
+def hterms2clauses(terms, nrvars, addl, rvar=0, result=None):
+	cvars, clauses = [], []
+	ands, ors = [], []
+
+	if rvar == 0:
+		rvar = nrvars +len(addl) +1        ## aggregate result variable
+
+## TODO: centralized forced-to-... decoding
+
+## TODO: generate NAND() directly to terms; skips reverse/spec.case here
+
+				## special case:
+				## single AND term -> LT = NAND(...) directly
+
+	if (len(terms) == 1) and addl:
+		aterm = terms[0]                   ## must be AND(...)
+
+		if not aterm in addl:
+			raise ValueError(f"unknown +term ({aterm})")
+
+		ar, avs = addl[ aterm ][0], addl[ aterm ][1][ -1 ]
+
+				## note: watch out for indexes.  the run
+				## of, f.ex. 0xff00 contains 8 bits (NAND(MS8))
+				## while number of variables is 16
+				## (so the assigned variable is from nr.vars)
+
+		if satsolv_is_debug():
+			print(f'## single-term AND -> NAND')
+
+		t = satsolv_and_template(avs, rvar=ar, negate=True)
+				## any specialized log etc. would come here
+		return t[ 'clauses' ]
+
+
+			## collected AND/OR templates
+	aotempls = []
+
+	for ti, t in enumerate(terms):
+		is_and = (ti & 1) == 0
+
+		if isinstance(t, int):
+			cvars.append(t)
+		else:                         ## AND(...) or OR(...) expression
+			if not (t in addl):
+				raise ValueError(f"unknown +term ({r})")
+
+			## addl[] entry: [ AND/OR variable nr.
+			##                 [ min(), max() original inputs ] ]
+			cvars.append(addl[t][0])
+
+			imn, imx = addl[t][1][0], addl[t][1][1]
+
+			ivars = list(range(imn, imx+1))
+			curr  = cvars[-1]
+
+			if 'AND' == t[:3]:
+				aotempls.append(
+					satsolv_and_template(ivars, rvar=curr))
+## TODO: proper rebase
+			elif 'OR' == t[:2]:
+				aotempls.append(
+					satsolv_or_template(ivars, rvar=curr))
+## TODO: proper rebase
+			else:
+				raise ValueError("unknown term ({t})")
+
+			## cvars[] is AND/OR/AND... index list
+			## build alternating AND/OR/... expressions
+
+	if (len(cvars) & 1) == 0:
+		raise ValueError("invalid AND/OR/.../AND nesting")
+
+	if satsolv_is_debug():
+		print('## AND/OR templates', aotempls)
+
+## hierarchical expressions (DNF):                                     <10101
+##   -AND(1)                                        ->      less-than   0.... <
+##    AND(1) &  OR(2)                               ->  NOT(less-than)  11...
+##    AND(1) & -OR(2) & -AND(3)                     ->      less-than   100.. <
+##    AND(1) & -OR(2) &  AND(3) &  OR(4)            ->  NOT(less-than)  1011.
+##    AND(1) & -OR(2) &  AND(3) & -OR(4) & -AND(5)  ->      less-than   10100 <
+##    AND(1) & -OR(2) &  AND(3) & -OR(4) &  AND(5)  ->  NOT(less-than)  10101
+##
+## note table regularity; since always AND/OR/AND... terms alternate,
+## and the trailing one is AND, construction is straightforward.
+##
+## CNF terms with 'LT' as less-than variable (de Morgan conversion):
+##                                               negated/AND condition:
+##    AND(1)                                LT   0....
+##   -AND(1) -OR(2)                        -LT   1.... .1...
+##   -AND(1)  OR(2)  AND(3)                 LT   1.... .0... ..0..
+##   -AND(1)  OR(2) -AND(3) -OR(4)         -LT   1.... .0... ..1.. ...1.
+##   -AND(1)  OR(2) -AND(3)  OR(4)  AND(5)  LT   1.... .0... ..1.. ...0. ....0
+##   -AND(1)  OR(2) -AND(3)  OR(4) -AND(5) -LT   1.... .0... ..1.. ...0. ....1
+##
+## TODO: simplified version with LT known to be True
+
+
+	prefix = []     ## collect frozen part of the prefix expression
+			##   '-AND(1) OR(2)'               then
+			##   '-AND(1) OR(2) -AND(3) OR(4)'
+			## in above example
+
+					## last variable is special-cased below
+					##
+					## that is always an AND, so
+					## we expand AND+OR pairs here
+					## (1..4 in the above example)
+
+## TODO: now already simplified to retrieve pairs-of-terms
+## refactor with slice+map inner loop
+
+	for ci in range((len(cvars) -1) // 2):
+		ltvar = sat_not(rvar)  if  (ci & 1)  else rvar
+				## LT variable with proper non/negation state
+
+					## AND/OR variables
+		and_var, or_var = cvars[ ci*2 ], cvars[ ci*2 +1 ]
+
+				##   '-AND(1) OR(2)'               then
+				##   '-AND(1) OR(2) -AND(3) OR(4)'
+
+## TODO: check for reference-breaking property of .append()
+## (which is probably documented); MUST capture current value
+## prefix[] since it is extended right after adding clauses
+
+							##  AND(1)         LT
+		clauses.append( arr2merged(prefix, [ and_var, rvar ]) )
+							## -AND(1) -OR(2) -LT
+		clauses.append( arr2merged(prefix,
+			[ sat_not(and_var), sat_not(or_var), sat_not(rvar) ]) )
+
+		prefix.extend([ sat_not(and_var), or_var, ])
+
+## now the final clause pair:
+##   -AND(1)  OR(2) -AND(3)  OR(4)  AND(5)  LT   1.... .0... ..1.. ...0. ....0
+##   -AND(1)  OR(2) -AND(3)  OR(4) -AND(5) -LT   1.... .0... ..1.. ...0. ....1
+
+	and_var = cvars[-1]
+
+	clauses.append( arr2merged(prefix, [ and_var, rvar ]) )
+	clauses.append( arr2merged(prefix,
+				[ sat_not(and_var), sat_not(rvar) ]) )
+
+	return clauses
+
+
+##--------------------------------------
+## sample run-to-terms expansion:
+##     RUNS(118)=[[1, 1, 1], [0], [1, 1], [0]]         original variables: 1..7
+##     ->
+##     AND/OR TERMS ['AND(1..3)', 4, 'AND(5..6)']
+##         +2V {'AND(1..3)': [8, [1, 3]], 'AND(5..6)': [9, [5, 6]]}
+##
+## note that last [0] is dropped: it would be an OR term which never
+## decides less-than. (trailing OR run would only matter if less
+## significant all-1's run could follow.)
+##
+## hierarchical expressions (DNF):                                     <10101
+##   -AND(1)                                        ->      less-than   0.... <
+##    AND(1) &  OR(2)                               ->  NOT(less-than)  11...
+##    AND(1) & -OR(2) & -AND(3)                     ->      less-than   100.. <
+##    AND(1) & -OR(2) &  AND(3) &  OR(4)            ->  NOT(less-than)  1011.
+##    AND(1) & -OR(2) &  AND(3) & -OR(4) & -AND(5)  ->      less-than   10100 <
+##    AND(1) & -OR(2) &  AND(3) & -OR(4) &  AND(5)  ->  NOT(less-than)  10101
+##
+## note table regularity; since always AND/OR/AND... terms alternate,
+## and the trailing one is AND, construction is straightforward.
+##
+##
+## CNF terms with 'LT' as less-than variable (de Morgan conversion):
+##                                               negated/AND condition:
+##    AND(1)                                LT   0....
+##   -AND(1) -OR(2)                        -LT   1.... .1...
+##   -AND(1)  OR(2)  AND(3)                 LT   1.... .0... ..0..
+##   -AND(1)  OR(2) -AND(3) -OR(4)         -LT   1.... .0... ..1.. ...1.
+##   -AND(1)  OR(2) -AND(3)  OR(4)  AND(5)  LT   1.... .0... ..1.. ...0. ....0
+##   -AND(1)  OR(2) -AND(3)  OR(4) -AND(5) -LT   1.... .0... ..1.. ...0. ....1
+##
+## TODO: simplified version with LT known to be True
+
+
+##----------------------------------------------------------------------------
+## expressions compare up to two runs' worth of bits
+## 'nvars' is 1..N for N-bit input
+##
+## 'result' True forces less-than-X to be True
+##          False...             ...to be False
+##          None                 assigns new variable to result
 ##
 ## first run always from an all-1 region
-##
-## assume V is the variable's value, the three cases below compare:
-##    V  <  1  0000..000
-##    V  <  1111..111                         all-ones
-##    V  <  111..11   000..00
 ##
 ## returns clauses, comparison variable, comment.  beneath the variable:
 ##   (1)  AND( bits in leading/all-1 run)
@@ -1789,122 +2093,51 @@ def cmp_truthtable(n):
 ##   (2) if OR(2), value > ...constant...        unless (1) decided
 ##   (3) if not-AND(3), value < ...constant...   unless (1) or (2) decided
 ##
-## 'runs' in the above cases: [ [1],        [0,0,...0,0]   ]
-##                            [ [1,1,1,...,1]              ]
-##                            [ [1,1,..,1], [0,0,0,...0,0] ]
+## 'runs' in the above cases: [ [1],        [0,0,...0,0]   ... ]
+##                            [ [1,1,1,...,1]              ... ]
+##                            [ [1,1,..,1], [0,0,0,...0,0] ... ]
 ## 'nbits' is the printable-collapsed form, 100..00, 111..111 etc., of
 ## the constant which is being compared against
-## 'vars' are the variables which form the comparison value
+## 'nvars' are the variables which form the comparison value
 ##
 ## returns None, None, None  if no more runs
 ## registers any intermediate variables
 ##
-def satsolv_less_than_2x(sat, vars, runs, nbits):
+## MAY CHANGE 'runs'
+##
+def satsolv_less_than_template_2x(sat, nvars, runs, nbits, result=None,
+                                  descr=None):
 	if runs == []:
 		return None, None, None
 
 	if runs[0][0] != 1:
 		raise ValueError("bits<N did not start with all-1 bit run")
 
-	if len(runs) > 2:
-		raise ValueError("too many runs in bits<N construction")
+	terms, rv, addl = runs2terms(runs, nvars)
+	if satsolv_is_debug():
+		print('## AND/OR TERMS', rv, terms, f'+{ len(addl) }V', addl)
 
-## TODO: this special-casing of single bits disappears, once _nand_n()
-## centralizes all <3 special-cased cases: can pass 1-bit comparison
-## through as-is
+	if result == None:
+		result = rv
+#		avs = addl.values()
+#		if avs:
+#			mxavars = max(a[0] for a in avs)  if avs  else 0
+#			result  = mxavars +1
+#		else:
+#			result  = nvars +1
+		if satsolv_is_debug():
+			print(f"## RETURN->{ result }")
 
-	vdescr = 'VARS:' +(".".join(vars))
+	cls = hterms2clauses(terms, nvars, addl, result=result)
+
+	print(f'## LEN(RUNS)={ len(runs) }')
+
+	vdescr = f'## VARS:1..{nvars}'
 
 	if len(vars) < len(runs[:2]):
 		raise ValueError("not enough Booleans for less-than-N-2x")
 
-					## both 1's and 0's may be single bit
-					##
-					## these clauses do not need NAND/OR,
-					## they can use the bit directly
-					##
-					## use direct1/0 for these variables,
-					## if not None
-					##
-	direct1, direct0 = None, None
-
-	if (len(runs[0]) == 1):                             ## single leading 1
-		direct1 = vars[0]
-
-	if (len(runs) >= 2) and (len(runs[1]) == 1):       ## single trailing 0
-		direct0 = vars[ len(runs[0]) : len(runs[0]) +1 ]
-
-	if (len(runs) == 1):                                         ## all-1's
-		bits2cmp = vars[ : len(runs[0]) ]
-		cls, result, xcomm = satsolv_nand_n(sat, bits2cmp)
-				##
-		satsolv_add_vars(sat, [ result ])
-				##
-		xcomm += f': ({vdescr} < { nbits }b)'
-
-	elif (len(runs) == 2) and (len(runs[0]) == 1):
-	                             ## 100..00 -> compare against a single bit
-
-		result = vars[0]                 ## no additional condition/var
-		cls    = [ f'-{result}' ]
-		xcomm  = f'{result}: ({vdescr} < { nbits }b)'
-
-	elif len(runs) <= 2:
-				## 11100..000 -> NAND(...3 MS variables...)
-				## 11111..111 -> NAND(...all variables...)
-				##         just compare against leading 1's
-				##
-		bits2cmp = vars[ : len(runs[0]) ]
-		cls, result, xcomm = satsolv_nand_n(sat, bits2cmp)
-				##
-		satsolv_add_vars(sat, [ result ])
-				##
-		xcomm += f': ({vdescr} < { nbits }b)'
-
-##	elif (len(runs) == 3) and (len(runs[-1]) == 1):
-##				## straightforward case:
-##				##   n <= 11..100001  exactly three runs; LS one
-##				##                    is a single bit
-##				##
-##				## construct comparison from:
-##				##   (1) AND(...MS bit/s...)
-##				##         -> if not, value < pattern
-##				##   (2) OR(...all-0 runs' bits below...)
-##				##         -> if yes, value > pattern
-##				##   (3) ...comparison of LS bit...
-##				##         -> if yes, value > pattern
-##				##
-##				## comparison is hierarchical:
-##				##   (1) not-AND(1)         -> value < pattern
-##				##   (2) AND(1)  AND  OR(2) -> value > pattern
-##				##   (3) AND(1)  AND  NOT(OR(2))  AND
-##				##          not-AND(3)      -> value < pattern
-##				##
-##				## with minor additions, would also extrapolate
-##				## to three runs, with >1 bits in LS one: just
-##				## adds a less-than-X term for the LS run
-##				##
-##		msvars  = vars[ : len(runs[0]) ]
-##		midvars = vars[ len(runs[0]) : ]
-##		lsvars  = vars[ len(runs[0])+len(runs[1]) : ]
-##
-##		mscls, mscmp, mscomm = satsolv_and('', msvars)
-####		satsolv_add_vars(sat, [ mscmp ])
-##				##   (1) -> mscmp
-##
-##		midcls, midcmp, midcomm = satsolv_or('', midvars)
-####		satsolv_add_vars(sat, [ mscmp ])
-##				##   (2) -> midcmp
-##
-##		lscls, lscmp, lscomm = satsolv_and('', lsvars)
-####		satsolv_add_vars(sat, [ mscmp ])
-##				##   (3) -> lscmp
-##
-##		cls, result, xcomm = None, None, None
-##		print('##')
-
-	else:
-		raise ValueError("need a generic SAT/range comparison here")
+	xcomm = descr  if descr  else f'LT({ nvars }b)'
 
 	return cls, result, xcomm
 
@@ -1987,26 +2220,28 @@ def satsolv_neq_or0(sat, v1, v2, result=None, force=False):
 	return cls, result, cmt
 
 
-
 ##----------------------------------------------------------------------------
 ## is the binary combination of 'vars' < N?
-## register expression to SAT variables+clauses
+## return template with
 ##
-## 'vars' is bit variables, most to least significant
+## 'vars' inputs are used, 1..M; 'N' is forced to M-bit representation
+##
+## 'result' True forces less-than-X to be True
+##          False...             ...to be False
 ##
 ## registers any newly allocated variables to 'sat'
 ##
 ## TODO: proper binary comparison, then Quine McCluskey etc. reduction
 ## TODO: right now, we just pick predefined patterns
 ##
-## since pack-n-route currently leaves only unallocated deliveries to
-## the SAT solver, we expect to see not more than 3 (maybe 4)-bit variables
-##
-def satsolv_less_than(sat, vars, n):
+def satsolv_less_than_template(sat, nvars, n, result=None):
 	nbits = f'{ n :b}'
 	nb    = list(int(b)  for b in nbits)
 
-	if len(nbits) >= (1 << len(vars)):     ## N is wider than 2^...bits...
+	if (n < 1):
+		raise ValueError("out of range less-than({n})")
+
+	if len(nbits) > nvars:                 ## N is wider than 2^...bits...
 		return                         ## always succeeds
 
 	runs = arr2runs(nb)
@@ -2014,11 +2249,21 @@ def satsolv_less_than(sat, vars, n):
 	assert(runs != [])
 	assert(runs[0][0] == 1)                ## nb[] has no MS zeroes
 
-	result, cls, xcomm = satsolv_less_than_2x(sat, vars, runs, nbits)
+	if satsolv_is_debug():
+		print(f'## RUNS({n}/x{n:x})={ runs }')
+
+	cls, result, xcomm = satsolv_less_than_template_2x(sat, nvars,
+	                        runs, nbits, result=result, descr=f'LT({n})')
 
 		## ...any special logging etc. would happen here...
 
-	return cls, result, xcomm
+	t = template0('LT', inputs=nvars)
+
+	t[ 'add.vars' ] = result - nvars
+	t[ 'result'   ] = result
+	t[ 'clauses'  ] = cls
+
+	return t
 
 
 ##----------------------------------------------------------------------------
@@ -2438,7 +2683,7 @@ def markbits(bits):
 ##
 ## TODO: multi-valued output MUST accommodate list
 ##
-def clause2print(cls, vars, nvars, r, tid):
+def clauses2print(cls, vars, nvars, r, tid):
 	ct, ccnt, nrcls, units, addvars, maxv, cbits = clauses2params(cls,
 	                                                vars, nvars, result=r)
 	nrvars = len(vars)
@@ -2812,6 +3057,15 @@ if __name__ == '__main__':
 				print('\t', t, ',', sep='')
 			print(']\n')
 
+		if 'SUM' in what:
+			print(f'[  ## SUM((1..4x M bits) templates, 0-based index')
+
+			for emax in range(1, 4):           ## MAX(elem)
+				for ne in range(1, 8):     ## NR(elems)
+					t = satsolv_sum_template(ne, emax)
+					print('\t', t, ',', sep='')
+			print(']\n')
+
 		if '1OFN.VAR' in what:
 			print(f'[  ## 1-of-N(1..{maxn}) templates, 0-based index')
 			print(f'   ## result in variable')
@@ -2837,7 +3091,7 @@ if __name__ == '__main__':
 		print(f'## 1-of-N[{ BITS }] r={r} cls[{len(cls)}]',
 		      nvars, comm)
 
-		clause2print(cls, vars[ :BITS ], nvars, r)
+		clauses2print(cls, vars[ :BITS ], nvars, r)
 
 		sys.exit(0)
 
@@ -2854,7 +3108,7 @@ if __name__ == '__main__':
 
 		sat_report_vars(sat, prefix='//')
 
-		clause2print(cls, vars[:vb], nvars, r)
+		clauses2print(cls, vars[:vb], nvars, r)
 
 		if vb < 4:
 			r, nvars, cls, comm = satsolv_1ofn_2prod(sat,
