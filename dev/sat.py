@@ -16,6 +16,10 @@
 #   C          generate C of all templates
 #   SUM        N inputs, each [0, M]; return their sum
 #
+# env. control
+#   MAXBITS    if set (MUST be multiple of 8), any template which
+#              requires wider bitcount raises exception
+#
 # test modes
 #   NONEQ0[=bits:combinations]   generate non-equal-or-any-0 tests
 #
@@ -1805,12 +1809,19 @@ def cmp_truthtable(n):
 ##----------------------------------------------------------------------------
 ## returns:
 ##    1) AND/OR terms; list of operation strings
-##    2) number of result variable, after any AND/OR intermediates
-##    3) additional terms: expansion of AND/OR terms from (1)
+##    2) number of non-result variables added (AND/ORs, excluding shortcuts)
+##    3) number of minimal added variables which may be reduced, see shortcuts
+##    4) additional terms: expansion of AND/OR terms from (1)
 ##
 ## 'nvars' specifies input bit indexes 1..N
 ## 'drop_irrelevant' skips [trailing, OR] terms which can not influence
 ## ...V bits... < N comparison
+##
+## 'base' is first added, non-result variable to add
+##
+## shortcut:
+##    - single AND term may be mapped to a NAND -> result is directly
+##      used, does not need intermediate variable
 ##
 ## TODO: return SAT-template directly
 ##
@@ -1819,13 +1830,13 @@ def cmp_truthtable(n):
 ##         AND(...)/OR(...)  indirect term:
 ##              [8, [1, 3]]  AND()/OR() variable is 8; of original 1..3 inputs
 ##
-def runs2terms(runs, nvars, drop_irrelevant=True):
+def runs2terms(runs, nvars, base=1, drop_irrelevant=True):
 			## all-1 runs turn into NAND(...) or just NOT(...)
 			## all-1 runs turn into OR(...) or just (1 variable)
-	seen, terms, addl, rv = 1, [], {}, nvars
+
+	seen, terms, addl, real, rv = 1, [], {}, 0, 0
 
 	may_drop_or = (len(runs) & 1) == 0
-
 			## trailing 0's never decide <...V...
 			##   N<110  <=>  MS(N)<11, regardless of LS bit
 			##   -> drop trailing-all-0 region from comparison
@@ -1855,12 +1866,12 @@ def runs2terms(runs, nvars, drop_irrelevant=True):
 			if terms[-1] in addl:
 				raise ValueError("AND/OR expression not unique")
 
-			addl[ terms[-1] ] = [ nvars +len(addl) +1,
+			addl[ terms[-1] ] = [ base +len(addl),
 			              [ seen, seen+len(r)-1 ], ]
 		seen += len(r)
 		rv   += adds
 
-	return terms, rv, addl
+	return terms, rv, real, addl
 
 
 ##--------------------------------------
@@ -1876,6 +1887,10 @@ def arr2merged(prefix, tail):
 ##--------------------------------------
 ## hierarchical expressions to hierarchical decoder clauses
 ## of less-than-X comparison
+##
+## returns clauses, exact nr. of additional variables used
+## first one is, if >0, the returned 'is-less-than(...)' variable
+##
 ## runs on runs2terms() output
 ##
 ## input is alternating list of AND(...) OR(...) terms, or
@@ -1893,35 +1908,60 @@ def hterms2clauses(terms, nrvars, addl, rvar=0, result=None):
 	cvars, clauses = [], []
 	ands, ors = [], []
 
-	if rvar == 0:
-		rvar = nrvars +len(addl) +1        ## aggregate result variable
-
 ## TODO: centralized forced-to-... decoding
-
 ## TODO: generate NAND() directly to terms; skips reverse/spec.case here
 
+				##--------------------------------------------
 				## special case:
 				## single AND term -> LT = NAND(...) directly
+				##
+				## replace direct-return variable: our
+				## NAND requires no aggregator
+				##
+				## since trailing ORs are eliminated,
+				## checking for 1 or 2 terms is exact
+				##
+				## 1-1-1-1 0-0-0-0  ->
+				##    AND(1..4)     ->
+				##    less-than(0xf0) == NAND(1..4)
+				##
 
-	if (len(terms) == 1) and addl:
+				## AND -> already collapsed to NOT(...)
+	if (len(terms) < 2) and not addl:
+		pass
+		## any specialized processing MUST come here
+
+	if (len(terms) < 2) and addl:
 		aterm = terms[0]                   ## must be AND(...)
+		assert(aterm.startswith('AND'))
+
+		if satsolv_is_debug():
+			print(f'## single-term AND -> NAND')
 
 		if not aterm in addl:
 			raise ValueError(f"unknown +term ({aterm})")
 
-		ar, avs = addl[ aterm ][0], addl[ aterm ][1][ -1 ]
+		if rvar == 0:
+			rvar = nrvars +1           ## direct NAND == result
+		else:
+			assert(rvar == nrvars +1)  ## assumed +2 variables; only
+			                           ## need +1, the NAND one
+			## ensure setup expected exactly +1 AND term
+
+		avs = addl[ aterm ][1][ -1 ]
 
 				## note: watch out for indexes.  the run
 				## of, f.ex. 0xff00 contains 8 bits (NAND(MS8))
 				## while number of variables is 16
 				## (so the assigned variable is from nr.vars)
 
-		if satsolv_is_debug():
-			print(f'## single-term AND -> NAND')
-
-		t = satsolv_and_template(avs, rvar=ar, negate=True)
+		t = satsolv_and_template(avs, rvar=rvar, negate=True)
 				## any specialized log etc. would come here
-		return t[ 'clauses' ]
+
+		return t[ 'clauses' ], 1
+
+	if rvar == 0:
+		rvar = nrvars +len(addl) +1        ## aggregate result variable
 
 
 			## collected AND/OR templates
@@ -2006,7 +2046,7 @@ def hterms2clauses(terms, nrvars, addl, rvar=0, result=None):
 		ltvar = sat_not(rvar)  if  (ci & 1)  else rvar
 				## LT variable with proper non/negation state
 
-					## AND/OR variables
+							## AND/OR variables
 		and_var, or_var = cvars[ ci*2 ], cvars[ ci*2 +1 ]
 
 				##   '-AND(1) OR(2)'               then
@@ -2034,7 +2074,11 @@ def hterms2clauses(terms, nrvars, addl, rvar=0, result=None):
 	clauses.append( arr2merged(prefix,
 				[ sat_not(and_var), sat_not(rvar) ]) )
 
-	return clauses
+	for ai, at in enumerate(aotempls):                  ## now base clauses
+		for c in at[ 'clauses' ]:
+			clauses.append(c)
+
+	return clauses, len(addl) +1
 
 
 ##--------------------------------------
@@ -2100,12 +2144,14 @@ def hterms2clauses(terms, nrvars, addl, rvar=0, result=None):
 ## the constant which is being compared against
 ## 'nvars' are the variables which form the comparison value
 ##
+## 'rvar' (return variable) assigned to 1st added variable if not specified
+##
 ## returns None, None, None  if no more runs
 ## registers any intermediate variables
 ##
 ## MAY CHANGE 'runs'
 ##
-def satsolv_less_than_template_2x(sat, nvars, runs, nbits, result=None,
+def satsolv_less_than_template_2x(sat, nvars, runs, nbits, rvar=0, result=None,
                                   descr=None):
 	if runs == []:
 		return None, None, None
@@ -2113,22 +2159,22 @@ def satsolv_less_than_template_2x(sat, nvars, runs, nbits, result=None,
 	if runs[0][0] != 1:
 		raise ValueError("bits<N did not start with all-1 bit run")
 
-	terms, rv, addl = runs2terms(runs, nvars)
+	if rvar == 0:
+		rvar = nvars +1
+		if satsolv_is_debug():
+			print(f"## RETURN->{ rvar }")
+
+	terms, rv, shortcuts, addl = runs2terms(runs, nvars, base=rvar+1)
 	if satsolv_is_debug():
 		print('## AND/OR TERMS', rv, terms, f'+{ len(addl) }V', addl)
 
-	if result == None:
-		result = rv
-#		avs = addl.values()
-#		if avs:
-#			mxavars = max(a[0] for a in avs)  if avs  else 0
-#			result  = mxavars +1
-#		else:
-#			result  = nvars +1
-		if satsolv_is_debug():
-			print(f"## RETURN->{ result }")
+				## single term is always AND originally
+				## -> turns into NAND, without any extra
+				## variable
+	if addl and (len(terms) == 1):
+		assert(terms[0].startswith('AND'))
 
-	cls = hterms2clauses(terms, nvars, addl, result=result)
+	cls, avars = hterms2clauses(terms, nvars, addl, rvar=rvar, result=result)
 
 	print(f'## LEN(RUNS)={ len(runs) }')
 
@@ -2139,7 +2185,7 @@ def satsolv_less_than_template_2x(sat, nvars, runs, nbits, result=None,
 
 	xcomm = descr  if descr  else f'LT({ nvars }b)'
 
-	return cls, result, xcomm
+	return cls, result, xcomm, avars
 
 
 ##----------------------------------------------------------------------------
@@ -2234,7 +2280,7 @@ def satsolv_neq_or0(sat, v1, v2, result=None, force=False):
 ## TODO: proper binary comparison, then Quine McCluskey etc. reduction
 ## TODO: right now, we just pick predefined patterns
 ##
-def satsolv_less_than_template(sat, nvars, n, result=None):
+def satsolv_less_than_template(sat, nvars, n, rvar=0, result=None):
 	nbits = f'{ n :b}'
 	nb    = list(int(b)  for b in nbits)
 
@@ -2250,17 +2296,19 @@ def satsolv_less_than_template(sat, nvars, n, result=None):
 	assert(runs[0][0] == 1)                ## nb[] has no MS zeroes
 
 	if satsolv_is_debug():
-		print(f'## RUNS({n}/x{n:x})={ runs }')
+		print(f'## RUNS({n}/x{n:x}/{ n.bit_length() }b)={ runs }')
 
-	cls, result, xcomm = satsolv_less_than_template_2x(sat, nvars,
-	                        runs, nbits, result=result, descr=f'LT({n})')
+	cls, result, xcomm, addl = satsolv_less_than_template_2x(sat, nvars,
+	                               runs, nbits, rvar=rvar, result=result,
+	                               descr=f'LT({n})')
 
 		## ...any special logging etc. would happen here...
 
 	t = template0('LT', inputs=nvars)
 
-	t[ 'add.vars' ] = result - nvars
-	t[ 'result'   ] = result
+## TODO: check list; auto-assign
+	t[ 'add.vars' ] = addl
+	t[ 'result'   ] = rvar
 	t[ 'clauses'  ] = cls
 
 	return t
@@ -2435,25 +2483,171 @@ sCNF_TEMPLHDR_ID = 'CNF_TEMPLATEHDR_ELEMS'
 
 
 ##--------------------------------------
-## 'units' turn variable indexes (<0, >0) into unsigned ints in template-table
-##   - special-casing negated ones (MS bit)
-##   - marking added-variable indexes
+## given text clauses, input (V) plus added intermediate (A) variables,
+## turn clause list into template:
+##     (1) input variables are numbered 1..V
+##     (2) intermediate variables are numbered V+1..V+A
 ##
-def varidx2mem(idx, nrvars, unitbits):
-	negbit, clsendb, addvbit = markbits(unitbits)
+## 'result' MUST be one of variables if not ''; if it is an intermediate one,
+## it will be assigned index V+1
+##     TODO: multi-valued variant, where this is a list
+##
+## 'raw' selects text-encoded raw clauses ('1 2 3 
+##
+## returns [ [ clauses1 ], [ clauses2 ], ... ], total elem.count,
+##           nr. of clauses, nr. added variables (A), max.variables
+##           (worst-case clause), unit.bitcount
+##
+## TODO: return proper dict/struct
+##
+## elem.count includes 0-padding, plus header:
+##     (1) nr. of input variables (V)
+##     (2) nr. of added/intermediate variables (A)
+##     (3) max nr. of variables in worst-case clause (excluding terminating 0)
+##     (4) terminator, now reserved-0
+## see vTEMPLATE_HDR_ENTRIES
+##
+## all values padded to uniform width which accommodates MAX(V,A) plus two bits
+##     x8...  ->  index is negated (<0)
+##     x4...  ->  index of added/intermediate variable
+## LS bits are actual variable index, >0
+##
+## compact >1  squeezes out all whitespace
+##          1  adds spaces, not newlines, between clause list
+##          0  one clause per line
+##
+## note: not taking already-populated SAT state, since it may contain
+## other variables/clauses---for example: multiple instances of
+## functions of the same varaible. we construct exact list of of
+## additional variables not in 'vars'
+##
+def clauses2template(cls, vars, nvars, result, raw=True):
+	sv, snv = set(vars), set(nvars)
 
-	if abs(idx) <= nrvars: 
-		c = abs(idx)
-	else:                   ## index is additional variable
-	                        ## marked+rebased to 0: 3 vars, 5 -> addv | 2
-		c = abs(idx) - nrvars
-		if (addvbit <= c):
-			raise ValueError("inconsistent unitbits+var.index")
-		c |= addvbit
+	if len(sv) != len(vars):
+		raise ValueError("non-unique input list")
+	if len(snv) != len(nvars):
+		raise ValueError("non-unique intermediate-variable list")
 
-	c |= negbit  if (idx < 0)  else 0
+## TODO: union, check size vs. union(vars+nvars)
 
-	return c
+	s = satsolv_init0()
+
+	satsolv_add_vars(s, vars)
+##	for nv in nvars:
+##		satsolv_add_1var(s, nv)
+
+	if (result != '') and (result != []):
+		satsolv_add_vars(s, [ result ])         ## NOP if one of inputs
+
+	if raw:
+		addvars = list(a  for a in satsolv_clauses2ids(cls)
+		               if (not a in vars))
+	else:
+		addvars = list(range(len(vars), len(vars) + len(nvars)))
+
+	satsolv_register_added_vars(s, len(addvars))
+
+	satsolv_add_vars(s, list(a  for a in addvars  if (a != result)))
+					## ID-to-index lookup, 1..V, V+1..V+A
+
+					## nr. of bits(integers) +sign(1)
+					## +is-added-variable?(1)
+					##
+	intbits = len(s[ 'vars' ]).bit_length() +2
+					## ideally, this is exactly V+A
+					## in other words, >= MAX(V, A)
+
+	intbits = ((intbits +7) //8) *8                    ## pad to full bytes
+
+	intxdigits = ((intbits //8) * 2)
+
+	res, maxcvars = [], 0
+
+			## constants to mark variables, aligned to MS(intbits)
+			##   0x8...  variable is negated (<0)
+			##   0x4...  added/intermediate, not input variable
+			##
+	neg    = 1 << (intbits -1)
+	added  = 1 << (intbits -2)
+	clsend = 1 << (intbits -3)
+
+	fmt0 = f'0x{ 0 :0{intxdigits}x}'
+
+	## build normalized clause frames
+	## raw:
+	##
+	## non-raw (example: less-than templates):
+	## - indexes already numeric
+	## - need only num-to-table conversion
+	##   LT(1) {'descr': 'LT', 'inputs': 1, 'add.vars': 0, 'result': 1,
+	##       'in.base': 0, 'add.base': 0, 'clauses': [[1, 2], [-1, -2]],
+	##       'comments': []}
+
+	##--------------------------------------------------------------------
+	for c in cls:
+## TODO: recurring, factor out all 'if raw...' paths
+		if raw:
+			signs, ids = satsolv_str2ids(c.split())
+						## keep ints >0
+						## append sign separately
+			ints = list(satsolv_vars2ints(s, [ i ])[0]
+			            for i in ids)
+		else:
+			ids   = list(abs(v)  for v in c)
+			ints  = ids[:]
+			signs = list(('-'  if (v<0) else '')  for v in c)
+
+		res.append([])
+
+						## pretty-print
+		pprint = (f"{ sig }{ id }[{ i }]"  for sig, id, i
+		          in zip(signs, ids, ints))
+
+		print('//', " ".join(pprint))
+
+				## signs, ids, ints of uniform element count
+				## ('-' or ''); name; variable index>0
+
+		for sig, id, i, idx in zip(signs, ids, ints, range(len(ints))):
+				## set extra bits
+				##
+			r = 0  if (sig == '')  else neg
+
+## TODO: track variable type, turn into base-index
+
+			if (i > len(vars)):     ## added variable ->
+				                        ## rebase to 1..A
+				i -= len(vars)  ## ADDED(0) -> abs. 1
+				r |= added
+
+			if idx == len(ints) -1:
+				r |= clsend
+
+					## MS bits MUST NOT conflict with index
+			r = f'0x{ r+i :0{intxdigits}x}'
+
+			res[-1].append(r)
+
+		maxcvars = max(maxcvars, len(ids))
+		res[-1].append(fmt0)
+
+				## do not expect this with sane data:
+				## _lots_ of clauses with few variables
+				##
+	if (maxcvars > neg):
+		raise ValueError("nr. of clauses does not fit bitwidth")
+
+		## lead/header: total nr. of entries, nr. of inputs
+		##
+	res.insert(0, [ f'0x{ len(vars)    :0{intxdigits}x}',
+	                f'0x{ len(addvars) :0{intxdigits}x}',
+	                f'0x{ len(cls)     :0{intxdigits}x}',
+	                f'0x{ maxcvars     :0{intxdigits}x}', ])
+
+	units = sum(len(r)  for r in res)
+
+	return res, units, len(cls), len(res), len(addvars), maxcvars, intbits
 
 
 ##--------------------------------------
@@ -2500,7 +2694,7 @@ def varidx2mem(idx, nrvars, unitbits):
 ## functions of the same varaible. we construct exact list of of
 ## additional variables not in 'vars'
 ##
-def clauses2params(cls, vars, nvars, result):
+def clauses2params(cls, vars, nvars, result, raw=True):
 	sv  = set(vars)
 	snv = set(nvars)
 
@@ -2522,8 +2716,11 @@ def clauses2params(cls, vars, nvars, result):
 	    (result != False)):
 		satsolv_add_vars(s, [ result ])         ## NOP if one of inputs
 
-	addvars = list(a  for a in satsolv_clauses2ids(cls)
-	               if (not a in vars))
+	if raw:
+		addvars = list(a  for a in satsolv_clauses2ids(cls)
+		               if (not a in vars))
+	else:
+		addvars = list(range(len(vars), len(vars)+len(nvars)))
 
 	satsolv_register_added_vars(s, len(addvars))
 
@@ -2556,12 +2753,16 @@ def clauses2params(cls, vars, nvars, result):
 	fmt0 = f'0x{ 0 :0{intxdigits}x}'
 
 	for c in cls:
-		signs, ids = satsolv_str2ids(c.split())
-
+		if raw:
+			signs, ids = satsolv_str2ids(c.split())
 						## keep ints >0
 						## append sign separately
-
-		ints = list(satsolv_vars2ints(s, [ i ])[0]  for i in ids)
+			ints = list(satsolv_vars2ints(s, [ i ])[0]
+			            for i in ids)
+		else:
+			ids   = list(abs(v)  for v in c)
+			ints  = ids[:]
+			signs = list(('-'  if (v<0) else '')  for v in c)
 
 		res.append([])
 
@@ -2615,6 +2816,333 @@ def clauses2params(cls, vars, nvars, result):
 	return res, units, len(cls), len(res), len(addvars), maxcvars, intbits
 
 
+
+
+##--------------------------------------
+## generate C constant table for template
+##
+## if 'nvars' is integer, 'cls' MUST be already a Template; we
+## only use number of variables
+## (see 'Symbolic template' for struct)
+##
+## 'r' is name of output Boolean, which will be assigned as 1st add'l variable
+## if True or False, results are forced and not assigned to a variable
+##
+## 'tid' is template ID, string to include in C definitions
+##
+## TODO: multi-valued output MUST accommodate list
+##
+## TODO: merge back clauses2print() and clauses2template()
+##
+def clauses2print(cls, vars, nvars, r, tid, raw=True, instance=None):
+	ct, ccnt, nrcls, units, addvars, maxv, cbits = clauses2params(cls,
+	                                       vars, nvars, result=r, raw=raw)
+	nrvars = len(vars)
+
+	if len(ct[0]) != vTEMPLATE_HDR_ENTRIES:
+		raise("first clause->template does not look like header")
+
+	ctype = print_ctemplate_hdr(cbits)
+
+	unitbits = (nrvars + addvars).bit_length() +2
+
+					## full listing, one clause per line
+
+	if instance == None:
+		instance = len(vars)
+
+	print(f'// CLAUSES[TYPE={ ctype }]' +
+		f'[{ nrvars }+{ addvars }(x{ nrvars :x}+' +
+		f'x{ addvars :x})({ nrvars +addvars }/' +
+		f'x{ nrvars +addvars :x}) variables]' +
+		f'x[max { maxv } vars/cls]:')
+
+	negbit, clsendb, addvbit = markbits(unitbits)
+	maskbits = min(negbit, clsendb, addvbit) -1
+
+## TODO: sync clause-to-print etc. heuristics
+
+	vprefix = f'SAT_TEMP_{ tid }{ instance }'
+
+				## bit width, masking macros
+	print("/**/")
+	print(f'#define  { vprefix }_MASK          ' +
+			f'UINT{ cbits }_C(0x{ (1 << (cbits -3)) -1 :x})')
+		##
+	print(f'#define  { vprefix }_IS_NEGATIVE   ' +
+			f'UINT{ cbits }_C(0x{ 1 << (cbits -1) :x})')
+		##
+	print(f'#define  { vprefix }_IS_CLAUSE_END ' +
+			f'UINT{ cbits }_C(0x{ 1 << (cbits -2) :x})')
+		##
+	print(f'#define  { vprefix }_IS_ADDED_VAR  ' +
+			f'UINT{ cbits }_C(0x{ 1 << (cbits -3) :x})')
+	print("/**/")
+
+## TODO: pick up align-columns from multiply-carpet generator
+
+	print(f'#define  { vprefix }_INPUT_VARS      ' +
+			f'((unsigned int) { nrvars })')
+	print(f'#define  { vprefix }_ADDL_VARS       ' +
+			f'((unsigned int) { addvars })')
+	print(f'#define  { vprefix }_CLAUSES         ' +
+			f'((unsigned int) { nrcls })')
+	print(f'#define  { vprefix }_MAX_CLS_VARS    ' +
+			f'((unsigned int) { maxv  })')
+	print(f'#define  { vprefix }_MAX_CLSVARS_USE ' +
+			f'((unsigned int) { maxv * nrcls })')
+	print(f'#define  { vprefix }_VARBITS         ' +
+			f'((unsigned int) { cbits })')
+	print(f'#define  { vprefix }_VARBITS_NET     ' +
+			f'((unsigned int) { cbits-3 })')
+	print(f'#define  { vprefix }_ELEMS           ' +
+			f'((unsigned int) { ccnt })')
+	print("/**/")
+
+	print(f'static const {ctype} { vprefix }[{ ccnt }] = {{')
+
+	binary = ''
+
+	for ci, c in enumerate(ct):
+		cbin = ",".join(f"{cf}"  for cf in c)  +","
+		print(cbin)
+		binary += (' '  if ci  else '') +cbin
+
+		if ci == 0:
+			print('// /header')
+
+	print('} ;')
+	print(f'// /*flat*/ { ctype } { vprefix }[{ ccnt }] = {{ { binary } }};')
+
+	print('// /CLAUSES')
+
+				## entries to include to template's struct
+				## see sat.c
+				##
+	tentry = [
+		f'#define  { vprefix }_FULL \\',
+		f'{{ { nrvars }, \\',
+		f'  { vprefix }_VARBITS,      \\',
+		f'  { vprefix }_MASK,         \\',
+		f'  { vprefix }_IS_NEGATIVE,  \\',
+		f'  { vprefix }_IS_ADDED_VAR, \\',
+		f'  { vprefix }_INPUT_VARS,   \\',
+		f'  { vprefix }_ADDL_VARS,    \\',
+		f'  { vprefix }_CLAUSES,      \\',
+		f'  { vprefix }_MAX_CLS_VARS, \\',
+		f'  (const void *)            \\',
+		f'      { vprefix },          \\',
+		f'  { vprefix }_ELEMS,        \\',
+		'}',
+	]
+	##
+	print('\n'.join(tentry))
+
+	print('// /GENERATED.SRC')
+	print('// }')
+	print()
+
+
+##--------------------------------------
+## 'units' turn variable indexes (<0, >0) into unsigned ints in template-table
+##   - special-casing negated ones (MS bit)
+##   - marking added-variable indexes
+##   - marking end-of-clause indexes
+##
+def varidx2mem(idx, nrvars, unitbits):
+	negbit, clsendb, addvbit = markbits(unitbits)
+
+	if abs(idx) <= nrvars: 
+		c = abs(idx)
+	else:                   ## index is additional variable
+	                        ## marked+rebased to 0: 3 vars, 5 -> addv | 2
+		c = abs(idx) - nrvars
+
+		if (addvbit <= c):
+			raise ValueError("inconsistent unitbits+var.index")
+
+		c |= addvbit
+
+	c |= negbit  if (idx < 0)  else 0
+
+	return c
+
+
+##--------------------------------------
+## given clauses, input (V) plus added intermediate (A) variables, turn clause
+## list into template:
+##   (1) symbolic templates
+##     (1) input variables are numbered 1..V
+##     (2) intermediate variables are numbered V+1..V+A
+##   (2) numeric templates  <->  'vars' and 'nvars' are integers
+##     -> only numeric expressions
+##
+## see templ2c() for cases where template has already been fully
+## processed
+##
+## 'result' MUST be one of variables if not ''; if it is an intermediate one,
+## it will be assigned index V+1
+##   - if True or False, results are forced and not assigned to a variable
+## TODO: multi-valued variant, where this is a list
+##
+## returns [ [ clauses1 ], [ clauses2 ], ... ], total elem.count,
+##           nr. of clauses, nr. added variables (A), max.variables
+##           (worst-case clause), unit.bitcount
+##
+## TODO: return proper dict/struct
+##
+## elem.count includes 0-padding, PLUS HEADER:
+##     (1) nr. of input variables (V)
+##     (2) nr. of added/intermediate variables (A)
+##     (3) nr. of clauses
+##     (4) max nr. of variables in worst-case clause (excluding terminating 0)
+## see vTEMPLATE_HDR_ENTRIES
+##
+## all values padded to uniform width which accommodates MAX(V,A) plus two bits
+##     x8...  ->  index is negated (<0)
+##     x4...  ->  index of added/intermediate variable
+## LS bits are actual variable index, >0
+##
+## compact >1  squeezes out all whitespace
+##          1  adds spaces, not newlines, between clause list
+##          0  one clause per line
+##
+## note: not taking already-populated SAT state, since it may contain
+## other variables/clauses---for example: multiple instances of
+## functions of the same varaible. we construct exact list of of
+## additional variables not in 'vars'
+##
+def clauses2params(cls, vars, nvars, result, raw=True):
+	sv  = set(vars)
+	snv = set(nvars)
+
+	if len(sv) != len(vars):
+		raise ValueError("non-unique input list")
+	if len(snv) != len(nvars):
+		raise ValueError("non-unique added-variable list")
+
+## TODO: union, check size vs. union(vars+nvars)
+
+	s = satsolv_init0()
+
+	satsolv_add_vars(s, vars)
+		##
+##	for nv in nvars:
+##		satsolv_add_1var(s, nv)
+
+	if ((result != '') and (result != []) and (result != True) and
+	    (result != False)):
+		satsolv_add_vars(s, [ result ])         ## NOP if one of inputs
+
+	if raw:
+		addvars = list(a  for a in satsolv_clauses2ids(cls)
+			       if (not a in vars))
+	else:
+		addvars = list(range(len(vars), len(vars)+len(nvars)))
+
+	satsolv_register_added_vars(s, len(addvars))
+
+	satsolv_add_vars(s, list(a  for a in addvars  if (a != result)))
+					## ID-to-index lookup, 1..V, V+1..V+A
+
+					## nr. of bits(integers) +sign(1)
+					## +is-added-variable?(1)
+					##
+	intbits = len(s[ 'vars' ]).bit_length() +vTEMPLATE_ADDL_BITS
+					##
+					## ideally, this is exactly V+A
+					## in other words, >= MAX(V, A)
+
+	intbits = ((intbits +7) //8) *8                    ## pad to full bytes
+
+	intxdigits = ((intbits //8) * 2)
+
+	res, maxcvars = [], 0
+
+			## constants to mark variables, aligned to MS(intbits)
+			##   0x8...  variable is negated (<0)
+			##   0x4...  last variable of clause
+			##   0x2...  added/intermediate, not input variable
+			##
+	neg    = 1 << (intbits -1)
+	clsend = 1 << (intbits -2)
+	added  = 1 << (intbits -3)
+
+	fmt0 = f'0x{ 0 :0{intxdigits}x}'
+
+	for c in cls:
+## TODO: recurring, factor out all 'if raw...' paths
+
+		if raw: 
+			signs, ids = satsolv_str2ids(c.split())
+						## keep ints >0
+						## append sign separately
+			ints = list(satsolv_vars2ints(s, [ i ])[0]
+				    for i in ids)
+		else:
+			ids   = list(abs(v)  for v in c) 
+			ints  = ids[:]  
+			signs = list(('-'  if (v<0) else '')  for v in c)
+
+						## keep ints >0
+						## append sign separately
+		res.append([])
+
+						## pretty-print
+		pprint = (f"{ sig }{ id }[{ i }]"  for sig, id, i
+		          in zip(signs, ids, ints))
+
+		print('//', " ".join(pprint))
+
+				## signs, ids, ints of uniform element count
+				## ('-' or ''); name; variable index>0
+
+		for zi, zv in enumerate(zip(signs, ids, ints)):
+			sig, id, i = zv
+
+				## set extra bits
+				##
+			r = 0  if (sig == '')  else neg
+
+## TODO: track variable type, turn into base-index
+
+			if (i > len(vars)):          ## added variable ->
+			                             ## rebase to 1..A
+				i -= len(vars)       ## ADDED(0) -> absolute 1
+				r |= added
+
+			if zi >= (len(ints) -1):
+				r |= clsend
+
+				## MS bits MUST NOT conflict with index
+			r = f'0x{ r+i :0{intxdigits}x}'
+
+			res[-1].append(r)
+
+		maxcvars = max(maxcvars, len(ids))
+		res[-1].append(fmt0)
+
+				## do not expect this with sane data:
+				## _lots_ of clauses with few variables
+				##
+	if (maxcvars > neg):
+		raise ValueError("nr. of clauses does not fit bitwidth")
+
+		## lead/header: total nr. of entries, nr. of inputs
+		##
+	res.insert(0, [ f'0x{ len(vars)    :0{intxdigits}x}',
+	                f'0x{ len(addvars) :0{intxdigits}x}',
+	                f'0x{ len(cls)     :0{intxdigits}x}',
+	                f'0x{ maxcvars     :0{intxdigits}x}', ])
+## TODO: use template2hdr()
+		##
+		## appends vTEMPLATE_HDR_ENTRIES elems
+
+	units = sum(len(r)  for r in res)
+
+	return res, units, len(cls), len(res), len(addvars), maxcvars, intbits
+
+
 ##--------------------------------------
 def print_ctemplate_hdr(ctypebits):
 	print('//')
@@ -2624,8 +3152,8 @@ def print_ctemplate_hdr(ctypebits):
 	print('// GENERATED.SRC:')
 
 	print(f"#if !defined({ sCNF_TEMPLHDR_ID })")
-	print("/* first elements storing input/additional-var count (2)")
-	print(" * and max-nr-of-variables per clause (+1)")
+	print("/* first elements storing input/additional-var count (2),")
+	print(" * nr. of clauses(1), and max-nr-of-variables per clause (+1)")
 	print(" */")
 		##
 	print(f"#define { sCNF_TEMPLHDR_ID } " +
@@ -2669,110 +3197,111 @@ def markbits(bits):
 	return [ negd, clsend, addvar ]
 
 
-##--------------------------------------
-## generate C constant table for template
-##
-## if 'nvars' is integer, 'cls' MUST be already a Template; we
-## only use number of variables
-## (see 'Symbolic template' for struct)
-##
-## 'r' is name of output Boolean, which will be assigned as 1st add'l variable
-## if True or False, results are forced and not assigned to a variable
-##
-## 'tid' is template ID, string to include in C definitions
-##
-## TODO: multi-valued output MUST accommodate list
-##
-def clauses2print(cls, vars, nvars, r, tid):
-	ct, ccnt, nrcls, units, addvars, maxv, cbits = clauses2params(cls,
-	                                                vars, nvars, result=r)
-	nrvars = len(vars)
-
-	if len(ct[0]) != vTEMPLATE_HDR_ENTRIES:
-		raise("first clause->template does not look like header")
-
-	ctype = print_ctemplate_hdr(cbits)
-
-					## full listing, one clause per line
-
-	print(f'// CLAUSES[TYPE={ ctype }]' +
-		f'[{ nrvars }+{ addvars }(x{ nrvars :x}+' +
-		f'x{ addvars :x})({ nrvars +addvars }/' +
-		f'x{ nrvars +addvars :x}) variables]' +
-		f'x[max { maxv } vars/cls]:')
-
-	negbit, clsendb, addvbit = markbits(unitbits)
-	maskbits = min(negbit, clsendb, addvbit) -1
-
-
-## TODO: sync clause-to-print etc. heuristics
-
-				## bit width, masking macros
-	print("/**/")
-	print(f'#define  SAT_TEMP_L{ tid }{ len(vars) }_MASK         ' +
-			f'UINT{ cbits }_C(0x{ (1 << (cbits -2)) -1 :x})')
-		##
-	print(f'#define  SAT_TEMP_L{ tid }{ len(vars) }_IS_NEGATIVE  ' +
-			f'UINT{ cbits }_C(0x{ 1 << (cbits -1) :x})')
-		##
-	print(f'#define  SAT_TEMP_L{ tid }{ len(vars) }_IS_CLAUSE_END ' +
-			f'UINT{ cbits }_C(0x{ 1 << (cbits -2) :x})')
-		##
-	print(f'#define  SAT_TEMP_L{ tid }{ len(vars) }_IS_ADDED_VAR ' +
-			f'UINT{ cbits }_C(0x{ 1 << (cbits -3) :x})')
-	print("/**/")
-
-	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_INPUT_VARS   ' +
-			f'((unsigned int) { nrvars })')
-	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_ADDL_VARS    ' +
-			f'((unsigned int) { addvars })')
-	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_CLAUSES      ' +
-			f'((unsigned int) { nrcls })')
-	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_MAX_CLS_VARS ' +
-			f'((unsigned int) { maxv  })')
-	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_VARBITS      ' +
-			f'((unsigned int) { cbits })')
-	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_ELEMS        ' +
-			f'((unsigned int) { ccnt })')
-	print("/**/")
-	print(f'static const {ctype} SAT_TEMP_L{ tid }{ nrvars }' +
-		f'[{ ccnt }] = {{')
-
-	for ci, c in enumerate(ct):
-		print(",".join(f"{cf}"  for cf in c)  +",")
-
-		if ci == 0:
-			print('// /header')
-			print('//')
-
-	print('} ;')
-	print('// /CLAUSES')
-
-				## entries to include to template's struct
-				## see sat.c
-				##
-	tentry = [
-		f'#define  SAT_TEMPL_{ tid }{ nrvars }_FULL \\',
-		f'{{ { nrvars }, \\',
-		f'  SAT_TEMPL_{ tid }{ nrvars }_VARBITS,      \\',
-		f'  SAT_TEMPL_{ tid }{ nrvars }_MASK,         \\',
-		f'  SAT_TEMPL_{ tid }{ nrvars }_IS_NEGATIVE,  \\',
-		f'  SAT_TEMPL_{ tid }{ nrvars }_IS_ADDED_VAR, \\',
-		f'  SAT_TEMPL_{ tid }{ nrvars }_INPUT_VARS,   \\',
-		f'  SAT_TEMPL_{ tid }{ nrvars }_ADDL_VARS,    \\',
-		f'  SAT_TEMPL_{ tid }{ nrvars }_CLAUSES,      \\',
-		f'  SAT_TEMPL_{ tid }{ nrvars }_MAX_CLS_VARS, \\',
-		f'  (const void *)                           \\',
-		f'      SAT_TEMPL_{ tid }{ nrvars },          \\',
-		f'  SAT_TEMPL_{ tid }{ nrvars }_ELEMS,        \\',
-		'}',
-	]
-	##
-	print('\n'.join(tentry))
-
-	print('// /GENERATED.SRC')
-	print('// }')
-	print()
+## ##--------------------------------------
+## ## generate C constant table for template
+## ##
+## ## if 'nvars' is integer, 'cls' MUST be already a Template; we
+## ## only use number of variables
+## ## (see 'Symbolic template' for struct)
+## ##
+## ## 'r' is name of output Boolean, which will be assigned as 1st add'l variable
+## ## if True or False, results are forced and not assigned to a variable
+## ##
+## ## 'tid' is template ID, string to include in C definitions
+## ##
+## ## TODO: multi-valued output MUST accommodate list
+## ##
+## def clauses2print(cls, vars, nvars, r, tid):
+## 	ct, ccnt, nrcls, units, addvars, maxv, cbits = clauses2params(cls,
+## 	                                                vars, nvars, result=r)
+## 	nrvars = len(vars)
+## 
+## 	if len(ct[0]) != vTEMPLATE_HDR_ENTRIES:
+## 		raise("first clause->template does not look like header")
+## 
+## 	ctype = print_ctemplate_hdr(cbits)
+## 
+## 					## full listing, one clause per line
+## 
+## 	print(f'// CLAUSES[TYPE={ ctype }]' +
+## 		f'[{ nrvars }+{ addvars }(x{ nrvars :x}+' +
+## 		f'x{ addvars :x})({ nrvars +addvars }/' +
+## 		f'x{ nrvars +addvars :x}) variables]' +
+## 		f'x[max { maxv } vars/cls]:')
+## 
+## 	negbit, clsendb, addvbit = markbits(unitbits)
+## 	maskbits = min(negbit, clsendb, addvbit) -1
+## 
+## 
+## ## TODO: sync clause-to-print etc. heuristics
+## 
+## 				## bit width, masking macros
+## 	print("/**/")
+## 	print(f'#define  SAT_TEMP_L{ tid }{ len(vars) }_MASK         ' +
+## 			f'UINT{ cbits }_C(0x{ (1 << (cbits -2)) -1 :x})')
+## 		##
+## 	print(f'#define  SAT_TEMP_L{ tid }{ len(vars) }_IS_NEGATIVE  ' +
+## 			f'UINT{ cbits }_C(0x{ 1 << (cbits -1) :x})')
+## 		##
+## 	print(f'#define  SAT_TEMP_L{ tid }{ len(vars) }_IS_CLAUSE_END ' +
+## 			f'UINT{ cbits }_C(0x{ 1 << (cbits -2) :x})')
+## 		##
+## 	print(f'#define  SAT_TEMP_L{ tid }{ len(vars) }_IS_ADDED_VAR ' +
+## 			f'UINT{ cbits }_C(0x{ 1 << (cbits -3) :x})')
+## 	print("/**/")
+## 
+## 	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_INPUT_VARS   ' +
+## 			f'((unsigned int) { nrvars })')
+## 	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_ADDL_VARS    ' +
+## 			f'((unsigned int) { addvars })')
+## 	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_CLAUSES      ' +
+## 			f'((unsigned int) { nrcls })')
+## 	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_MAX_CLS_VARS ' +
+## 			f'((unsigned int) { maxv  })')
+## 	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_VARBITS      ' +
+## 			f'((unsigned int) { cbits })')
+## 	print(f'#define  SAT_TEMP_L{ tid }{ nrvars }_ELEMS        ' +
+## 			f'((unsigned int) { ccnt })')
+## 	print("/**/")
+## 	print(f'static const {ctype} SAT_TEMP_L{ tid }{ nrvars }' +
+## 		f'[{ ccnt }] = {{')
+## 
+## 	for ci, c in enumerate(ct):
+## 		print(",".join(f"{cf}"  for cf in c)  +",")
+## 
+## 		if ci == 0:
+## 			print('// /header')
+## 			print('//')
+## 
+## 	print('} ;')
+## 	print('// /CLAUSES')
+## 
+## 				## entries to include to template's struct
+## 				## see sat.c
+## 				##
+## 	tentry = [
+## 		f'#define  SAT_TEMPL_{ tid }{ nrvars }_FULL \\',
+## 		f'{{ { nrvars }, \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_VARBITS,      \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_MASK,         \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_IS_NEGATIVE,  \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_IS_ADDED_VAR, \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_INPUT_VARS,   \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_ADDL_VARS,    \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_CLAUSES,      \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_MAX_CLS_VARS, \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_CLSVARS_USED, \\',
+## 		f'  (const void *)                           \\',
+## 		f'      SAT_TEMPL_{ tid }{ nrvars },          \\',
+## 		f'  SAT_TEMPL_{ tid }{ nrvars }_ELEMS,        \\',
+## 		'}',
+## 	]
+## 	##
+## 	print('\n'.join(tentry))
+## 
+## 	print('// /GENERATED.SRC')
+## 	print('// }')
+## 	print()
 
 
 ##--------------------------------------
@@ -2854,6 +3383,11 @@ def templates2c(templs, tid, condense=True, unitbits=0):
 		maxubits = max(maxubits, ts[ 'unit.bits' ])
 
 ## TODO: use centralized macro for round-to-uint-sizes
+	if 'MAXBITS' in os.environ:
+		mxb = int(os.environ[ 'MAXBITS' ], 0)         ## TODO: +checker
+		if 8 * ((maxubits +1) // 8) > mxb:
+			raise ValueError("unit size out of range")
+
 	if maxubits >= 17:
 		maxubits = 32
 	elif maxubits >= 9:
@@ -3020,6 +3554,22 @@ if __name__ == '__main__':
 
 	vars = [f'v{v:0{vdigits}}'  for v in range(maxn)]
 
+	for i in range(1, 4096):
+		nbits = i.bit_length()
+		res   = satsolv_less_than_template(sat, nbits, i)
+
+		if satsolv_is_debug():
+			print(f'## LT({i})', res)
+
+				## +1: result always has its own variable now
+
+		nvars = list(range(nbits +1, nbits +1 +res[ 'add.vars' ]))
+		clauses2print(res[ 'clauses' ], vars[ :nbits ], nvars,
+		              res[ 'result'  ], 'LT', raw=False,
+		              instance=str(i))
+	sys.exit(0)  ##=======================================================
+
+
 	if 'TEMPLATE' in os.environ:
 		what = os.environ[ 'TEMPLATE' ].split(',')
 		templs = []
@@ -3091,7 +3641,7 @@ if __name__ == '__main__':
 		print(f'## 1-of-N[{ BITS }] r={r} cls[{len(cls)}]',
 		      nvars, comm)
 
-		clauses2print(cls, vars[ :BITS ], nvars, r)
+		clauses2print(cls, vars[ :BITS ], nvars, r, '1OFN')
 
 		sys.exit(0)
 
@@ -3108,7 +3658,7 @@ if __name__ == '__main__':
 
 		sat_report_vars(sat, prefix='//')
 
-		clauses2print(cls, vars[:vb], nvars, r)
+		clauses2print(cls, vars[:vb], nvars, r, '1OFN')
 
 		if vb < 4:
 			r, nvars, cls, comm = satsolv_1ofn_2prod(sat,

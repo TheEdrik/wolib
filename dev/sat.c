@@ -20,6 +20,7 @@
 #include <hiredis/read.h>
 
 #define  USE_READINT
+#define  USE_ERR_ANNOTATE
 #define  USE_HEXDUMP    -1   /* no wrapping */
 #include "common-util.h"
 
@@ -54,10 +55,15 @@ typedef enum {
 	SAT_FL_ADD_VAR = 2     // add clause forcing the aggregate variable
 } SAT_Flag_t ;
 
+#define  SAT_CLAUSES_ENOUGH_BYTES  ((unsigned int) 1024)
 #define  SAT_TEMPLTABLE_HDR_UNITS  ((unsigned int) 4)  // per-table header
 #define  SAT_TEMPLHDR_UNITS  ((unsigned int) 4)  // per-template header
 #define  SAT_SIZET_INVD      (~((size_t) 0))
 #define  SAT_UINT_INVD       (~((unsigned int) 0))
+// TODO: specific error-to-size_t mappings
+
+// shared scratch used by examples
+static unsigned char scratch[ 1024 *1024 ];
 
 
 #if !defined(SYS_NO_LMDB)  /*=====  delimiter: LMDB access  ================*/
@@ -681,10 +687,11 @@ struct SatStrings {
 //--------------------------------------
 struct SAT_Summary {
 	unsigned int vars;
+	unsigned int addl;
 	unsigned int clauses;
 } ;
 //
-#define SAT_SUMMARY_INIT0 { 0, 0, }
+#define SAT_SUMMARY_INIT0 { 0, 0, 0, }
 
 
 //--------------------------------------
@@ -723,6 +730,16 @@ struct SatState {
 //
 // if we grow out of these limits, it will be time to move beyond 32-bit
 // hashtables. the 32-bit form fits many nice embeddable ones (as of 2023-04)
+
+
+//--------------------------------------
+static inline struct SAT_Summary *sat_summary_init0(struct SAT_Summary *ps)
+{
+	if (ps)
+		*ps = (struct SAT_Summary) SAT_SUMMARY_INIT0;
+
+	return ps;
+}
 
 
 /*--------------------------------------
@@ -2805,10 +2822,31 @@ static void sat_dispose(struct SatState *ps)
 #endif   /*=====  !delimiter: SAT converter  ===============================*/
 
 
+//--------------------------------------
+static size_t sat_header2mem(void *res,    size_t rbytes,
+         const struct SAT_Summary *ps, const char *descr)
+{
+	size_t wr = 0;
+
+	if (ps && res) {
+		wr = snprintf((char *) res, rbytes,
+			"p cnf %u %u\n"
+			"%s%s%s%s"
+			"c\n",
+			ps->vars + ps->addl, ps->clauses,
+			descr ? "c"   : "",   // note: ASCII ONLY
+			descr ? " "   : "",   // note: ASCII ONLY
+			descr ? descr : "",
+			descr ? "\n"  : "");
+	}
+
+	return wr;
+}
+
+
 #if 0   /*=====  delimiter: SAT template-to-CNF converter (v1)  ============*/
 // we assume there will be one section per primitive
 //
-#include "cnf-templates.h"
 
 
 //--------------------------------------
@@ -2962,23 +3000,15 @@ static inline uint64_t sat_ulist_current(const struct SAT_UList *pu,
 
 
 //--------------------------------------
-static inline struct SAT_Summary *sat_summary_init0(struct SAT_Summary *ps)
-{
-	if (ps)
-		*ps = (struct SAT_Summary) SAT_SUMMARY_INIT0;
-
-	return ps;
-}
-
-
-//--------------------------------------
 static inline
 struct SAT_Summary *sat_summary_add(struct SAT_Summary *ps,
                                          unsigned long vars,
+                                         unsigned long addl,
                                          unsigned long clauses)
 {
 	if (ps) {
 		ps->vars    += vars;
+		ps->addl    += addl;
 		ps->clauses += clauses;
 	}
 
@@ -2987,7 +3017,6 @@ struct SAT_Summary *sat_summary_add(struct SAT_Summary *ps,
 
 
 //--------------------------------------
-static unsigned char scratch[ 1024 *1024 ];
 
 // fill template from (pt, ptelems)
 // inputs bits are (var0, var0 +inputs -1)
@@ -3104,14 +3133,11 @@ static size_t sat_1ofn_template2mem(void *res, size_t rbytes,
 
 
 //--------------------------------------
-static size_t sat_template(unsigned int copies)
+static size_t sat_template(void)
 {
 	struct SAT_Summary ssum = SAT_SUMMARY_INIT0;
 	unsigned char vbits = 12;
 	size_t wr = 0;
-
-	if (!copies)
-		copies = 1;
 
 	if (getenv("BITS"))
 		vbits = (unsigned char) cu_readuint(getenv("BITS"), 0);
@@ -3137,8 +3163,176 @@ static size_t sat_template(unsigned int copies)
 
 	return 0;
 }
-
 #endif   /*=====  !delimiter: SAT template-to-CNF converter  ===============*/
+
+
+#if 2   /*=====  delimiter: SAT template-to-CNF converter (v2)  ============*/
+#include "cnf-templates.h"
+#include "cnf-lessthan-template.h"
+#endif
+
+/* input and additional variables are polymorphic:
+ *     non-NULL base[vcount]  -- unsigned int []; index of all inputs
+ *         NULL base          -- 1 .. vcount
+ *     non-NULL addl[acount]  -- unsigned int []; index of all add'l variables
+ *         NULL addl          -- vcount+1 .. vcount+acount
+ *
+ * note unintuitive combinations of non+NULL input arrays
+ */
+
+
+/*--------------------------------------
+ * 'tvar' is template variable, incl. any marker bits
+ *
+ * return index belonging to actual variable reference (not 0)
+ *        0     if anything is inconsistent
+ */
+static int varidx8(const unsigned int *base, unsigned int vcount,
+                   const unsigned int *addl, unsigned int acount,
+                              uint8_t tvar)
+{
+	int rc = 0;
+
+	if (tvar & CNF_VAR_MASK8) {
+		unsigned int v = tvar & CNF_VAR_MASK8;                  // 1..N
+
+		if (tvar & CNF_VAR_IS_ADDED8) {
+			if (v <= acount) {
+				rc = addl ? addl[ v-1 ] : (vcount + v);
+			}
+
+		} else if (v <= vcount) {
+			rc = base ? base[ v-1 ] : v;
+		}
+
+		if (rc && (tvar & CNF_VAR_IS_NEGATED8))
+			rc = -rc;
+	}
+
+	return rc;
+}
+
+
+/*--------------------------------------
+ * generalized form of sat_v2template2mem_16()
+ */
+static size_t sat_template2mem8(void *res,          size_t rbytes,
+                     const uint8_t *ptempl, unsigned int tunits,
+                const unsigned int *base,   unsigned int vcount,
+                const unsigned int *addl,   unsigned int acount)
+{
+	unsigned char *pr = (unsigned char *) res;
+	unsigned int i, cls = 0;
+	size_t rv = 0;
+
+	if (!ptempl || (tunits < SAT_TEMPLHDR_UNITS))
+		return SAT_SIZET_INVD;
+
+	ptempl += SAT_TEMPLHDR_UNITS;
+	tunits -= SAT_TEMPLHDR_UNITS;           // (ptempl, tunits) are clauses
+
+	{
+	char clstr[ SAT_CLAUSES_ENOUGH_BYTES +1 ] = { 0, };
+	unsigned int end_next = 0;
+	size_t cb = 0;
+
+	for (i=0; (i<tunits) && ~cb; ++i) {
+		int v = ptempl[i];
+		size_t wr = 0;
+
+		if (!v) {
+			if (end_next) {
+				end_next = 0;
+				continue;
+			} else {
+// TODO: inconsistent markers
+printf("INCONSISTENT\n");
+			}
+			end_next = 0;
+		}
+
+		v = varidx8(base, vcount, addl, acount, v);
+
+//		printf("  [%u/%u]x%" PRIx8 "\n", i, tunits, ptempl[i]);
+
+		wr = snprintf(&(clstr[ cb ]), sizeof(clstr)-cb, "%s%d",
+		              cb ? " " : "", v);
+
+		if (wr >= sizeof(clstr) -cb) {                   // did not fit
+			rv = SAT_SIZET_INVD;
+			break;
+		}
+		cb += wr;
+
+		end_next = (ptempl[i] & CNF_VAR_IS_CLAUSE_END8);
+
+// TODO: memmove()-based in-stream append
+		if (ptempl[i] & CNF_VAR_IS_CLAUSE_END8) {
+			wr = snprintf(&(clstr[cb]), sizeof(clstr)-cb, " 0\n");
+// printf("END[%zu]=(%s)\n", cb, (const char *) clstr);
+
+			if (wr >= sizeof(clstr) -cb) {          // did not fit
+				rv = SAT_SIZET_INVD;
+				break;
+			}
+			cb += wr;
+
+//			printf("CLAUSE[%u]=(%s)\n", cls+1, clstr);
+
+			if (pr) {
+				if (cb <= rbytes - rv) {
+					memmove(pr+rv, clstr, cb);
+					if (rv+cb < rbytes)
+						pr[ rv+cb ] = '\0';
+					rv += cb;
+				} else {
+					rv = SAT_SIZET_INVD;
+					break;
+				}
+			}
+
+			cb = 0;
+			++cls;
+		}
+	}
+	}
+
+	return rv;
+}
+
+
+//--------------------------------------
+// generic table-assisted template-to-CNF(text) conversion
+//   generalized from sat_1ofn_template2mem()
+//
+// uint...UNITBITS_t templ[ tunits ]
+//
+// 'idx' selects 0-based entry from 'tidx' which references templ[]
+//
+static size_t sat_template_arr2mem(void *res,    size_t rbytes,
+                     struct SAT_Summary *psum,
+                           unsigned int idx,
+                const struct TemplIndex *tidx, unsigned int tielems,
+                             const void *templ,  size_t tunits,
+                           unsigned int unitbits)
+{
+(void) res;
+(void) rbytes;
+	if (!tidx || !tielems || !templ || !tunits)
+		return 0;
+
+	if (unitbits != 8)
+		return 0;
+
+	if (idx >= tielems)
+		return 0;
+
+	sat_summary_init0(psum);
+
+// RRR
+
+	return 0;
+}
 
 
 #if 2   /*=====  delimiter: SAT template-to-CNF converter (v2)  ============*/
@@ -3276,7 +3470,7 @@ static size_t sat_v2template2mem_16(void *res, size_t rbytes,
 		if (pt[i] & SAT_TMPL_1OFN_VAR_IS_NEGATED)
 			v = -v;
 
-		printf("  [%u/%u]x%" PRIx16 "\n", i, tcount, pt[i]);
+//		printf("  [%u/%u]x%" PRIx16 "\n", i, tcount, pt[i]);
 
 		cb += snprintf(&(clause[cb]), sizeof(clause), "%s%d",
 		               cb ? " " : "", v);
@@ -3284,7 +3478,7 @@ static size_t sat_v2template2mem_16(void *res, size_t rbytes,
 		if (pt[i] & SAT_TMPL_1OFN_VAR_IS_CLAUSE_END) {
 			cb += snprintf(&(clause[cb]), sizeof(clause), " 0");
 
-			printf("CLAUSE[%u]=(%s)\n", cls+1, clause);
+//			printf("CLAUSE[%u]=(%s)\n", cls+1, clause);
 
 			cb = 0;
 			++cls;
@@ -3318,6 +3512,128 @@ static size_t sat_v2template2mem(void *res,        size_t rbytes,
 #endif   /*=====  !delimiter: SAT template-to-CNF converter  ===============*/
 
 
+#if defined(CNF_LT_TEMPLATE_H__)  //=========================================
+struct SatVariables {
+	unsigned int vars;
+	unsigned int addl;
+} ;
+//
+#define  SAT_VARIABLES_INIT0  { 0, 0 }
+
+
+// TODO: proper stream-append version
+// right now, assumes fixed 'large enough' 'descr'
+//
+static size_t describe_runs(void *descr, size_t dbytes,
+                    unsigned int limit)
+{
+	unsigned int curr, prev, seen = 0;
+	char *pd = (char *) descr;
+	size_t wr = 0;
+
+// TODO: generic ls-zeroes() macro
+	if (limit >= 0x100) {
+		curr = 0x8000;
+	} else {
+		curr = 0x80;
+	}
+	while (curr > limit)
+		curr >>= 1;
+
+	prev = limit & curr;
+
+	if (descr && (wr+1 < dbytes)) {
+		pd[ wr   ] = 'b';
+		pd[ wr+1 ] = ':';
+	}
+	wr += 2;
+
+	while (curr) {
+		if (((!prev) != !(curr & limit))) {
+			if (descr && (wr < dbytes))
+				pd[ wr ] = '-';
+			++wr;
+			seen = 0;
+		}
+
+		prev = curr & limit;
+
+		if ((seen >3) && !(seen % 4)) {
+			if (descr && (wr < dbytes))
+				pd[ wr ] = '\'';
+			++wr;
+		}
+
+		if (descr && (wr < dbytes))
+			pd[ wr ] = prev ? '1' : '0';
+		++wr;
+		++seen;
+
+		curr >>= 1;
+	}
+
+	if (descr && (wr < dbytes))
+		pd[ wr ] = 0;
+
+	return wr;
+}
+
+
+//--------------------------------------
+static struct SAT_Summary templ2vars(const void *templ, unsigned int units,
+                                   unsigned int unitbits)
+{
+	struct SAT_Summary rv = SAT_SUMMARY_INIT0;
+	unsigned int v = 0, a, c;
+
+	switch ((templ && (units >= SAT_TEMPLTABLE_HDR_UNITS)) ? unitbits : 0)
+	{
+		case 8: {
+			const unsigned char *pt = (const unsigned char *) templ;
+			v = pt[0];
+			a = pt[1];
+			c = pt[2];
+			break;
+		}
+
+		case 16: {
+			const uint16_t *pt = (const uint16_t *) templ;
+			v = pt[0];
+			a = pt[1];
+			c = pt[2];
+			break;
+		}
+
+		case 32: {
+			const uint32_t *pt = (const uint32_t *) templ;
+			v = pt[0];
+			a = pt[1];
+			c = pt[2];
+			break;
+		}
+
+		default:
+			break;
+	}
+
+	if (v) {
+		rv.vars    = v;
+		rv.addl    = a;
+		rv.clauses = c;
+	}
+
+	return rv;
+}
+
+
+//--------------------------------------
+static inline int valid_template_vars(const struct SAT_Summary *pv)
+{
+	return (pv && pv->vars);
+}
+#endif    //=================================================================
+
+
 //----------------------------------------------------------------------------
 int main(int argc, char **argv)
 {
@@ -3329,6 +3645,52 @@ int main(int argc, char **argv)
 
 	memset(&db,   0, sizeof(db));
 	memset(&psat, 0, sizeof(psat));
+
+#if defined(CNF_LT_TEMPLATE_H__)
+	if (getenv("TEMPLATE_LT")) {
+		uint64_t rv = cu_readuint(getenv("TEMPLATE_LT"), 0);
+		unsigned int units, offs, limit;
+		char descr[ 256 +1 ] = { 0, };
+		struct SAT_Summary vars;
+		size_t wr;
+
+		if (rv == CU_INVD_UINT64)
+			return cu_reportrc("invalid LT/template", -1);
+
+		if (!rv || (rv > ARRAY_ELEMS(cnf_lt_templ_idx))) 
+			return cu_reportrc("LT/index out of range", -1);
+		limit = rv;
+
+		offs  = cnf_lt_templ_idx[ limit-1 ].offset;
+		units = cnf_lt_templ_idx[ limit-1 ].count;
+
+		if ((offs >= sizeof(cnf_lt_template_bin))    ||
+		    (offs+units > sizeof(cnf_lt_template_bin)))
+			return cu_reportrc("SNH: invalid template entry", -1);
+
+		vars = templ2vars(&(cnf_lt_template_bin[ offs ]), units, 8);
+		if (!valid_template_vars(&vars))
+			return cu_reportrc("SNH: invalid template/vars", -1);
+
+// cu_hexprint("CLAUSES=x", ptempl, tunits);
+{
+char rdescr[ 128 +1 ] = { 0, };
+describe_runs(rdescr, sizeof(rdescr), limit);
+
+snprintf(descr, sizeof(descr), "LESS-THAN(%u/x%02x/%s)->v%u",
+	limit, limit, rdescr, vars.vars+1);
+}
+		wr =  sat_header2mem(scratch, sizeof(scratch), &vars, descr);
+
+		wr += sat_template2mem8(&(scratch[wr]), sizeof(scratch)-wr,
+		         &(cnf_lt_template_bin[ offs ]), units,
+		         NULL, vars.vars, NULL, vars.addl);
+if (wr) {
+	printf("%s", scratch);
+}
+return 0;
+	}
+#endif
 
 #if 1
 	{
@@ -3350,9 +3712,9 @@ int main(int argc, char **argv)
 	}
 #endif
 
-#if defined(CNF_TEMPLATES_H__)
+#if 0 && defined(CNF_TEMPLATES_H__)
 	if (1) {
-		sat_template(1);
+		sat_template();
 		return 0;
 	}
 #endif
