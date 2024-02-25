@@ -8,7 +8,7 @@
 # each new then-best result is reported further to a downstream server
 #
 # assume input is in blank/all-whitespace-separated records
-# TODO: we approximate record bytecount as cost in this demo version
+# TODO: we use record bytecount as cost in this demo version
 # TODO: fetch full record (only tested with all-delivering localhost!)
 #
 # set TARGET=...server...:...port..., or use 'vSERVER' as default
@@ -147,7 +147,6 @@ if __name__ == "__main__":
 	tgt, gTGTSOCKET = socket_open(vSERVER, vPORTout)
 	if (gTGTSOCKET == None):
 		raise ValueError(f"can not connect to server ({tgt})")
-
 
 	with socketserver.TCPServer((vHOST, vPORTin), collector) as server:
 		server.serve_forever()

@@ -3,7 +3,7 @@
 ##--------------------------------------
 ## read CNF from SAT solver. MUST have been constructed such that
 ## variables 1..N are free variables, or top-level outputs. (In other
-## words, assign free inputs first, then top-level outputs, and
+## words, assign free input/s first, then top-level outputs, and
 ## leave intermediate variables at the end of the CNF list.)
 ##
 ## Usage: ... <CNF file> [truth table/file...]
@@ -12,6 +12,19 @@
 ## based on its inputs alone. In those cases, we special-case unsolvable
 ## results if they are consistent with the expected result, so
 ## 'unsolvable' is interpreted as OK if the expected result is False.
+##
+## set 'NORETURN' to accommodate always-true expressions.
+##   certain operations generate always-valid configurations,
+##   and do not produce output (example: 1-of-N). these are tested
+##   by grouping testcases into true/false of variable +1
+##   (since our SAT templating always assigns the result to
+##   the first added variable).
+##   with 'NORETURN' we expect the last input variable to be
+##   the proper return value; we remove it from variables'
+##   list (and verify that the assignment is correct).
+##
+## set 'EVALUATE' to find any offending clause in CNF
+##     'TRACE'    to track progress
 ##
 ## Author: T Visegrady <tamas.visegrady@gmail.com>
 
@@ -78,9 +91,13 @@ def solve(header, template, vars):
 		p.insert(4, str(nrclauses))
 		header = ' '.join(p)
 
-	svr.stdin.write(header.encode('utf8') +b'\n')
-	svr.stdin.write(template.encode('utf8') +b'\n')
-	svr.stdin.write(curr.encode('utf8') +b'\n')
+## TODO: do we have a wrapper for similar array-encoding?
+
+	dimacs =  header.encode('utf8')   +b'\n'
+	dimacs += template.encode('utf8') +b'\n'
+	dimacs += curr.encode('utf8')     +b'\n'
+	##
+	svr.stdin.write(dimacs)
 
 	res = svr.communicate()                       ## returns (stdout, None)
 	r   = res[0].split(b'\n')
@@ -92,12 +109,12 @@ def solve(header, template, vars):
 	if ok == fail:
 		raise ValueError("can not parse SAT solver response")
 
-	return ok
+	return ok, dimacs
 
 
 ##--------------------------------------
 if __name__ == '__main__':
-	seen = 0
+	seen, clauses = 0, []
 
 	if (len(sys.argv) < 2):
 		sys.stderr.write("need CNF file input\n")
@@ -114,7 +131,7 @@ if __name__ == '__main__':
 				## extract header; cnf is all remaining lines
 				## we update header to add our clauses' counts
 
-	cnflines = cnf.split('\n')
+	cnflines = list(c  for c in cnf.split('\n')  if (c != ''))
 	if (cnflines == []) or (cnflines[0][:2] != 'p '):
 		sys.stderr.write(f"ERROR: CNF does not start with header")
 		sys.exit(-1)
@@ -131,16 +148,21 @@ if __name__ == '__main__':
 
 	for l in (l.rstrip('\n') for l in fileinput.input(openhook=
 	                                  fileinput.hook_encoded("utf-8"))):
+		expected = None            ## set to True/False with 'NORETURN'
 
 					## bits(original); vars(+-integer)
 		try:
 			bits = list(int(b) for b in l.split())
-			vars = list((f'{bi+1}' if (b == 1) else  f'-{bi+1}')
+			vars = list((f'{bi+1}' if b  else  f'-{bi+1}')
 			            for bi, b in enumerate(bits))
 		except:
 			continue
 		if not vars:
 			continue
+
+		if 'NORETURN' in os.environ:
+			expected = bits.pop(-1)
+			vp = vars.pop(-1)
 
 		if maxvars != None:
 			minvars = min(minvars, len(vars))
@@ -151,7 +173,10 @@ if __name__ == '__main__':
 
 		seen += 1
 
-		s = solve(header, cnf, vars)
+		if 'TRACE' in os.environ:
+			sys.stderr.write('.')
+
+		s, dimacs = solve(header, cnf, vars)
 
 			## no solution
 			##
@@ -162,33 +187,46 @@ if __name__ == '__main__':
 			## check against expected result. (False there,
 			## with an UNSATISFIABLE report, is interpreted
 			## as OK)
-			##
-		if (s == False):
-			if ('NEVER' in os.environ):
-				if bits[-1] == 0:      ## expected result=False
-					s = True
-			else:
-				if bits[-1]:
-					sys.stdout.write("unexpected failure")
-					sys.stderr.flush()
-		else:
-			if bits[-1] == 0:
-				sys.stdout.write("unexpected success")
-				sys.stderr.flush()
-## TODO: centralized terminate() macro
 
-##
+		expd = len(bits)  if  bits[-1]  else 0      ## >0, var, if True
+
+		if (s == False):
+			if expected == True:
+				sys.stdout.write("mismatch: { bits }\n")
+				sys.stderr.flush()
+			elif expected == False:
+				s = True           ## failed, as expected -> OK
+#			if ('NEVER' in os.environ):
+#				if expd == 0:      ## expected result=False
+#					s = True
+			else:
+				if expd:
+					sys.stdout.write("unexpected failure\n")
+					sys.stderr.flush()
+			sinv = False
+## TODO: list all negative-test conditions
+
+		elif not ('ONLY_OK' in os.environ):    ## flip result variable
+## TODO: do we have a common 0-or-+-index macro?
+			inv = '-' + vars[-1]
+			vars[-1] = inv[2:]  if inv.startswith('--')  else inv
+
+			sinv, dimacs = solve(header, cnf, vars)
+			if sinv != False:
+				sys.stdout.write("unexpected inverted success\n")
+				sys.stderr.flush()
+
+## TODO: centralized terminate() macro
 ## TODO: hardwired nr. of result bits (1)
 
-		if s == False:
+		if (s == False) or (sinv != False):
 			print(f"nr. of combinations: {seen}")
 			print('ERROR: invalid combination:')
 			print(f'  input={ vars }[orig: { bits }]')
 
 			print('===SAT:=============================')
-			print(header)
-			print(cnf)
-			print(vars2cnf(vars))
+			print(dimacs.decode('utf-8').rstrip('\n'))
+			sys.stdout.flush()
 			print('===/SAT=============================')
 			sys.stdout.flush()
 			sys.stderr.flush()
@@ -203,6 +241,6 @@ if __name__ == '__main__':
 				print('...of N...')
 			sys.stdout.flush()
 
-	sys.stderr.write('all verified\n')
+	sys.stderr.write(f'all verified ({ seen })\n')
 	sys.exit(0)
 

@@ -10,14 +10,20 @@ dist*.json
 a
 a1
 packnroute*.txt
+packnroute*.txt.*
 a.*
 a[0-9].*
 p.*
 pnr*.log
+profile*.log
+sch*csv
+sat
+*.sat
 
 ## generated XY-to-distance tables etc.
 distance.c
 distance*.log
+sat.t/
 
 ## compiler output
 *.a
@@ -26,4 +32,7 @@ distance*.log
 *.gcov
 *.gcda
 *.gcno
+ctags
+cscope.out
+tags
 

@@ -25,8 +25,14 @@ DEBUG := 1
 SAT := 1                ## produce SAT solver expression
                         ## note: requires XY-to-distance(time) table
 
-SAT_V := +4             ## nr. of vehicles to consider, relative to
-                        ## rough-estimate minimum (+...)
+			## nr. of vehicles to consider, relative to
+			## rough-estimate minimum (+...)
+			##
+ifeq (,$(SAT_VEHICLES))
+SAT_V := +12
+else
+SAT_V := $(SAT_VEHICLES)
+endif
 
 SAT_DEBUG := 1
 

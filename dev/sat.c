@@ -51,20 +51,35 @@ typedef enum {
 #define  SAT_NR_MAX_BYTES  ((size_t) 8)
 
 typedef enum {
-	SAT_FL_INVERT  = 1,    // OR -> NOR, AND -> NAND etc.
-	SAT_FL_ADD_VAR = 2     // add clause forcing the aggregate variable
+	SAT_FL_INVERT     = 1,  // OR -> NOR, AND -> NAND etc.
+	SAT_FL_ADD_VAR    = 2,  // add clause forcing the aggregate variable
+	SAT_FL_ADD_NEGVAR = 4   // add clause forcing negated aggregate...
 } SAT_Flag_t ;
+//
+#define SAT_FL_MASK  0x07
 
 #define  SAT_CLAUSES_ENOUGH_BYTES  ((unsigned int) 1024)
 #define  SAT_TEMPLTABLE_HDR_UNITS  ((unsigned int) 4)  // per-table header
 #define  SAT_TEMPLHDR_UNITS  ((unsigned int) 4)  // per-template header
-#define  SAT_SIZET_INVD      (~((size_t) 0))
+
+#define  SAT_SIZET_INVD      ((size_t) -1)
+#define  SAT_SIZET_ENOMEM    ((size_t) -2)   // out of memory
+#define  SAT_SIZET_ECOUNT    ((size_t) -3)   // invalid nr. of inputs
+#define  SAT_SIZET_EINTERN   ((size_t) -4)   // (const) tables are inconsistent
+#define  SAT_SIZET_EOUTPUTS  ((size_t) -5)   // inconsistent output definitions
+#define  SAT_SIZET_ETOOSMALL ((size_t) -6)   // insufficient result buffer
+// update valid_sat_size() if adding something here
+
 #define  SAT_UINT_INVD       (~((unsigned int) 0))
 // TODO: specific error-to-size_t mappings
 
 // shared scratch used by examples
 static unsigned char scratch[ 1024 *1024 ];
 
+// recurring pair: array + nr. of elements
+#define  ARRAY_OF(_arr)  _arr, ARRAY_ELEMS(_arr)
+
+#include "imhash.h"
 
 #if !defined(SYS_NO_LMDB)  /*=====  delimiter: LMDB access  ================*/
 /* see www.lmdb.tech/doc/starting.html for API overview  [accessed 2023-04-14]
@@ -591,11 +606,11 @@ static struct PNR_DB *db_release(struct PNR_DB *db)
 #define STC_NR_MAX_BYTES    12
 #define STC_STR_MAX_BYTES  128   /* 'large enough' for any string we format */
 
-#define STC_ADDL_UNITS  ((unsigned int) 10000)  /* grow arrays in such units */
+#define STC_ADDL_UNITS  ((unsigned int) 40000)  /* grow arrays in such units */
 #define STC_STR_UNITS   ((size_t) 1000000)    /* collated string growth size */
 
-
 #define STC_REP_PREFIX         "SAT="
+#define STC_REP_PREFIX_BYTES   ((size_t) 4)
 #define STC_NEWNAME_PREFIX     "NV"
 #define STC_NEWNAME_PFX_BYTES  2
 #define STC_TEXTLN_MAX_BYTES   ((size_t) 1024)     // arbitrary; checked
@@ -613,6 +628,19 @@ typedef enum {
 	STC_R_NO_TAIL      = 0x100   // skip final, terminating newline
 } SatReport_t ;
 
+
+#if 2   /*=====  delimiter: SAT template-to-CNF converter (v2)  ============*/
+#include "cnf-templates.h"
+#include "cnf-lessthan-template.h"
+#include "cnf-neq0-template.h"     // we do not actually use this non-forced
+                                   // version for current schedules
+#include "cnf-neq0forced-template.h"
+#include "cnf-diff-template.h"
+#include "cnf-1ofn-template.h"
+#include "cnf-and-template.h"
+#include "cnf-or-template.h"
+#include "cnf-or1-template.h"
+#endif
 
 /*--------------------------------------
  * 'compact strings'
@@ -673,6 +701,15 @@ struct SatFormat {
 #define SAT_FORMAT0  { {0,}, 0, }
 
 
+// recurring index: nr. of elements allocated; actually used 
+struct SatDynLimits {
+	unsigned int allocd;
+	unsigned int used;
+} ;
+//
+#define SAT_DYNLIMITS_INIT0  { 0, 0, }
+
+
 struct SatStrings {
 	unsigned char *strs;
 	size_t used;              // offset of first available byte
@@ -684,14 +721,54 @@ struct SatStrings {
 #define SAT_STRINGS0  { NULL, 0, 0, }
 
 
+/*--------------------------------------
+ * status update: report additional variables/clauses/etc. just added
+ */
+#define  SAT_MAX_RESULT_VARS  ((unsigned int) 1)
+
+// TODO: merge with SAT_Summary (which no longer carries description)
+
+struct SatAdded {
+	uint32_t result[ SAT_MAX_RESULT_VARS ];   // results of added operation
+	unsigned int rvars;
+
+	unsigned int addvars;     // new (indirect) variables
+	unsigned int clauses;     // new clauses
+} ;
+//
+#define SAT_ADDED_INIT0  { { 0, }, 0, 0, 0, }
+
+
 //--------------------------------------
 struct SAT_Summary {
 	unsigned int vars;
 	unsigned int addl;
 	unsigned int clauses;
+	unsigned int maxcvars;
 } ;
 //
-#define SAT_SUMMARY_INIT0 { 0, 0, 0, }
+#define SAT_SUMMARY_INIT0 { 0, 0, 0, 0, }
+
+
+//--------------------------------------
+struct SatNumbers {
+	int32_t *n;
+	unsigned int allocd;
+	unsigned int used;
+
+	struct SatDynLimits limits;
+} ;
+//
+#define SAT_NUMBERS_INIT0 { NULL, 0, 0, 0, SAT_DYNLIMITS_INIT0, }
+
+
+//--------------------------------------
+struct SatNrRefs {
+	unsigned int *refs;         // (index) (nr.used) pairs, concatenated
+	struct SatDynLimits limits;
+} ;
+//
+#define SAT_NREFS_INIT0 { { 0, }, SAT_DYNLIMITS_INIT0, }
 
 
 //--------------------------------------
@@ -706,13 +783,44 @@ struct SatState {
 	unsigned int c_used;          // nr. of clauses already populated
 	unsigned int c_allocd;
 
-	struct SAT_Summary vinfo;
+	struct SAT_Summary vinfo;   // TODO: collect everything here
+
+	struct SatNumbers ns;       // clauses' numbers, expanded into int lists
+	                            // .used includes clause-terminating 00's
+	unsigned int n_used;        // net used: nr. of nonzero entries in .used
+	unsigned int n_clauses;     // total number of numeric-clauses added
+
+	struct SatNrRefs crefs;     // clause-references into integer list
 
 	unsigned int vars;          // total nr. of variables added
 	unsigned int addvars;       // number of additional, indirect etc.
 	                            // variables
+	unsigned int maxvaridx;     // maximum of any index seen so far
 	unsigned int nzclauses;     // non-comment, non-empty clauses
 } ;
+
+
+/*--------------------------------------
+ * recurring primitive: offset, entries in remaining part of SatNumbers
+ */
+static int32_t *sat_nrs_1st_unused(const struct SatNumbers *pn) ;
+static int32_t *sat_nrs_1st_unused(const struct SatNumbers *pn) ;
+//
+#define  SAT_NR_UNUSED(pn)   sat_nrs_1st_unused(pn), sat_nrs_unused_count(pn)
+
+
+/*--------------------------------------
+ * wrapper struct; collection of related sub-structures
+ * used by all template-to-... conversions
+ */
+struct SatConvert {
+	struct SatAdded    add;   // values actually added
+	struct SAT_Summary vars;  // read from template
+	struct TemplIndex  ix;
+} ;
+/**/
+#define SAT_CONVERT_INIT0  { SAT_ADDED_INIT0, SAT_SUMMARY_INIT0, \
+                             CNF_TEMPLIDX_INIT0, }
 
 
 // 32-bit IDs: store 4-bit prefix for type, 28-bit (packed) integer ID
@@ -730,6 +838,110 @@ struct SatState {
 //
 // if we grow out of these limits, it will be time to move beyond 32-bit
 // hashtables. the 32-bit form fits many nice embeddable ones (as of 2023-04)
+
+static inline int is_valid_sat_size(size_t s) ;
+
+
+#if 1   //-----  delimiter: streaming  ---------------------------------------
+/*--------------------------------------
+ * append (add, abytes) into (res+offs, rbytes-offs)
+ * returns updated offset
+ *
+ * tolerates NULL 'res', which just marks increasing offsets for size queries
+ * in that mode, NULL 'add' is also tolerated; only 'abytes' matters
+ *
+ * passes through error offsets etc., so safe to chain calls
+ * opportunistically 0-terminates written buffer
+ */
+static size_t stream_append(void *res, size_t rbytes, size_t offs,
+                      const void *add, size_t abytes)
+{
+	unsigned char *pr = (unsigned char *) res;
+
+	if UNLIKELY(!is_valid_sat_size(offs))
+		return offs;                              // error pass-through
+
+	if UNLIKELY(!res && add)
+		return SAT_SIZET_INVD;     // non-NULL res implies non-NULL add
+
+	if UNLIKELY((offs > rbytes) || (offs + abytes > rbytes))
+		return SAT_SIZET_ETOOSMALL;
+
+
+	if (res && abytes)
+		memmove(pr +offs, add, abytes);
+
+	offs += abytes;
+
+	if (offs < rbytes)
+		pr[ offs ] = '\0';
+
+	return offs;
+}
+
+
+/*--------------------------------------
+ * tolerates special cases for written buffer/offset:
+ *   - NULL pointer
+ *   - offset indicating an error
+ *
+ * returns 'p' for error-related offsets
+ */
+static const void *ptr_with_offset(const void *p, size_t offset)
+{
+	const unsigned char *r = (const unsigned char *) p;
+
+	return (p && is_valid_sat_size(offset)) ? (r + offset) : p;
+}
+
+
+/*--------------------------------------
+ * remaining size for buffer with known offset
+ * tolerates error-indicating offsets
+ *
+ * returns 0 for insufficient output, or error-related offsets
+ */
+static size_t size_with_offset(size_t rbytes, size_t offset)
+{
+	return (is_valid_sat_size(offset) && (offset < rbytes))
+	        ? (rbytes -offset) : 0;
+}
+
+
+/*--------------------------------------
+ * since we lack templates, here is a size-specialized typesafe 'max()'
+ */
+static inline unsigned int max_uint(unsigned int i, unsigned int j)
+{
+	return (i < j) ? j : i;
+}
+
+#endif   //-----  /delimiter: streaming  -------------------------------------
+
+
+//--------------------------------------
+static inline int is_valid_unsigned_int(unsigned int v)
+{
+	return (v != SAT_UINT_INVD);
+}
+
+
+//--------------------------------------
+static inline int is_valid_sat_size(size_t s)
+{
+	switch (s) {
+	case SAT_SIZET_INVD:
+	case SAT_SIZET_ENOMEM:
+	case SAT_SIZET_ECOUNT:
+	case SAT_SIZET_EINTERN:
+	case SAT_SIZET_ETOOSMALL:
+	case SAT_SIZET_EOUTPUTS:
+		return 0;
+
+	default:
+		return 1;
+	}
+}
 
 
 //--------------------------------------
@@ -939,13 +1151,130 @@ static inline void *sat_strcpy(void *r, size_t rbytes,
 
 
 /*--------------------------------------
+ * return 1-based nr. of elements used (1 == present but unused)
+ *        <0  if reference is NULL
+ */
+static int sat_entries_used(const void *ptr, const struct SatDynLimits *pd)
+{
+	return (ptr && pd) ? ((int) (pd->used +1)) : -1;
+}
+
+
+/*--------------------------------------
+ * ensure at least 'n' unused entries are available
+ * returns newly allocated/reallocated ptr, non-NULL, upon success
+ *         NULL if reallocation fails, or anything inconsistent
+ *
+ * 'src' is NULL, or a previously returned ptr
+ * call with n>0 to avoid undef. behaviour
+ */
+static void *sat_ensure_entries(struct SatDynLimits *pd,
+                                         const void *src,
+                                       unsigned int n, size_t unitbytes)
+{
+	void *r = NULL;
+
+	do {                          // set r; break for any early termination
+	if (unitbytes && pd) {
+		unsigned int after = pd->allocd + STC_ADDL_UNITS;
+
+		if (src && ((pd->used +n) <= pd->allocd)) {     // already fits
+			r = (void *) src;
+			break;
+		}
+
+		r = realloc((void *) src, after * unitbytes);
+		if (r) {
+			unsigned char *start = (unsigned char *) r +
+				pd->used * unitbytes;
+					// first address in newly added region
+			
+			memset(start, 0, (after - pd->used) * unitbytes);
+				// there is no realloc() equivalent of calloc()
+
+			pd->allocd = after;
+		}
+	}
+	} while (0);
+
+	return r;
+}
+
+
+/*--------------------------------------
+ * at least 'n' unused number refs are available in 'ps'
+ * returns 1-based index of first unused entry upon success
+ *
+ * reminder: these entries just stack
+ */
+static int sat_ensure_numrefs(struct SatState *ps, unsigned int n)
+{
+	if (ps) {
+		if (!n)
+			return 0;
+
+// TODO: centralized check for .used <= .allocd etc
+// TODO: centralized n<..max.limit.. etc. checks
+		if (!ps->crefs.refs) {
+			ps->crefs.refs = calloc(STC_ADDL_UNITS,
+			                     sizeof(int32_t) * STC_ADDL_UNITS);
+			if (!ps->crefs.refs)
+				return -1;
+
+			ps->ns.allocd = STC_ADDL_UNITS;
+			ps->ns.used   = 0;
+		}
+
+		ps->crefs.refs = sat_ensure_entries(&( ps->crefs.limits ),
+		                     ps->crefs.refs, n, sizeof(int32_t));
+
+		return sat_entries_used(ps->crefs.refs, &( ps->crefs.limits ));
+	}
+
+	return -1;
+}
+
+
+/*--------------------------------------
+ * at least 'n' unused numbers are available in 'ps'
+ * returns 1-based index of first unused entry upon success
+ */
+static int sat_ensure_numbers(struct SatState *ps, unsigned int n)
+{
+	if (ps) {
+		if (!n)
+			return 0;
+
+// TODO: centralized check for .used <= .allocd etc
+// TODO: centralized n<..max.limit.. etc. checks
+// TODO: centralized init-from-NULL
+		if (!ps->ns.n) {
+			ps->ns.n = calloc(STC_ADDL_UNITS,
+			                  sizeof(int32_t) * STC_ADDL_UNITS);
+			if (!ps->ns.n)
+				return -1;
+			ps->ns.allocd = STC_ADDL_UNITS;
+			ps->ns.used   = 0;
+		}
+
+		ps->ns.n = sat_ensure_entries(&( ps->ns.limits ),
+		                      ps->ns.n, n, sizeof(int32_t));
+
+		return sat_entries_used(ps->ns.n, &( ps->ns.limits ));
+	}
+
+	return -1;
+}
+
+
+/*--------------------------------------
  * at least 'n' clauses are available in 'ps'
  */
 static int sat_ensure_clauses(struct SatState *ps, unsigned int n)
 {
 	if (ps && n) {
 // TODO: centralized check for .used <= .allocd etc
-
+// TODO: centralized n<..max.limit.. etc. checks
 		if (!ps->c) {
 			ps->c = calloc(STC_ADDL_UNITS,
 				sizeof(struct SatClause) * STC_ADDL_UNITS);
@@ -957,11 +1286,10 @@ static int sat_ensure_clauses(struct SatState *ps, unsigned int n)
 
 		if ((ps->c_used +n) > ps->c_allocd) {
 			unsigned int after = ps->c_allocd + STC_ADDL_UNITS;
-
 			ps->c = realloc(ps->c,
 			                 after*sizeof(struct SatClause));
 			if (!ps->c)
-				return -1;
+				return -2;
 // TODO: add tmp pointer, even if we do not care about out-of-mem state
 
 				// why is there no calloc()-equivalent realloc?
@@ -1199,14 +1527,25 @@ static int sat_fmt_append_u64(struct SatFormat *pf, uint64_t v)
 
 /*--------------------------------------
  * is this a valid, 'non-empty' SAT state, with non-empty, and
- * valid-looking allocated/used limts?
+ * valid-looking allocated/used limits?
+ *
+ * note: reports NULL strings as (not yet) valid
  */
 static inline int has_valid_strings(const struct SatState *ps)
 {
-	if (!ps || !ps->s.strs)
-		return 0;
+	return (ps && ps->s.strs && (ps->s.used <= ps->s.allocd));
+}
 
-	return (ps->s.used <= ps->s.allocd);
+
+/*--------------------------------------
+ * is this a valid, 'non-empty' SAT state, with non-empty, and
+ * valid-looking allocated/used limits?
+ *
+ * note: reports NULL strings as (not yet) valid
+ */
+static inline int has_valid_numbers(const struct SatState *ps)
+{
+	return (ps && ps->ns.n && (ps->ns.used <= ps->ns.allocd));
 }
 
 
@@ -1371,10 +1710,138 @@ static unsigned int sat_new_var(struct SatName *name,
 }
 
 
+/*---------------------------------
+ * returns updated value
+ */
+static unsigned int sat_update_maxidx(struct SatState *ps)
+{
+	if (ps) {
+		ps->maxvaridx = max_uint(ps->vars +ps->addvars, ps->maxvaridx);
+
+// TODO: sanity check
+	}
+
+	return 0;
+}
+
+
+/*---------------------------------
+ * assign new variable numbers [all consecutive]; expect n>0
+ *
+ * returns >0  upon success: index of first just-added variable
+ *          0  if anything failed
+ *
+ * TODO: centralized overrun checking
+ */
+static uint64_t sat_next_vars(struct SatState *ps, unsigned int n)
+{
+	if (ps && n && (ps->addvars +n > ps->addvars)) {
+		ps->addvars += n;
+
+		sat_update_maxidx(ps);
+
+		return ps->maxvaridx;
+	}
+
+	return 0;
+}
+
+
+/*---------------------------------
+ * assign new variable number
+ * returns 0  if anything failed
+ */
+static uint64_t sat_next_var(struct SatState *ps)
+{
+	return sat_next_vars(ps, 1);
+}
+
+
+/*--------------------------------------
+ * TODO: is there a state machine (precedence rules) around these fields?
+ */
+static unsigned int sat_next_var_index(const struct SatState *ps)
+{
+	return ps ? (ps->vars + ps->addvars + 1) : 0;
+}
+
+
+//---------------------------------
+static unsigned int sat_add_result(struct SatAdded *pa, uint32_t response) ;
+
+static inline
+struct SatState *sat_state_add(struct SatState *ps,
+                                  unsigned int vars,
+                                  unsigned int addl,
+                                  unsigned int clauses) ;
+
+
+/*---------------------------------
+ * assign new variable number for result, unless it has been predefined
+ * appends/registers to 'pa' as a response if non-NULL
+ *
+ * returns >0  final index, upon success
+ *          0  if anything failed
+ */
+static uint64_t sat_register_result(struct SatState *ps,
+	                            struct SatAdded *pa,
+                                           uint32_t ret)
+{
+	ret = ret ? ret : (ps ? sat_next_vars(ps, 1) : 0);
+
+	if (pa && ps && ret) {
+		if (!sat_add_result(pa, ret))
+			ret = 0;
+	}
+
+	return ret;
+}
+
+
+/*---------------------------------
+ * register newly added variables and clauses' count to 'ps'
+ * ret. value provided only to allow call chaining
+ */
+static int sat_register_additions(struct SatState *ps,
+                            const struct SatAdded *pa)
+{
+	if (ps && pa) {                              // TODO: valid_additions()
+		sat_state_add(ps, 0, pa->addvars, pa->clauses);
+		return 1;
+	}
+
+	return 0;
+}
+
+
+/*---------------------------------
+ * register new variables' and clauses' count; also assigns
+ * new variable index for return value (if not yet defined with ret>0)
+ *
+ * returns >0 if successful: final return index
+ *         0  if anything failed
+ */
+static uint64_t sat_register_news(struct SatState *ps,
+	                          struct SatAdded *pa,
+                                         uint32_t ret)
+{
+	if (ps && pa) {
+		ret = sat_register_result(ps, pa, ret);
+
+		if (!sat_register_additions(ps, pa) || !ret)
+			ret = 0;
+
+		return ret;
+	}
+
+	return 0;
+}
+
+
 #if 1    /*-----  delimiter: SAT/CNF-construction primitives  --------------*/
 /* register +incr clauses (all functional)
  */
-static inline void sat_register_clauses(struct SatState *ps, unsigned int incr)
+static void sat_register_clauses(struct SatState *ps, unsigned int incr)
 {
 	if (ps && incr) {
 		ps->c_used    += incr;
@@ -1642,7 +2109,7 @@ static unsigned int sat_lt(struct SatName *name,
 // RRR
 (void) idx;
 (void) pc;
-	
+
 
 //	pc  = sat_add_clauses(ps, &idx, an+1);
 //	if (!pc)
@@ -1768,6 +2235,24 @@ static unsigned int sat_neq_or0(struct SatName *name,
 /*--------------------------------------
  * common sanity check for array-input, N+1-clause functions (n-plus-1 -> np1)
  */
+static unsigned int valid_sat_params(const struct SatState *ps)
+{
+	if (!ps)
+		return 0;
+
+	if (ps->s.strs && !has_valid_strings(ps))
+		return 0;
+
+	if (ps->ns.n   && !has_valid_numbers(ps))
+		return 0;
+
+	return 1;
+}
+
+
+/*--------------------------------------
+ * common sanity check for array-input, N+1-clause functions (n-plus-1 -> np1)
+ */
 static unsigned int
 valid_np1_params(const struct SatName *name,
                 const struct SatState *ps,
@@ -1776,7 +2261,10 @@ valid_np1_params(const struct SatName *name,
 {
 	unsigned int i;
 
-	if (!ps || !a || (!name && !r))
+	if (!valid_sat_params(ps))
+		return 0;
+
+	if (!a || (!name && !r))
 		return 0;
 
 	if (an+1 >= STC_CLS_MAX_ELEMS)
@@ -2240,11 +2728,11 @@ static unsigned int sat_1ofn_prod_pq(unsigned int *q, unsigned int n)
 
 	} else if ((p + 1) * (p + 1) >= n) {
 		++p;
-		resq = p; 
+		resq = p;
 
 	} else if ((p + 1) * (p + 2) >= n) {
 		++p;
-		resq = p+1; 
+		resq = p+1;
 	} else {
 		p = 0;                // sort-of-assert
 	}
@@ -2463,14 +2951,14 @@ def satsolv_1ofn_2prod(sat, vars, result=None, force=False, allow0=False):
 					## variables (if N < P*Q)
 
 	if True:
-		print(f'## P=1-of-{p} x Q=1-of-{q}')
-		print(f'## VARS(P)[{ len(pvars) }]={ pvars }')
-		print(f'## VARS(Q)[{ len(qvars) }]={ qvars }')
+		printf(f'## P=1-of-{p} x Q=1-of-{q}')
+		printf(f'## VARS(P)[{ len(pvars) }]={ pvars }')
+		printf(f'## VARS(Q)[{ len(qvars) }]={ qvars }')
 
 	pv, pnvars, pcls, _ = satsolv_1ofn_2prod(sat, pvars, allow0=allow0)
 	qv, qnvars, qcls, _ = satsolv_1ofn_2prod(sat, qvars, allow0=allow0)
-	print(f'## VAR.P={ pv } [{ len(pcls) }] ', pcls)
-	print(f'## VAR.Q={ qv } [{ len(qcls) }] ', qcls)
+	printf(f'## VAR.P={ pv } [{ len(pcls) }] ', pcls)
+	printf(f'## VAR.Q={ qv } [{ len(qcls) }] ', qcls)
 
 	cls.extend(pcls)
 	cls.extend(qcls)
@@ -2496,11 +2984,11 @@ def satsolv_1ofn_2prod(sat, vars, result=None, force=False, allow0=False):
 	if force:
 		cls.append(f'{ result }')   ## 0/1-of-N must hold at this level
 
-	print(f'## ADDED.VARS=+{ satsolv_nr_of_added_vars(sat) - nvars_orig }')
+	printf(f'## ADDED.VARS=+{ satsolv_nr_of_added_vars(sat) - nvars_orig }')
 		##
 	if nvars_after > nvars_orig:
 		vlist = ", ".join(sat["vars"][ nvars_orig:nvars_after ])
-		print(f'## ADDED.VARS=[{ vlist }]')
+		printf(f'## ADDED.VARS=[{ vlist }]')
 
 	return result, [], cls, comm
 #endif   // /product-based 1-of-N decoder
@@ -2675,7 +3163,8 @@ static unsigned int sat_start_comment(struct SatFormat *fmt)
 
 
 /*----------------------------------------------------------------------------
- * 'verbose' is bitmask, see SatReport_t for bits
+ * 'mode' is bitmask, see SatReport_t for bits
+ * see sat_format_int_clauses() for numeric-only form
  *
  * note: DB access may need to update context etc. in 'ps', so not constant
  */
@@ -2685,6 +3174,9 @@ static int sat_print_clauses(struct SatState *ps, uint32_t mode)
 	struct SatFormat fmt = SAT_FORMAT0;
 	unsigned int c, v, nzclauses = 0;
 
+// TODO: now we have valid_params valid_sat_params();
+// factor out + point to that
+
 	if (!has_valid_strings(ps) || !has_valid_clauses(ps) ||
 	    !has_valid_comments(ps))
 		return 0;
@@ -2693,7 +3185,8 @@ static int sat_print_clauses(struct SatState *ps, uint32_t mode)
 		if (STC_R_EMBED & mode)
 			printf("%s", STC_REP_PREFIX);
 
-		printf("p cnf %u %u\n", ps->vars +ps->addvars, ps->nzclauses);
+		printf("p cnf %u %u\n",
+		       ps->vars +ps->addvars, ps->nzclauses);
 	}
 
 	for (c=0; c<ps->c_used; ++c) {
@@ -2808,12 +3301,89 @@ static int sat_print_clauses(struct SatState *ps, uint32_t mode)
 
 
 //--------------------------------------
+static size_t cnf_struct2dimacs(char *res, size_t rbytes,
+	     const struct SatNumbers *pc) ;
+
+
+/*----------------------------------------------------------------------------
+ * format all registered clauses; output DIMACS
+ * numeric-ID equivalent of sat_print_clauses()
+ *
+ * returns nr. of bytes written; size query with NULL 'res'
+ *
+ * 'mode' is bitmask, see SatReport_t for bits
+ */
+static size_t sat_format_int_clauses(void *res,  size_t rbytes,
+                    const struct SatState *ps, uint32_t mode)
+{
+//	unsigned char *pr = (unsigned char *) res;
+	size_t wr = 0;
+
+	if (!ps)
+		return SAT_SIZET_INVD;
+
+	if (!(STC_R_NOFRAME & mode)) {
+		if (STC_R_EMBED & mode) {
+			wr = stream_append(res, rbytes, wr,
+			            STC_REP_PREFIX, STC_REP_PREFIX_BYTES);
+		}
+
+// TODO: append-to-stream macros
+			// header: "p cnf <...variables...> <...clauses...>"
+
+		wr += snprintf((void *) ptr_with_offset(res, wr),
+		               size_with_offset(rbytes, wr),
+		               "p cnf %u %u\n",
+		               ps->maxvaridx, ps->n_clauses);
+	}
+
+// comments, if we handled them, would come here
+
+	wr = cnf_struct2dimacs((char *) ptr_with_offset(res, wr),
+		               size_with_offset(rbytes, wr), &(ps->ns));
+
+	MARK_UNUSED(mode);
+
+	return wr;
+}
+
+
+/*--------------------------------------
+ * does not release struct, just anything it references
+ */
+static void sat_numberrefs_dispose(struct SatNrRefs *pr)
+{
+	if (pr) {
+		free(pr->refs);
+
+		memset(pr, 0, sizeof(*pr));
+	}
+}
+
+
+/*--------------------------------------
+ * does not release struct, just anything it references
+ */
+static void sat_numbers_dispose(struct SatNumbers *pn)
+{
+	if (pn) {
+		free(pn->n);
+
+		memset(pn, 0, sizeof(*pn));
+	}
+}
+
+
+//--------------------------------------
 static void sat_dispose(struct SatState *ps)
 {
 	if (ps) {
 		free(ps->comments.strs);
 		free(ps->s.strs);
 		free(ps->c);
+
+		sat_numbers_dispose   (&( ps->ns    ));
+		sat_numberrefs_dispose(&( ps->crefs ));
 
 		memset(ps, 0, sizeof(*ps));
 	}
@@ -2822,6 +3392,7 @@ static void sat_dispose(struct SatState *ps)
 #endif   /*=====  !delimiter: SAT converter  ===============================*/
 
 
+#if 0   /*=====  delimiter: SAT template-to-CNF converter (v1)  ============*/
 //--------------------------------------
 static size_t sat_header2mem(void *res,    size_t rbytes,
          const struct SAT_Summary *ps, const char *descr)
@@ -2844,7 +3415,6 @@ static size_t sat_header2mem(void *res,    size_t rbytes,
 }
 
 
-#if 0   /*=====  delimiter: SAT template-to-CNF converter (v1)  ============*/
 // we assume there will be one section per primitive
 //
 
@@ -3062,7 +3632,7 @@ static size_t sat_1ofn_template2mem(void *res, size_t rbytes,
 	uint32_t vmask, neg, is_added;
 	unsigned int cls = 0;
 
-	if (!sat_ulist_init(&clauses, &(sat_templ_1ofn[ idx ])))	
+	if (!sat_ulist_init(&clauses, &(sat_templ_1ofn[ idx ])))
 		return 0;
 
 	sat_ulist_advance(&clauses, CNF_TEMPLATEHDR_ELEMS);
@@ -3166,10 +3736,51 @@ static size_t sat_template(void)
 #endif   /*=====  !delimiter: SAT template-to-CNF converter  ===============*/
 
 
-#if 2   /*=====  delimiter: SAT template-to-CNF converter (v2)  ============*/
-#include "cnf-templates.h"
-#include "cnf-lessthan-template.h"
-#endif
+/*--------------------------------------
+ * see also sat_state_init0(), the typical constructor
+ */
+static inline
+struct SatState *sat_state_add(struct SatState *ps,
+                                  unsigned int vars,
+                                  unsigned int addl,
+                                  unsigned int clauses)
+{
+	if (ps) {
+		ps->vars      += vars;
+		ps->addvars   += addl;
+		ps->n_clauses += clauses;   // TODO: canonical variable
+		sat_update_maxidx(ps);
+
+// TODO: final rules on varidx/add-var-idx stacking
+	}
+
+	return ps;
+}
+
+
+//--------------------------------------
+static struct SatState *sat_state_init0(struct SatState *ps,
+                                           unsigned int inputs)
+{
+	if (ps) {
+		memset(ps, 0, sizeof(*ps));
+
+		ps->vars      = inputs;
+		ps->maxvaridx = inputs;
+	}
+
+	return ps;
+}
+
+
+/*--------------------------------------
+ * number of total elements in worst-case clause collection (across all algs),
+ * including any in-band 0 entries, for all clauses of any specific size
+ *
+ * build-asserted for consistency, see cnf__assertions()
+ */
+#define  SAT_MAX_CLSS_ELEMS  ((unsigned int) 494)
+
 
 /* input and additional variables are polymorphic:
  *     non-NULL base[vcount]  -- unsigned int []; index of all inputs
@@ -3182,81 +3793,271 @@ static size_t sat_template(void)
 
 
 /*--------------------------------------
+ * all clauses for any template, incl. any intermediate 0's terminating clause
+ * worst-case size MUST fit all templates
+ *
+ * expect these to fit the stack on all non-embedded platforms
+ */
+struct NumericClauses {
+	uint32_t vars[ SAT_MAX_CLSS_ELEMS ];
+	unsigned int used;
+} ;
+/**/
+#define  SAT_NUM_CLAUSES_INIT0  { { 0, }, 0 }
+
+
+/*--------------------------------------
+ */
+struct TemplateBits {
+	uint32_t negative;
+	uint32_t addl_var;
+	uint32_t varmask;
+} ;
+
+
+#if 0
+/*--------------------------------------
+ * return sign etc. expanded variable from template
+ * - base[ vcount ] is list of arbitrary inputs
+ * - addl .. addl+acount-1  is list of indirect/added variables (always
+ *                          consecutive range)
+ *
  * 'tvar' is template variable, incl. any marker bits
+ *
+ * addl[ acount ] is range of indirect/added variables (always a
+ * consecutive range)
  *
  * return index belonging to actual variable reference (not 0)
  *        0     if anything is inconsistent
  */
-static int varidx8(const unsigned int *base, unsigned int vcount,
-                   const unsigned int *addl, unsigned int acount,
-                              uint8_t tvar)
+static int32_t varidx8(const int32_t *base, unsigned int vcount,
+                            uint32_t addl,  unsigned int acount,
+                            uint32_t tvar,
+           const struct TemplateBits *pmarkers)
 {
-	int rc = 0;
+	int32_t rc = 0;
 
-	if (tvar & CNF_VAR_MASK8) {
-		unsigned int v = tvar & CNF_VAR_MASK8;                  // 1..N
+// printf("       .%" PRIx32 " %u\n", tvar, acount);
+	if (pmarkers && (tvar & pmarkers->varmask)) {
+		unsigned int v = tvar & pmarkers->varmask;              // 1..N
 
-		if (tvar & CNF_VAR_IS_ADDED8) {
+		if (tvar & pmarkers->addl_var) {
 			if (v <= acount) {
-				rc = addl ? addl[ v-1 ] : (vcount + v);
+				rc = addl
+				     ? (int32_t) (addl +v -1)
+				     : (int32_t) (vcount + v);
 			}
+// TODO: acount+vcount check: template MUST NOT reference other variables
 
 		} else if (v <= vcount) {
-			rc = base ? base[ v-1 ] : v;
+			rc = base ? (int32_t) base[ v-1 ] : (int32_t) v;
 		}
 
-		if (rc && (tvar & CNF_VAR_IS_NEGATED8))
+		if (rc && (tvar & pmarkers->negative))
 			rc = -rc;
+// printf("       ? %d\n", (int) rc);
 	}
 
 	return rc;
 }
 
 
-/*--------------------------------------
- * generalized form of sat_v2template2mem_16()
- */
-static size_t sat_template2mem8(void *res,          size_t rbytes,
-                     const uint8_t *ptempl, unsigned int tunits,
-                const unsigned int *base,   unsigned int vcount,
-                const unsigned int *addl,   unsigned int acount)
+//--------------------------------------
+static struct TemplateBits unit2markerbits(unsigned int unitbits)
 {
+	struct TemplateBits tb = { 0, };
+
+	switch (unitbits) {
+		case 8:
+			tb.negative    = 0x80;
+			tb.addl_var    = 0x40;
+			tb.varmask     = 0x3f;
+			break;
+		case 16:
+			tb.negative    = 0x8000;
+			tb.addl_var    = 0x4000;
+			tb.varmask     = 0x3fff;
+			break;
+		case 32:
+			tb.negative    = 0x80000000;
+			tb.addl_var    = 0x40000000;
+			tb.varmask     = 0x3fffffff;
+			break;
+	}
+
+	return tb;
+}
+#endif   // 0
+
+
+/*--------------------------------------
+ * read uint<...>_t sized unit
+ *
+ * returns ~0 for unsupported configurations, which callers are
+ * expected to reject
+ */
+static inline
+uint32_t mem2uint(const void *p, unsigned int offset, unsigned int bits)
+{
+	switch (p ? bits : 0) {
+		case 8: {
+			const unsigned char *pc = (const unsigned char *) p;
+			return pc[ offset ];
+		}
+
+		case 16: {
+			const uint16_t *pc = (const uint16_t *) p;
+			return pc[ offset ];
+		}
+
+		case 32: {
+			const uint32_t *pc = (const uint32_t *) p;
+			return pc[ offset ];
+		}
+
+		default:
+			return ~((uint32_t) 0);
+	}
+}
+
+
+/*-------------------------------------- 
+ * added variables are auto-assigned, from a given base
+ * _result_ may be a known variable (such as in a compound operation),
+ *
+ *
+ * V=2, |A|=2, A0=100   (2 inputs, 2 additional variables, start idx is 100)
+ *
+ * 1  2  3  4  ->  V[0]  V[1]  100  101      if result = 0
+ *             ->  V[0]  V[1]  666  100      if result = 666
+ */
+
+
+/*-------------------------------------- 
+ * construct int32[] from template and input params
+ * result SHOULD fit; callers need to pre-expand. there is a fixed limit,
+ * see SAT_MAX_CLSS_ELEMS, and structs defined to contain it.
+ *
+ * maps vars[] || (result | addl) || addl+1 ... as variables
+ *   - 'result' >0 indicates a preallocated result, which is then taken
+ *     instead of addl
+ *   - further entries follow addl+1...
+ *
+ * returns 0 if result does not fit, or other error (not a valid template)
+ *        _INVD if template is invalid
+ *        >0 otherwise: nr. of ints written +1 (we may have empty templates)
+ *
+ * returns nr. of entries written to start of (res, elems)
+ * one of the UINT... errors otherwise
+ *
+ * 'pa' updated with nr. of clauses added; max(index) of added vars, if non-NULL
+ *
+ * writes 1-based index of erroneous entry to res[0] upon failure
+ */
+static unsigned int
+sat_template2ints(int32_t *res,    unsigned int elems,
+          struct SatAdded *pa,
+                const int *templ,  unsigned int tunits,
+            const int32_t *vars,   unsigned int vcount,
+                  int32_t result,
+                 uint32_t addl,    unsigned int acount)
+{
+	struct SatAdded add = SAT_ADDED_INIT0;
+	unsigned int i, wr = 0;
+
+	if (!res || !elems || !templ || !tunits || !vars || !vcount)
+		return SAT_UINT_INVD;
+
+	if (acount +vcount < acount)
+		return SAT_UINT_INVD;     // sanity check: sane ranges, no wrap
+		                          // TODO: document; assert no overflow
+
+	for (i=0; (i < tunits) && ~wr; ++i) {
+		int vabs, neg, var = templ[ i ];
+
+		neg  = (var < 0);
+		vabs = abs(var);
+
+		if (wr >= elems) {                       // result does not fit
+			res[0] = 1+i;
+			wr = 0;
+			break;
+
+		} else if ((unsigned int) vabs > acount+vcount) {   
+				// SNH: template references beyond valid range
+			wr = SAT_UINT_INVD;
+			res[0] = 1+i;
+			break;
+
+		} else if (!vabs) {
+			var = 0;           // was already; just mark explicitly
+			add.clauses++;
+
+		} else if ((unsigned int) vabs <= vcount) {   // input variable ref
+			var = vars[ vabs -1 ];
+
+		} else if (((unsigned int) vabs == vcount+1) && result) {
+			var = result;         // added-var: result
+
+		} else {                      // added-variable ref, not result
+			var = (vabs - vcount) + addl -1;
+			add.addvars = max_uint(var, add.addvars);
+		}
+
+		res[ wr ] = neg ? -var : var;
+		++wr;
+	}
+
+	if (is_valid_unsigned_int(wr)) {
+		if (pa)
+			*pa = add;
+	}
+
+	return wr;
+}
+
+
+#if 0
+/*--------------------------------------
+ * generalized form of sat_v2template2mem_16() 
+ *
+ * see cnf_or(), where we replicated the main core
+ */
+static size_t sat_template2mem8(void *res, size_t rbytes,
+                     const uint8_t *ptempl,
+                      unsigned int tunits,
+                      unsigned int unitbits,
+                const unsigned int *base, unsigned int vcount,
+                const unsigned int *addl, unsigned int acount)
+{
+	struct TemplateBits markers = unit2markerbits(8);
 	unsigned char *pr = (unsigned char *) res;
-	unsigned int i, cls = 0;
+	unsigned int i, cls = 0, toffs = 0;
 	size_t rv = 0;
 
 	if (!ptempl || (tunits < SAT_TEMPLHDR_UNITS))
 		return SAT_SIZET_INVD;
 
-	ptempl += SAT_TEMPLHDR_UNITS;
-	tunits -= SAT_TEMPLHDR_UNITS;           // (ptempl, tunits) are clauses
+	toffs  += SAT_TEMPLHDR_UNITS;
+	tunits -= SAT_TEMPLHDR_UNITS;                  // (tunits) clauses left
 
 	{
 	char clstr[ SAT_CLAUSES_ENOUGH_BYTES +1 ] = { 0, };
-	unsigned int end_next = 0;
 	size_t cb = 0;
 
 	for (i=0; (i<tunits) && ~cb; ++i) {
-		int v = ptempl[i];
+		int v, v0 = mem2uint(ptempl, toffs+i, unitbits);
 		size_t wr = 0;
 
-		if (!v) {
-			if (end_next) {
-				end_next = 0;
-				continue;
-			} else {
-// TODO: inconsistent markers
-printf("INCONSISTENT\n");
-			}
-			end_next = 0;
-		}
+// TODO: 666 as fixed addl->...int... replacement
+(void) addl;
+(void) base;
+// TODO: placeholder entry param
+		v = varidx8(NULL, vcount, 666, acount, v0, &markers);
+						// v == 0  here if clause ends
 
-		v = varidx8(base, vcount, addl, acount, v);
-
-//		printf("  [%u/%u]x%" PRIx8 "\n", i, tunits, ptempl[i]);
-
-		wr = snprintf(&(clstr[ cb ]), sizeof(clstr)-cb, "%s%d",
-		              cb ? " " : "", v);
+		wr = snprintf(&(clstr[ cb ]), sizeof(clstr)-cb, "%s" "%d" "%s",
+		              cb ? " " : "", v, v ? "" : "\n");
 
 		if (wr >= sizeof(clstr) -cb) {                   // did not fit
 			rv = SAT_SIZET_INVD;
@@ -3264,21 +4065,11 @@ printf("INCONSISTENT\n");
 		}
 		cb += wr;
 
-		end_next = (ptempl[i] & CNF_VAR_IS_CLAUSE_END8);
-
 // TODO: memmove()-based in-stream append
-		if (ptempl[i] & CNF_VAR_IS_CLAUSE_END8) {
-			wr = snprintf(&(clstr[cb]), sizeof(clstr)-cb, " 0\n");
 // printf("END[%zu]=(%s)\n", cb, (const char *) clstr);
-
-			if (wr >= sizeof(clstr) -cb) {          // did not fit
-				rv = SAT_SIZET_INVD;
-				break;
-			}
-			cb += wr;
-
 //			printf("CLAUSE[%u]=(%s)\n", cls+1, clstr);
 
+		if (!v) {
 			if (pr) {
 				if (cb <= rbytes - rv) {
 					memmove(pr+rv, clstr, cb);
@@ -3290,7 +4081,6 @@ printf("INCONSISTENT\n");
 					break;
 				}
 			}
-
 			cb = 0;
 			++cls;
 		}
@@ -3299,6 +4089,7 @@ printf("INCONSISTENT\n");
 
 	return rv;
 }
+#endif
 
 
 //--------------------------------------
@@ -3310,6 +4101,7 @@ printf("INCONSISTENT\n");
 // 'idx' selects 0-based entry from 'tidx' which references templ[]
 //
 static size_t sat_template_arr2mem(void *res,    size_t rbytes,
+                  struct NumericClauses *pn,
                      struct SAT_Summary *psum,
                            unsigned int idx,
                 const struct TemplIndex *tidx, unsigned int tielems,
@@ -3318,8 +4110,10 @@ static size_t sat_template_arr2mem(void *res,    size_t rbytes,
 {
 (void) res;
 (void) rbytes;
-	if (!tidx || !tielems || !templ || !tunits)
+	if (!tidx || !tielems || !templ || !tunits || !pn)
 		return 0;
+
+	*pn = (struct NumericClauses) SAT_NUM_CLAUSES_INIT0;
 
 	if (unitbits != 8)
 		return 0;
@@ -3335,7 +4129,7 @@ static size_t sat_template_arr2mem(void *res,    size_t rbytes,
 }
 
 
-#if 2   /*=====  delimiter: SAT template-to-CNF converter (v2)  ============*/
+#if 0   /*=====  delimiter: SAT template-to-CNF converter (v2)  ============*/
 #include "1ofn-n128-v2template.c"
 
 /* condensed, v2 templates:
@@ -3371,8 +4165,8 @@ static size_t sat_template_arr2mem(void *res,    size_t rbytes,
  *                              additional variable (1) -> global (3)
  * ...
  * } ;
- * 
- * 
+ *
+ *
  * // index list
  * static const struct {
  *      unsigned int offset;
@@ -3508,8 +4302,506 @@ static size_t sat_v2template2mem(void *res,        size_t rbytes,
 		return 0;
 	}
 }
-
 #endif   /*=====  !delimiter: SAT template-to-CNF converter  ===============*/
+
+
+#if 2   /*=====  delimiter: CNF-constructor library functions  =============*/
+// these are the rough equivalents of sat_or() etc., constructing directly
+// to output buffers
+//
+// replacing dedicated AND/OR constructions with generic template-to-X
+// conversion
+
+// any offline global limit etc. comparison would come here
+static inline void cnf__assertions(void)
+{
+#if defined(CNF_OR_MAX_ELEMS__)
+	BUILD_ASSERT(CNF_OR_MAX_ELEMS__ <= SAT_MAX_CLSS_ELEMS);
+#endif
+
+#if defined(CNF_AND_MAX_ELEMS__)
+	BUILD_ASSERT(CNF_AND_MAX_ELEMS__ <= SAT_MAX_CLSS_ELEMS);
+#endif
+
+#if defined(CNF_NEQ0_MAX_ELEMS__)
+	BUILD_ASSERT(CNF_NEQ0_MAX_ELEMS__ <= SAT_MAX_CLSS_ELEMS);
+#endif
+
+#if defined(CNF_LT_MAX_ELEMS)
+	BUILD_ASSERT(CNF_LT_MAX_ELEMS <= SAT_MAX_CLSS_ELEMS);
+#endif
+
+#if defined(CNF_1OFN_MAX_ELEMS)
+	BUILD_ASSERT(CNF_1OFN_MAX_ELEMS <= SAT_MAX_CLSS_ELEMS);
+#endif
+}
+
+
+/*--------------------------------------
+ * checks that nr. of units is header-clean
+ */
+static int is_valid_cnf_templ_index(const struct TemplIndex *pi)
+{
+	return (pi && (pi->offset | pi->count) &&
+	        (pi->count >= SAT_TEMPLHDR_UNITS));
+}
+
+
+/*--------------------------------------
+ * does index 'n' make sense for the (pi, count) table?  if so,
+ * return a valid TemplIndex entry
+ *
+ * 'base' is minimal index which makes sense; corresponds to [0]
+ */
+static struct TemplIndex
+cnf_table2template(const struct TemplIndex *pi, unsigned int count,
+                              unsigned int n,
+                              unsigned int base)
+{
+	struct TemplIndex ix = CNF_TEMPLIDX_INIT0;
+
+	if (pi && count && (n >= base) && ((n -base) < count))
+		ix = pi[ n -base ];
+
+	return ix;
+}
+
+
+/*--------------------------------------
+ * NULL/inconsistent/etc. input reported as 'not within'
+ * returns 1-based index into arr[] if valid
+ *
+ * since we measure tables in units, no 8/16/32-bit polymorphism needed
+ */
+static int is_within_array(const void *arr, unsigned int units,
+              const struct TemplIndex *pt)
+{
+	if (!arr || !units || !pt)
+		return 0;
+
+	if ((pt->offset >= units) || ((pt->offset + pt->count) > units))
+		return 0;
+
+	return 1 + pt->offset;
+}
+
+
+/*--------------------------------------
+ * note: we do not (yet?) cover minimal-template check (-> unit count) here
+ */
+static inline int valid_template_vars(const struct SAT_Summary *ps)
+{
+	return (ps && ps->vars);
+}
+
+
+//--------------------------------------
+static void report_template_vars(const struct SAT_Summary *ps)
+{
+	if (valid_template_vars(ps)) {
+		printf("SAT: %u inputs, +%u variables, %u clauses\n",
+		       ps->vars,
+		       ps->addl,
+		       ps->clauses);
+	}
+}
+
+
+//--------------------------------------
+static void report_template_additions(const struct SatAdded *pa)
+{
+	if (pa) {
+		printf("SAT: +%u variables, +%u clauses\n",
+		       pa->addvars,
+		       pa->clauses);
+	}
+}
+
+//--------------------------------------
+static void report_sat_state(const char *msg, const struct SatState *ps)
+{
+	if (ps) {
+		if (msg)
+			printf("%s\n", msg);
+
+		printf("SAT: %u inputs, +%u variables, %u clauses "
+			"(%u numeric); %u/%u nrs used\n",
+		       ps->vars,
+		       ps->addvars,
+		       ps->c_used,
+		       ps->n_clauses,
+		       ps->ns.used,
+		       ps->ns.allocd);
+	}
+}
+
+
+//--------------------------------------
+static void report_conversion_state(const struct SatConvert *pc)
+{
+	if (pc) {
+		printf("SAT conversion\n");
+		report_template_additions(&( pc->add ));
+
+		printf("template: %u,%u\n", pc->ix.offset, pc->ix.count);
+	}
+}
+
+
+/*--------------------------------------
+ * register 'result' as output [possibly, as one of several]
+ *
+ * returns 0 if anything inconsistent (struct missing, or already registered
+ * conflicting/too many results)
+ */
+static unsigned int sat_add_result(struct SatAdded *pa, uint32_t response)
+{
+	BUILD_ASSERT(ARRAY_ELEMS(pa->result) == 1);
+
+	if (pa && response) {
+		if (!pa->rvars ||
+		    ((pa->rvars == 1) && (pa->result[0] == response)))
+		{
+			pa->result[0] = response;
+			pa->rvars     = 1;
+
+			return pa->rvars;
+		}
+	}
+
+	return 0;
+}
+
+
+/*--------------------------------------
+ * expand numeric list into DIMACS CNF-clause form to start of (res, rbytes)
+ *
+ * returns written byte count, or one of SIZET_E... constants
+ * TODO: use placeholder array; count size with NULL 'res'
+ */
+static size_t cnf_struct2dimacs(char *res, size_t rbytes,
+	     const struct SatNumbers *pc)
+{
+	size_t wr = 0;
+
+	if (pc && res && rbytes) {
+		unsigned int i, line_start = 1;
+
+// TODO: pick direct write-to-stream macros
+// TODO: sync format-to-something macros, since there are several partial ones
+		for (i=0; i<pc->used; ++i) {
+			int curr, v = pc->n[i];
+
+			curr = snprintf(&(res[ wr ]), rbytes - wr, 
+			           "%s" "%d" "%s",
+			           line_start ? "" : " ",
+			           v,
+			           v ? "" : "\n");
+// TODO: auto-terminate (even if we 0-pad each clause)
+
+			if ((size_t) curr >= rbytes-wr) {       // does not fit
+				wr = SAT_SIZET_ETOOSMALL;
+				break;
+			}
+			wr += curr;
+
+			line_start = !v;
+		}
+	}
+
+	return wr;
+}
+	                            // .used includes clause-terminating 00's
+
+
+/*--------------------------------------
+ * returns NULL for any error, incl. allocated-but-full structs
+ */
+static int32_t *sat_nrs_1st_unused(const struct SatNumbers *pn)
+{
+	return (pn && pn->n && (pn->used < pn->allocd))
+	        ? &(pn->n[ pn->used ]) : NULL ;
+}
+
+
+//--------------------------------------
+static unsigned int sat_nrs_unused_count(const struct SatNumbers *pn)
+{
+	return (pn && pn->n && (pn->used < pn->allocd))
+	        ? (pn->allocd - pn->used) : 0 ;
+}
+
+
+//--------------------------------------
+static struct SAT_Summary templ2vars(const void *templ, unsigned int units,
+                                   unsigned int unitbits) ;
+
+static struct SAT_Summary inttempl2vars(const int *templ, unsigned int units) ;
+
+/*--------------------------------------
+ * retrieve and sanity-check template-index entry
+ * !is_valid_cnf_templ_index( ...returned entry... ) if anything fails
+ *
+ * (pi, count) is table; 'n' is current index, 'base' is first index
+ * which makes sense for this table
+ */
+static struct TemplIndex sat_table2idx(const struct TemplIndex *pi,
+                                                  unsigned int count,
+                                                  unsigned int n,
+                                                  unsigned int base)
+{
+	struct TemplIndex ix = CNF_TEMPLIDX_INIT0;
+
+	ix = cnf_table2template(pi, count, n, base);
+
+	if (is_valid_cnf_templ_index(&ix)) {
+		if (ix.count <= SAT_TEMPLHDR_UNITS)
+			ix = (struct TemplIndex) CNF_TEMPLIDX_INIT0;
+	}
+
+	return ix;
+}
+
+
+/*--------------------------------------
+ * common primitive: pick up template for a size-selected instance
+ * of an operation
+ *
+ * sets *pc to struct describing additions (variables etc.) without
+ * updating *ps
+ *
+ * pc->ix points to net clause list within tints[], already stripped
+ * away entry header
+ *
+ * 'tints'    int[] list of clauses
+ * 'pix'      index into 'tints'
+ * 'vcount'   number of input variables
+ * 'base'     lowest reasonable 'vcount'
+ * 'maxelems' worst-case limit of elements used by all claues, incl.
+ *            0-terminating entries
+ */
+static
+size_t template2entry(struct SatState *ps,
+                    struct SatConvert *pc,
+              const struct TemplIndex *pix,   unsigned int ixcount,
+                            const int *tints, unsigned int ticount,
+                         unsigned int vcount, unsigned int base,
+                         unsigned int maxelems)
+{
+	if (!valid_sat_params(ps) || !pc || !pix || !ixcount)
+		return 0;
+
+	*pc = (struct SatConvert) SAT_CONVERT_INIT0;
+
+	pc->ix = sat_table2idx(pix, ixcount, vcount, base);
+
+	if (!is_valid_cnf_templ_index(&( pc->ix )))
+		return cu_reportrc("template/index range", SAT_SIZET_ECOUNT);
+
+	if (!is_within_array(tints, ticount, &( pc->ix )))
+		return cu_reportrc("SNH: bad templ/entry", SAT_SIZET_EINTERN);
+
+// TODO: centralized macro; centralized empty-template handling
+
+	if (pc->ix.count == SAT_TEMPLHDR_UNITS)
+		return 1;
+
+	pc->vars = inttempl2vars(&(tints[ pc->ix.offset ]), pc->ix.count);
+
+	if (!valid_template_vars(&( pc->vars )))
+		return cu_reportrc("SNH: bad template/vars", SAT_SIZET_EINTERN);
+
+// TODO: replicated fields -> merge/deduplicate
+	pc->add.addvars = pc->vars.addl;
+	pc->add.clauses = pc->vars.clauses;
+
+	pc->ix.offset += SAT_TEMPLHDR_UNITS;
+	pc->ix.count  -= SAT_TEMPLHDR_UNITS;         // net clauses, w/o header
+
+	if (sat_ensure_numbers(ps, maxelems) <0)
+		return SAT_SIZET_ENOMEM;
+
+	return 1;
+}
+
+
+/*--------------------------------------
+ * recurring template-to-clause.list construction:
+ *
+ * size_t cnf_...(struct SatState *ps,   -- updated global state
+ *                struct SatAdded *pa,   -- additions in this set of clauses
+ *                       uint32_t ret,   -- ret. value (index), if known
+ *                                       -- TODO: do we ever use negated 'ret'?
+ *                  const int32_t *a, unsigned int an,
+ *                                       -- inputs are a[an]
+ *                   unsigned int flags) ;
+ */
+
+
+/*--------------------------------------
+ * append template of OR(..a[]..) to numeric-clauses list of 'ps'
+ *
+ * 'pa'   updated with full addition context if non-NULL
+ * 'rvar' updated with OR() variable index (>0) if non-NULL
+ * 'ret'  is variable to use if not 0; MUST be already available/reserved
+ */
+static
+size_t cnf_or(struct SatState *ps,
+              struct SatAdded *pa,
+                     uint32_t ret,
+                const int32_t *a, unsigned int an,
+                 unsigned int flags)
+{
+	struct SatConvert cv = SAT_CONVERT_INIT0;
+	struct SatAdded add  = SAT_ADDED_INIT0;
+	unsigned int c;
+	size_t te;
+
+	(void) cnf__assertions();              // reference otherwise-unused fn
+
+	if (!valid_sat_params(ps) || !a)
+		return 0;
+
+	te = template2entry(ps, &cv, ARRAY_OF(cnf_or_templ_ints_idx),
+	                    ARRAY_OF(cnf_or_template_ints), an, 1,
+	                    CNF_OR_MAX_ELEMS__);
+	if (te && is_valid_sat_size(te)) {
+		ret = sat_register_news(ps, &(cv.add), ret);
+		if (!ret)
+			te = SAT_SIZET_ENOMEM;
+	}
+	if (!te || !is_valid_sat_size(te))
+		return te;
+
+	c = sat_template2ints(SAT_NR_UNUSED(&( ps->ns )), &add,
+	                      &(cnf_or_template_ints[ cv.ix.offset ]),
+	                      cv.ix.count, a, an, ret,
+	                      sat_next_var_index(ps), cv.add.addvars);
+	if (is_valid_unsigned_int(c))
+		ps->ns.used += c;
+
+// ...rest...
+(void) flags;
+
+	if (pa)
+		*pa = cv.add;
+
+	return 1;
+}
+
+
+/*--------------------------------------
+ * append template of OR(..a[]..) to numeric-clauses list of 'ps'
+ *
+ * 'pa'   updated with full addition context if non-NULL
+ * 'rvar' updated with OR() variable index (>0) if non-NULL
+ * 'ret'  is variable to use if not 0; MUST be already available/reserved
+ */
+static
+size_t cnf_and(struct SatState *ps,
+               struct SatAdded *pa,
+                      uint32_t ret,
+                 const int32_t *a, unsigned int an,
+                  unsigned int flags)
+{
+	struct SatConvert cv = SAT_CONVERT_INIT0;
+	struct SatAdded add  = SAT_ADDED_INIT0;
+	unsigned int c;
+	size_t te;
+
+	if (!valid_sat_params(ps) || !a)
+		return 0;
+
+	te = template2entry(ps, &cv, ARRAY_OF(cnf_and_templ_ints_idx),
+	                    ARRAY_OF(cnf_and_template_ints), an, 2,
+	                    CNF_AND_MAX_ELEMS__);
+	if (te && is_valid_sat_size(te)) {
+		ret = sat_register_news(ps, &(cv.add), ret);
+		if (!ret)
+			te = SAT_SIZET_ENOMEM;
+	}
+	if (!te || !is_valid_sat_size(te))
+		return te;
+
+// TODO: proper non-redundant accounting; then dispose
+ps->addvars--;
+ps->maxvaridx--;
+sat_update_maxidx(ps);
+
+	c = sat_template2ints(SAT_NR_UNUSED(&( ps->ns )), &add,
+	                      &(cnf_and_template_ints[ cv.ix.offset ]),
+	                      cv.ix.count, a, an, ret,
+	                      sat_next_var_index(ps), cv.add.addvars);
+// ...process add...
+
+	if (is_valid_unsigned_int(c))
+		ps->ns.used += c;
+
+// ...rest...
+(void) flags;
+
+	if (pa)
+		*pa = cv.add;
+
+	return 1;
+}
+
+
+/*--------------------------------------
+ * append template of 1-of-N(..a[]..) to numeric-clauses list of 'ps'
+ *
+ * 'pa'   updated with full addition context if non-NULL
+ * 'rvar' updated with OR() variable index (>0) if non-NULL
+ *
+ * 'ret'  is unused: we only use forced-1-of-N relationships, and do
+ *        not need to return anything. (our templates already incorporate
+ *        the understanding that the global result is True.)
+ */
+static
+size_t cnf_1ofn(struct SatState *ps,
+                struct SatAdded *pa,
+                       uint32_t ret,
+                  const int32_t *a, unsigned int an,
+                   unsigned int flags)
+{
+	struct SatConvert cv = SAT_CONVERT_INIT0;
+	struct SatAdded add  = SAT_ADDED_INIT0;
+	unsigned int c, addbase;
+	size_t te;
+
+	if (!valid_sat_params(ps) || !a)
+		return 0;
+
+	te = template2entry(ps, &cv, ARRAY_OF(cnf_1ofn_templ_ints_idx),
+	                    ARRAY_OF(cnf_1ofn_template_ints), an, 1,
+	                    CNF_OR_MAX_ELEMS__);
+	if (!te || !is_valid_sat_size(te))
+		return te;
+
+// TODO: simplify stacking -> remove call-through fns
+	sat_register_additions(ps, &(cv.add));
+	addbase = ps->vars +1; 
+	ret = 0;                                          // note: no ret.value
+
+	c = sat_template2ints(SAT_NR_UNUSED(&( ps->ns )), &add,
+	                      &(cnf_1ofn_template_ints[ cv.ix.offset ]),
+	                      cv.ix.count, a, an, ret,
+	                      addbase, cv.add.addvars);
+// ...process add...
+	if (is_valid_unsigned_int(c))
+		ps->ns.used += c;
+
+// ...rest...
+(void) flags;
+
+	if (pa)
+		*pa = cv.add;
+
+	return 1;
+}
+
+
+#endif   /*=====  !delimiter: CNF-constructor library functions  ===========*/
 
 
 #if defined(CNF_LT_TEMPLATE_H__)  //=========================================
@@ -3521,6 +4813,7 @@ struct SatVariables {
 #define  SAT_VARIABLES_INIT0  { 0, 0 }
 
 
+#if 0
 // TODO: proper stream-append version
 // right now, assumes fixed 'large enough' 'descr'
 //
@@ -3577,6 +4870,23 @@ static size_t describe_runs(void *descr, size_t dbytes,
 
 	return wr;
 }
+#endif
+
+
+//--------------------------------------
+static struct SAT_Summary inttempl2vars(const int *templ, unsigned int units)
+{
+	struct SAT_Summary rv = SAT_SUMMARY_INIT0;
+
+	if (templ && (units >= SAT_TEMPLTABLE_HDR_UNITS)) {
+		rv.vars     = templ[0];
+		rv.addl     = templ[1];
+		rv.clauses  = templ[2];
+		rv.maxcvars = templ[3];
+	}
+
+	return rv;
+}
 
 
 //--------------------------------------
@@ -3584,7 +4894,7 @@ static struct SAT_Summary templ2vars(const void *templ, unsigned int units,
                                    unsigned int unitbits)
 {
 	struct SAT_Summary rv = SAT_SUMMARY_INIT0;
-	unsigned int v = 0, a, c;
+	unsigned int v = 0, a, c;                     // v>0 if struct is valid
 
 	switch ((templ && (units >= SAT_TEMPLTABLE_HDR_UNITS)) ? unitbits : 0)
 	{
@@ -3624,13 +4934,6 @@ static struct SAT_Summary templ2vars(const void *templ, unsigned int units,
 
 	return rv;
 }
-
-
-//--------------------------------------
-static inline int valid_template_vars(const struct SAT_Summary *pv)
-{
-	return (pv && pv->vars);
-}
 #endif    //=================================================================
 
 
@@ -3646,53 +4949,144 @@ int main(int argc, char **argv)
 	memset(&db,   0, sizeof(db));
 	memset(&psat, 0, sizeof(psat));
 
-#if defined(CNF_LT_TEMPLATE_H__)
-	if (getenv("TEMPLATE_LT")) {
-		uint64_t rv = cu_readuint(getenv("TEMPLATE_LT"), 0);
-		unsigned int units, offs, limit;
+	if (0) {            // reference static fns
+		imh_append(NULL, NULL, NULL, ~0);
+		imh_idx(NULL, ~0);
+		imh_entry(NULL, ~0);
+		imh_main_dispose();
+
+		report_conversion_state(NULL);
+		report_sat_state(NULL, NULL);
+		report_template_vars(NULL);
+		sat_next_var(NULL);
+		sat_1ofn_prod(NULL, NULL, 0, NULL, ~0, 0);
+		sat_template_arr2mem(NULL, 0, NULL, NULL, 0, NULL, ~0,
+		                     NULL, ~0, 0);
+		sat_ensure_numrefs(NULL, ~0);
+	}
+
+{
+unsigned int mni = 1, mxi = ARRAY_ELEMS(cnf_1ofn_templ_ints_idx), i;
+struct SatAdded add;
+int32_t a[64];
+size_t wr;
+
+for (i=0; i<ARRAY_ELEMS(a); ++i)
+	a[i] = 1+i;
+
+if (getenv("OR")) {
+	cnf_or(&psat, &add, 666, a, 6, 0);
+	cnf_or(&psat, &add, 0, &(a[6]), 10, 0);
+
+	wr = sat_format_int_clauses(scratch, sizeof(scratch), &psat, 0);
+	if (!is_valid_sat_size(wr))
+		return -1;
+
+	printf("## DIMACS[OR]\n");
+	printf("%s", scratch);
+	return 0;
+}
+
+if (getenv("BITS")) {
+	mni = (unsigned char) cu_readuint(getenv("BITS"), 0);
+	mxi = mni;
+}
+
+for (i=mni; i<=mxi; ++i) {
+	sat_state_init0(&psat, i);
+
+//	cnf_1ofn(&psat, &add, 0, a, i, 0);
+	cnf_and(&psat, &add, 0, a, i, 0);
+
+	wr = sat_format_int_clauses(scratch, sizeof(scratch), &psat, 0);
+	if (!is_valid_sat_size(wr))
+		continue;
+
+	printf("## DIMACS[1-of-%u]\n", i);
+	printf("%s", scratch);
+}
+
+return 0;
+}
+
+#if 0 && defined(CNF_LT_TEMPLATE_H__) && defined(CNF_NEQ0_TEMPLATE_H__)
+	if (getenv("TEMPLATE_LT") || getenv("TEMPLATE_NEQ0")) {
 		char descr[ 256 +1 ] = { 0, };
+		unsigned int limit, tmplsizes;
 		struct SAT_Summary vars;
+		struct TemplIndex idx;
+		uint64_t rv;
 		size_t wr;
 
+		rv = getenv("TEMPLATE_LT")
+		     ? cu_readuint(getenv("TEMPLATE_LT"),   0)
+		     : cu_readuint(getenv("TEMPLATE_NEQ0"), 0);
+		/**/
 		if (rv == CU_INVD_UINT64)
 			return cu_reportrc("invalid LT/template", -1);
 
-		if (!rv || (rv > ARRAY_ELEMS(cnf_lt_templ_idx))) 
-			return cu_reportrc("LT/index out of range", -1);
+				// 1-based index into array-of-templates
+		tmplsizes = getenv("TEMPLATE_LT")
+		            ? ARRAY_ELEMS(cnf_lt_templ_idx)
+		            : ARRAY_ELEMS(cnf_neq0_templ_idx) ;
+
+		if (!rv || (rv > tmplsizes))
+			return cu_reportrc("template/index out of range", -1);
 		limit = rv;
 
-		offs  = cnf_lt_templ_idx[ limit-1 ].offset;
-		units = cnf_lt_templ_idx[ limit-1 ].count;
+		idx = getenv("TEMPLATE_LT")
+		      ? cnf_lt_templ_idx  [ limit-1 ]
+		      : cnf_neq0_templ_idx[ limit-1 ];
 
-		if ((offs >= sizeof(cnf_lt_template_bin))    ||
-		    (offs+units > sizeof(cnf_lt_template_bin)))
-			return cu_reportrc("SNH: invalid template entry", -1);
+		if (getenv("TEMPLATE_LT")) {
+			if (!is_within_array(cnf_lt_template_bin,
+			         ARRAY_ELEMS(cnf_lt_template_bin), &idx))
+				return cu_reportrc("SNH: bad templ/entry", -1);
 
-		vars = templ2vars(&(cnf_lt_template_bin[ offs ]), units, 8);
+			vars = templ2vars(&(cnf_lt_template_bin[ idx.offset ]),
+			                    idx.count, 8);
+		} else {
+			if (!is_within_array(cnf_neq0_template_bin,
+			         ARRAY_ELEMS(cnf_neq0_template_bin), &idx))
+				return cu_reportrc("SNH: bad templ/entry", -1);
+
+// TODO: generic, uint-width-independent form
+			vars = templ2vars(&(cnf_neq0_template_bin[ idx.offset ]),
+			                    idx.count, 8);
+		}
+
 		if (!valid_template_vars(&vars))
 			return cu_reportrc("SNH: invalid template/vars", -1);
 
-// cu_hexprint("CLAUSES=x", ptempl, tunits);
 {
 char rdescr[ 128 +1 ] = { 0, };
+const char *what;
+
 describe_runs(rdescr, sizeof(rdescr), limit);
 
-snprintf(descr, sizeof(descr), "LESS-THAN(%u/x%02x/%s)->v%u",
-	limit, limit, rdescr, vars.vars+1);
+what = getenv("TEMPLATE_LT") ? "LESS-THAN" : "NEQ-OR0" ;
+
+snprintf(descr, sizeof(descr), "%s(%u/x%04x/%s)->v%u",
+	what, limit, limit, rdescr, vars.vars+1);
 }
 		wr =  sat_header2mem(scratch, sizeof(scratch), &vars, descr);
 
-		wr += sat_template2mem8(&(scratch[wr]), sizeof(scratch)-wr,
-		         &(cnf_lt_template_bin[ offs ]), units,
+	if (getenv("TEMPLATE_LT")) {
+		wr += sat_template2mem8(&(scratch[ wr ]), sizeof(scratch)-wr,
+		         &(cnf_lt_template_bin[ idx.offset ]), idx.count, 8,
 		         NULL, vars.vars, NULL, vars.addl);
-if (wr) {
+	} else {
+		wr += sat_template2mem8(&(scratch[ wr ]), sizeof(scratch)-wr,
+		         &(cnf_neq0_template_bin[ idx.offset ]), idx.count, 8,
+		         NULL, vars.vars, NULL, vars.addl);
+	}
+if (is_valid_sat_size(wr))
 	printf("%s", scratch);
-}
 return 0;
 	}
-#endif
+#endif    // CNF templates included
 
-#if 1
+#if 0
 	{
 	sat_v2template2mem(NULL, ~0, SAT_TMPL_1OFN_templates,
 	               ARRAY_ELEMS(SAT_TMPL_1OFN_templates),

@@ -31,7 +31,7 @@ def int2bits(v, bits):
 
 ##--------------------------------------
 tOPR_2x = [
-	'DIFF', 'DIFF-NZ', 'LT', 'LE', 'ADD', 'ADD_NC',
+	'DIFF', 'DIFF-NZ', 'LT', 'LE', 'ADD', 'ADD_NC', '1OFN-2X',
 ]
 
 
@@ -42,8 +42,10 @@ tOPR_2x = [
 ## available functions:
 ##   AND, OR, NAND, NOR, XOR, XNOR
 ##   1OFN         (or 1-of-N)
+##   1OFN-X2      two instances of 1-of-N
 ##   MAX1OFN      (or MAX-1-of-N)
 ##   LESSTHAN     (or LESS-THAN)     -- compares N-bit combinations <= 'limit'
+##                                   -- limit is constant
 ##   LESSTHAN-NZ  (or LESS-THAN-NZ)  -- ... 0 < N-bit combinations <= 'limit'
 ##   LT           2x N-bit values    -- A < B ?
 ##   LE           2x N-bit values    -- A <= B ?
@@ -99,6 +101,9 @@ def truthtable(fn, n, vars='v', limit=0):
 							## compound functions
 		elif (fn == '1OFN') or (fn == '1-OF-N'):
 			r = 1  if (sum(vb) == 1)  else 0
+		elif (fn == '1OFN-2X') or (fn == '1-OF-N-2X'):
+			r = 1  if (sum(vb) == sum(v2b) == 1)  else 0
+
 		elif (fn == 'MAX1OFN') or (fn == 'MAX-1-OF-N'):
 			r = 1  if (sum(vb) <= 1)  else 0
 		elif (fn == 'LESSTHAN') or (fn == 'LESS-THAN'):
@@ -141,6 +146,28 @@ if True:
 	bits = 8
 	if 'BITS' in os.environ:
 		bits = int(os.environ['BITS'])
+
+	truthtable('1OFN', bits)
+	sys.exit(0)
+
+	## comparisons
+	if 'LIMIT' in os.environ:
+		limit = [ int(os.environ['LIMIT']) ]
+		bits  = limit[0].bit_length()
+	else:
+		limit = range(1, 1 << bits)
+
+	truthtable('DIFF-NZ', bits)
+
+	sys.exit(0)
+##------------------------------------
+## TODO: mode selection
+	for i in limit:
+		if len(limit) > 1:
+			print(f'## ...[{ i.bit_length() } bits] < {i}')
+
+		truthtable('less-than', i.bit_length(), limit=i)
+	sys.exit(0)
 
 	truthtable('1-of-n', bits)
 	sys.exit(0)

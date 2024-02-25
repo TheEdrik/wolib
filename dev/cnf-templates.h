@@ -1,12 +1,14 @@
 #if !defined(CNF_TEMPLATES_H__)
 #define  CNF_TEMPLATES_H__  1
 
-/* common template-related definitions (include with binary distributions) */
-
 struct TemplIndex {
 	unsigned int offset;
 	unsigned int count;
 } ;
+/**/
+#define  CNF_TEMPLIDX_INIT0  { 0, 0, }
+// make sure is_valid_cnf_templ_index() is _not_ valid for _INIT0
+
 
 /* N-bit clause-annotation definitions
  */

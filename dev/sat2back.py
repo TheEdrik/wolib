@@ -2,10 +2,28 @@
 
 ## turn back standalone SAT-solver output to packer-readable form
 ##
-## sanity-checks values if 'VERIFY' is presnt in environment
+## sanity-checks values if 'VERIFY' is present in environment
 ## reverses to human-readable schedule form for variables
 ## in canonical form
 ## see satsolv_var_name() in pack.py for variable-naming rules
+##
+## set 'SCHEDULE' to recreate rough overview of typical SAT assignments
+## if they follow our scheduler policies:
+##    dXXtYY
+##    dXXtYYvZ  v0..vN   N+1-bit vehicle ID (VID): delivery +time unit +vid.bit
+##    dXXvZ     v0..vN   
+##
+## set 'ROLL' to tolerate certain errors in response
+##    see roll() for list
+##
+## set 'ADDED_VARS' to list indirect variables' values too. they
+## are excluded from response list by default.
+##
+## adds constraints with 'CONSTRAIN' set in environment:
+##    X           (variable nr/name)  set X as true
+##    '!...X...'  set X as false
+##    '-...X...'  set X as false
+##    may supply multiple terms; '-' or '0' separate them as clauses
 ##
 ## requires pack-and-route result (for variable/name mappings) and
 ## SAT solver DIMACS-formatted result
@@ -64,6 +82,14 @@ reRESPONSES = re.compile('^ v \s+', re.VERBOSE)
 
 
 ##-----------------------------------------
+## tolerate errors? set to >0 if so:
+##   (1) mild ones only
+##   (2) any error
+##
+vROLL = False
+
+
+##-----------------------------------------
 ## retrieve VARIABLES section, populate reverse maps
 ## return None if file is not recognized
 ##
@@ -118,6 +144,13 @@ def vars2list(lines):
 				res[ nr ] = id
 
 	return res
+
+
+##-----------------------------------------
+## is this ID that of an added/indirect variable?
+##
+def is_indirect_var(v):
+	return v.startswith('N')                            ## was: 'N' or 'NV'
 
 
 ##-----------------------------------------
@@ -282,6 +315,54 @@ def list2str(lst):
 		return ",".join(str(v)  for v in arr)
 
 
+##--------------------------------------
+## encode big-endian array of Booleans to unsigned int
+##
+def booleans2int(arr):
+	return sum((1 << (len(arr) - ai -1))  if arr[ai]  else 0
+	           for ai, a in enumerate(arr))
+##
+## TODO: is there a centralized version in vt.py?
+
+
+##----------------------------------------------------------------------------
+def roll(level=1):
+	if vROLL == False:
+		return False
+
+	return (level <= vROLL)
+
+
+##----------------------------------------------------------------------------
+## returns [ hour(start), minutes(star), hours(end), minutes(end) ]
+## see timevec2wall() in pack.py
+##
+## 'unit0' is BCD-encoded
+##
+def unit2clock(u, unit0=800, unit=15):
+	hr, mn = (unit0 // 100), (unit0 % 100)
+
+	if (u < 0):                                     ## ...or max(range)...
+		raise ValueError(f"invalid time unit ({u})")
+
+## TODO: proper time propagation; we only base against default unit0
+
+	mn += u * unit
+	hr += (mn // 60)
+	mn %=  60
+
+	return [ hr, mn, hr, mn +unit -1 ]
+
+
+##----------------------------------------------------------------------------
+## unit to HHMM-HHMM range
+##
+def unit2wallclk(u):
+	clk = unit2clock(u)
+
+	return f'{ clk[0] :02}{ clk[1] :02}-{ clk[2] :02}{ clk[3] :02}'
+
+
 ##----------------------------------------------------------------------------
 ## is the recovered set of dicts-of-variables consistent?
 ## excepts if arrays are trivially malformed
@@ -292,10 +373,10 @@ def vars2check(dicts):
 				## explode if not reading all cross-lists
 				## each dict indexes (full list of) deliveries
 
-	if delvs != sorted(dicts[ 'delv-vid' ].keys()):
+	if (delvs != sorted(dicts[ 'delv-vid' ].keys())) and not roll():
 		raise ValueError("delv.list(vehicle IDs) != delv.list(time)")
 
-	if delvs != sorted(dicts[ 'delv-time-vid' ].keys()):
+	if (delvs != sorted(dicts[ 'delv-time-vid' ].keys())) and not roll():
 		raise ValueError("delv.list(vehicle IDs) != " +
 					"delv.list(delivery+time)")
 
@@ -316,13 +397,28 @@ def vars2check(dicts):
 					## this number of vehicle-ID bits
 	dtv = dicts[ 'delv-time-vid' ]
 
+	vplan = {}			## collect vehicle plans
+	                                ## vehicle[ v.id ][ t0: delvivery ... ]
+
 	for d in delvs:
 		for t in dtv[ d ]:
+			vi = booleans2int(dtv[ d ][ t ])        ## int(vehicle)
+			if vi and (not vi in vplan):
+				vplan[ vi ] = {}
+				print(f"## VEH.ID[D={ d },T={ t }]={ vi }")
+
 			if vbitcount != len(dtv[ d ][ t ]):
 				actual = len(dtv[ d ][ t ])
 				raise ValueError("inconsistent nr. of "
 				      f"vehicle-ID bits: DELV={d},TIME={t} " +
 				      f" ({actual} vs. expected {vbitcount})")
+			if vi:
+				if t in vplan[ vi ]:
+## TODO: ROLL; clean up error return
+					if (d != vplan[ vi ][ t ]) and False:
+						raise ValueError(f"conflict: " +
+								"D/T/V")
+				vplan[ vi ][ t ] = d
 
 		for vb in dtv[ d ][ t ].keys():
 			vbits[ vb ] = 1
@@ -333,16 +429,64 @@ def vars2check(dicts):
 	print(f"TIME.UNITS={ list2str(tunits) }")
 	print(f"VEHICLE.ID.BITS={ list2str(vbits) }")
 
+## TODO: factor out to a plan-to-schedule fn
+##
+	print(f"## VEHICLE.PLANS[{ len(vplan) }]:")
+	for d in sorted(vplan.keys()):
+		ts = sorted( vplan[d].keys() )
+		if ts == 0:
+			continue               ## only with optional deliveries
+		print(f"VEH[{ d }].STOPS[{ len(ts) }]=", end='')
+		print(":".join(f'T={t},V={ vplan[d][t] }'  for t in ts))
+		print()
+	print("## /VEHICLE.PLANS")
+
 			## vehicle ID rows MUST be all-False, except for
 			## one time unit, for each delivery
 
 			## (1) exactly one time active for each delivery
-			## (2) all non-delivery windows
+			##     (without optional schedules)
+			## (2) delivery ID dXX tYY is consistent with
+			##     times
+			## (3) collect max(vehicle ID) in the process
+	vid = -1
+	vseen = {}
+
 	for d in delvs:
 		dts = list(sorted(t  for t in
-					dicts[ 'delv-time-vid' ][d].keys()))
+		           dicts[ 'delv-time-vid' ][d].keys()))
 
-		print('xxx.D', d, dts)
+		print(f'## DELV.UNITS D={d}', dts)
+
+			## time units with d/t/v not all-False
+			## note: max(False, True) == True
+			##
+		t = [ u  for u in dts
+		      if (max(dicts[ 'delv-time-vid' ][d][u].values()) == True) ]
+
+		if t == []:
+			raise ValueError(f"no delivery time (D={ d })")
+## TODO: handle optional deliveries: those with legitimately no
+## delivery times
+
+		print(f'## TIME.SCHEDULED(D={d})={t}u({ unit2wallclk(t[0]) })')
+
+		if (len(t) > 1) and not roll():
+			raise ValueError(f"redundant delivery times? (D={d}," +
+					f"T={ t })")
+
+		thisv = dicts[ 'delv-time-vid' ][d][ t[0] ]
+		v     = booleans2int(thisv)
+		if not v in vseen:
+			vseen[ v ] = []
+		vseen[ v ].append(d)
+
+		vid = max(vid, v)
+		print(f'## VEH.ID({ d })=[{ v }]{ thisv }')
+		print(f'## MAX(VEHICLE.ID)={ vid }')
+
+	print('## VEHICLES', list(sorted(vseen.keys())))
+	print('## VEHICLES', vseen)
 
 
 ##----------------------------------------------------------------------------
@@ -353,6 +497,11 @@ def verify(res):
 
 ##-----------------------------------------------------------
 if __name__ == '__main__':
+	sched = ('SCHEDULE' in os.environ)
+
+	if ('ROLL' in os.environ):
+		vROLL = int(os.environ[ 'ROLL' ])
+
 	if len(sys.argv) < 2:
 		sys.stderr.write(
 			"Recover pack+route variables from SAT solver log.\n"
@@ -406,6 +555,9 @@ if __name__ == '__main__':
 	res = satsolv_ints2strings(lines, v2ints)
 
 	for r in sorted(res.keys()):
+		if is_indirect_var(r) and not ('ADDED_VARS' in os.environ):
+			continue
+
 		print(f'  { r }: { res[r] }')
 
 	if 'VERIFY' in os.environ:
