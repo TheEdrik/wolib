@@ -172,6 +172,7 @@ import pathtools
 import textwrap
 import dev.sat_templates
 			## templates are 0-based based on problem size
+import cProfile
 
 ## keep these global; needs dict if working on context-local limits
 ##
@@ -217,7 +218,7 @@ sSATPREFIX  = 'SAT='      ## common prefix for data applicable to SAT solvers
 sCSVPREFIX  = 'CSV='      ## common prefix for CSV output (schedule)
 sSATCOMMENT = '## SAT='   ## SAT-related comment, for our own tracing
 sSAT_CONSTR_END = ' 0'    ## terminate [term list of] constraint
-sSAT_2ND_VAR    = 'NV'    ## prefix for secondary SAT (CNF) variables
+sSAT_2ND_VAR    = 'N'     ## prefix for secondary SAT (CNF) variables
 sSAT_SYM_PREFIX = 'RAW='  ## prefix for clauses which are stored as strings,
                           ## only mapped to integer indexes in the end
                           ## DIMACS CNF: "1 2 -3 0"
@@ -292,6 +293,7 @@ vAVG_MIN_PER_KM   =  5    ## fallback for average-speed calculation
 vHR_MAX = 18     ## max(schedule delivery), hours HH00
 vHR_MIN =  8     ## min(schedule delivery), hours HH00
 
+vPROGRESS = 25   ## progress indicators: mark each N'th step
 
 ##--------------------------------------
 ## 'struct' storing the best solution we have seen so far
@@ -1125,6 +1127,9 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##                              -- to refinement
 ##     'seen': '1240',          -- if set and non-empty, delivery time (string)
 ##     'svec': x40000,          -- time vector form of 'seen', if non-empty
+##     'tvars': [ dXXtYY... ]   -- SAT: time variables
+##     'vid.vars': [ dXXvY... ] -- SAT: vehicle-ID bit variables
+##                              -- example: 3 vehicles -> 2 bits (v0, v1)
 ##
 ## flags-like variables:
 ##     'optional': ...          -- is it OK to skip this delivery?
@@ -1191,7 +1196,6 @@ def table_read(fname, field=1, fmt='base'):
 					## any conversion etc. would come here
 
 ## TODO: centralized return-all0 for struct
-
 			aux.append({
 				'primary':     fd1,
 				'secondary':   fd2,
@@ -1202,6 +1206,8 @@ def table_read(fname, field=1, fmt='base'):
 				'min_time':    mint,
 				'max_time':    maxt,
 				'vehicle_may': -1,
+				't.vars':      [],
+				'vid.vars':    [],
 				'x':           x,
 				'y':           y,
 			})
@@ -1824,13 +1830,48 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##    (2) variable names of numbers
 
 
-##--------------------------------------
+##----------------------------------------------------------------------------
+## SAT expressions
+##
+## assume N+1-bit vehicle IDs; v0..vN (most to least significant)
+##   - all-0: unassigned
+##   - >0     assigned to vehicle (v0..vN)
+##
+## dXX tYY v0 ..     -- delivery XX time unit YY assigned to (v0..vN)
+## dXX tYY vN
+##
+## derived variables:
+##   dXX tYY = OR(dXX tYY v0 .. dXX tYY vN)
+##                   -- true if delivery XX starts in time unit YY
+##
+##   dXX v0  = OR(dXX t0 v0 .. dXX tTT v0)
+##   ...
+##   dXX vN  = OR(dXX t0 vN .. dXX tTT vN)
+##     -- (dXX v0 .. dXX vN) is the vehicle ID assigned to deliver dXX
+##
+## derived clauses:
+##   OR/True(dXX t00 .. dXX tTT)    -- delivery is scheduled in at least
+##                                  -- one of the time slots
+##                                  -- NOT TRUE if delivery is optional
+##
+##   OR/True(dXX v0 .. dXX vN)      -- delivery is assigned to a vehicle
+##                                  -- NOT TRUE if delivery is optional
+##
+##   1-of-N/True(dXX t0 .. dXX tN)  -- delivery starts in exactly one
+##                                  -- time unit
+##                                  --
+##                                  -- alternative: 0/1-of-N if scheduling
+##                                  --   (=delivery) is optional
+
+
+##----------------------------------------------------------------------------
 ## SAT/CNF templates, see dev/sat_templates.py
 ##
 ## indexed by operation, then 1-based index on nr. of inputs
 ##   'descr'         description
 ##   'inputs'    (N) number of direct inputs (1..N/-1..-N in formula)
 ##   'add.vars'  (M) indirect variables added; N+1..N+M/-N-1..-N-M in formula
+##                   next available variable SHOULD be inputs+add.vars
 ##   'clauses'       list of formulas, with no index <-N-M or >N+M
 ##
 ## example:
@@ -1872,10 +1913,18 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##                 ## variable names follow satsolv_var_name() conventions
 ##                 ##
 ##   'vars':  [ variable: None (value is not fixed) / True / False ]
-##                 ## variables stored in sorted order
+##   'vars.set': set(vars)           ## redundant, see 'vars'
+##                 ## _add_vars(), incl. a disposable set(vars) is a perf.
+##                 ## bottleneck with very high N
+##
+##   'v2i':   { variable name to integer >0 }
+##                 ## reverse is ['vars'][ ... integer -1 ... ]
 ##                 ##
-##                 ## a perfect hash is constructed to map them,
-##                 ## see ... (TODO)
+##                 ## stores both input variables and additional ones,
+##                 ## which are excluded from vars[]
+##                 ##
+##                 ## note: vars.index(name) becomes a visible perf. problem
+##                 ## with high enough numbers
 ##
 ##   'constraints': [ TODO: updated spec ]
 ##     'OR', variable, ...other variables... ]
@@ -1887,11 +1936,15 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##                 ## predefined dependencies
 ##                 ## 'variable' may be sSAT_CONST_TRUE or sSAT_CONST_FALSE,
 ##                 ## which forces a fixed value
+##                 ##
+##                 ## all 1-OF-N relationships are forced-True
 ##
 ##     'NEQ-OR-0', variable list(1), variable list(2)
 ##                 ## two equal-sized variable lists' entries MUST
 ##                 ## differ if neither is 0. (any 0 is compatible
 ##                 ## with any other value)
+##                 ##
+##                 ## all NEQ-OR-0 relationships are forced-True
 ##
 ##     '--COMMENT' ## any attached data is ignored
 ##
@@ -1961,7 +2014,7 @@ def plan_constraints0():
 ##
 ## MUST be consistent with 'stops' of delivering vehicles
 
-tVID2TIME = 'VEHICLE2TIME'               ## 
+tVID2TIME = 'VEHICLE2TIME'               ##
 
 
 
@@ -2067,9 +2120,13 @@ def vehicle2primary(vehicle):
 ##                -- dXX_tYYvZZ: delivery XX is delivered in time unit YY
 ##                -- by vehicle ZZ
 ##
+##    'delv_vid_units': { ... }
+##                -- delivery+vehicle assignment variables:
+##                -- dXX_v0..vN: delivery XX vehicle is (...N+1-bit ID...)
+##
 ##    'vars':     [ ...list of variables in order of addition... ]
 ##
-##    'added_vars':   -- extra variables introduced by CNF constructions
+##    'added_vars':   -- nr. of extra variables introduced by CNF constructions
 ##
 ##    'constraints':   [ [ ...text of constraint1..., ...comment... ] ]
 ##                -- CNF clauses (each is an OR of variables)
@@ -2079,6 +2136,9 @@ def vehicle2primary(vehicle):
 ##                --
 ##                -- empty constraints are possible; they are used by
 ##                -- comment-only additions f.ex.
+##
+##    'deliveries':  -- nr. of deliveries if >0
+##    'vehicles':    -- nr. of vehicles assigned, >0 if known
 ##
 ##    'constraints.raw': original form of constraints, before
 ##                       CNF expansion
@@ -2123,6 +2183,29 @@ def satsolv_is_debug(level=1):
 
 
 ##--------------------------------------
+## sanity-check
+## - we expect to generate normalized DIMACS 
+##   - number of variables is minimal
+##   - all variables are referenced by at least one clause
+##   - solvers may need a '--relaxed' or similar option to process unnormalized
+##     variable+clause lists
+## - to heavy for regular usage; TODO: extract lightweight version
+##
+def satsolv_assert_normalized(sat):
+	if not sat:
+		raise ValueError("missing SAT context to check")
+
+	if not satsolv_is_debug(2):
+		pass
+
+	vars, addl = sat[ 'vars' ], sat[ 'added_vars' ]
+
+			## retrieve integer variable IDs
+	for c in sat[ 'clauses' ]:
+		pass
+
+
+##--------------------------------------
 ## number of vehicles to consider
 ##
 def satsolv_vehicle_count(bfd_limit=0):
@@ -2130,8 +2213,9 @@ def satsolv_vehicle_count(bfd_limit=0):
 		return bfd_limit
 
 	addl, sv = False, os.environ[ "SAT_VEHICLES" ]
-	if sv[ :1 ] == '+':
+	if sv.startswith('+'):
 		addl, sv = True, sv[ 1: ]
+## TODO: debug with appropriate log.level
 
 	sv2 = int(sv, 0)
 	if (sv2 < 0):
@@ -2160,11 +2244,21 @@ def satsolv_init0():
 	return {
 		'delv_units':      {},
 		'delv_veh_units':  {},
+		'delv_vid_units':  [],
 		'vars':            [],
+		'vars.set':        set(),
+		'v2i':             {},
 		'added_vars':       0,
+		'deliveries':       0,
+		'vehicles':         0,
 		'constraints':     [],
 		'constraints.raw': [],
 	}
+
+
+##--------------------------------------
+def satsolv_next_varnr(sat):
+	return len(sat[ 'vars' ]) +sat[ 'added_vars' ] +1
 
 
 ##--------------------------------------
@@ -2212,16 +2306,9 @@ def satsolv_add_delvtime(sat, delvid, unit, vnumber=None):
 	else:
 		add = satsolv_add1(sat, 'delv_units', var)
 
-	if add and (var not in sat[ 'vars' ]):
-		sat[ 'vars' ].append(var)
+	satsolv_add_1var(sat, var)
 
 	return var
-
-
-##--------------------------------------
-def satsolv_add_1var(sat, var):
-	if sat and (not var in sat[ 'vars' ]):
-		sat[ 'vars' ].append(var)
 
 
 ##--------------------------------------
@@ -2230,13 +2317,24 @@ def satsolv_add_1var(sat, var):
 ## bundle as many as possible
 ## esp. delivery+time-unit collisions add many short lists -> O(N^2) extension
 ##
-## intermediate set: "not in sat['vars']" is slow re-search
-##
 def satsolv_add_vars(sat, vars):
 	if sat:
-		seen = set(sat['vars'])
-		v = (v  for v in vars  if (not v in seen))
-		sat[ 'vars' ].extend(v)
+		v = list(v  for v in vars  if (not v in sat[ 'vars.set' ]))
+
+		nv0 = len(sat[ 'vars' ])
+		sat[ 'vars'     ].extend(v)
+		sat[ 'vars.set' ] |= set(v)
+
+		for ni, nv in enumerate(v):
+			sat[ 'v2i' ][ nv ] = nv0 + ni + 1
+
+
+##--------------------------------------
+def satsolv_add_1var(sat, var):
+	if sat and (not var in sat[ 'vars.set' ]):
+		sat[ 'v2i' ][ var ] = len(sat[ 'vars' ]) +1
+		sat[ 'vars'     ].append(var)
+		sat[ 'vars.set' ].add(var)
 
 
 ##--------------------------------------
@@ -2265,6 +2363,19 @@ def satsolv_add_constraint1(sat, rawc, comment=''):
 
 
 ##--------------------------------------
+## register list of 'raw', preformatted constraint
+## not checking for replication
+##
+## 'comment' is reset to nothing after first constraint
+##
+def satsolv_add_constraints(sat, constraints, comment=''):
+	if sat and constraints:
+		for c in constraints:
+			sat[ 'constraints' ].append([ c, comment ])
+			comment = ''
+
+
+##--------------------------------------
 ## handed a list of [ delivery ID1, time unit1, delv.ID2, time unit2 ] tuples,
 ## plus 'veh_count' as nr. of vehicle-ID indexes
 ##
@@ -2274,35 +2385,30 @@ def satsolv_add_constraint1(sat, rawc, comment=''):
 ## sat[ "vars" ] MUST already have initalized all referenced dXXtYY etc.
 ## variables.
 ##
-def satsolv_add_conflict_constraints(sat, constr, veh_count):
+## TODO: all conflicts use the same NEQ0 clauses -> may preregister
+## all new variables etc. (N * M == pairs * new variables)
+##
+def satsolv_add_conflict_constraints(sat, constr, vbits, nextidx=0):
 	d1, t1, d2, t2 = constr
-
-	vbits  = satsolve_vidx_bits(veh_count)
-
-#	v1main = satsolv_var_name(d1, time_unit=t1)
-#	v2main = satsolv_var_name(d2, time_unit=t2)
-#	v12nand, nvar, ncomm = satsolv_nand1(v1main, v2main)
-#							## v1main NAND v2main
-#	for c in v12nand:
-#		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + c, ncomm)
-#		ncomm = ''
-#
-#	addvars = [ v1main, v2main, nvar ]
 
 	v1bits = list(satsolv_var_name(d1, time_unit=t1, vnumber=v)
 	              for v in range(vbits))
+	##
 	v2bits = list(satsolv_var_name(d2, time_unit=t2, vnumber=v)
 	              for v in range(vbits))
 
-					## all these conditions are
-					## always true, kept as such
-					##
+						## all these conditions are
+						## always true, kept as such
+						##
 	sat[ 'constraints.raw' ].append([ 'NEQ-OR-0', '+' ])
-					##
+						##
 	sat[ 'constraints.raw' ][ -1 ].extend(v1bits)
 	sat[ 'constraints.raw' ][ -1 ].extend(v2bits)
 
-	cls, neq, comm = satsolv_neq_or0(sat, v1bits, v2bits)
+	or1 = satsolv_var_name(d1, time_unit=t1)
+	or2 = satsolv_var_name(d2, time_unit=t2)
+
+	cls, _, comm = satsolv_neq_or0(sat, v1bits, v2bits, or1=or1, or2=or2)
 	for c in cls:
 		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
 		comm = ''
@@ -2332,8 +2438,18 @@ def satsolv_report(sat):
 	print(sSATPREFIX + f'p cnf { len(sat[ "vars" ]) } { nrclauses }')
 
 	print(sSATPREFIX +'c')
+
+	assert(sat[ "deliveries" ] > 0)
+	summary = f'{ sat[ "deliveries" ] } deliveries'
+
+	if (sat[ 'vehicles' ] > 0):
+		summary += f', { sat[ "vehicles" ]} vehicles'
+
+	print(sSATPREFIX +f'c ' +summary)
+
 	print(sSATPREFIX +'c CONSTRAINTS:')
 					## do not change CONSTRAINTS framing
+	print('xxx', sat)
 
 	comments = 0
 	for commstr in (s  for s in sat[ "constraints" ]  if s[1]):
@@ -2343,7 +2459,7 @@ def satsolv_report(sat):
 
 	vstr = ' '.join(f'{ v }[{ vi+1 }]'
 	                for vi, v in enumerate(sat[ "vars" ]))
-	print(sSATPREFIX +'c /CONSTRAINTS:')
+	print(sSATPREFIX +'c /CONSTRAINTS')
 	print(sSATPREFIX +'c')
 
 					## do not change VARIABLES framing
@@ -2356,22 +2472,37 @@ def satsolv_report(sat):
 
 					##-----  end of header  --------------
 
+			## polymorphic, since we tolerate several formats:
+			##
+			## (1) preformatted strings:
+			##     '<numeric ID>   <numeric ID>   ...'
+			##     '<symbolic ID>  <symbolic ID>  ...'
+			##
+			## (2) arrays-of-integers:
+			##     [ ID, ID..., ]
+
 	for ci, c in enumerate(sat[ "constraints" ]):
 		cvars, comment = c[0], c[1]
 
-		if cvars.strip() == '':
+		if cvars == '':
 			continue
-					## map expression to int. indexes
-					## each entry MUST be present
-					##
-		if cvars[ : len(sSAT_SYM_PREFIX) ] == sSAT_SYM_PREFIX:
-			constr = cvars[ len(sSAT_SYM_PREFIX): ].split()
-			constr = " ".join(str(s) for s in
-			                  satsolv_vars2ints(sat, constr))
+
+		if cvars.startswith(sSAT_SYM_PREFIX):
+			cvars  = cvars[ len(sSAT_SYM_PREFIX): ]
+			constr = cvars.split()
+
+			if re.search('[a-zA-Z]', cvars):
+				constr = cvars.split()
+				constr = " ".join(str(s) for s in
+				                  sat_vars2ints(sat, constr))
+			else:
+				constr = cvars
 
 		else:
-			constr = " ".join(str(sat[ "vars" ].index(v) +1)
-			                  for v in cvars.split())
+			constr = " ".join(str(sat[ "v2i" ][ v ])
+					  for v in cvars.split())
+##			for v in cvars.split():
+##				assert(sat[ "vars" ][ sat[ "v2i" ][ v ] -1 ] == v)
 
 		print(sSATPREFIX +constr +sSAT_CONSTR_END)
 
@@ -3500,7 +3631,7 @@ def unsuitable_delivery(d, dels, vroute, arrivals, tmask, vbit):
 		return 2                ## delivery is already assigned
 		                        ## (not to current vehicle)
 
-	if (d["index"] in vroute["deliveries"]):
+	if (d[ "index" ] in vroute[ "deliveries" ]):
 		return 3                ## already assigned, to current
 		                        ## vehicle
 
@@ -3937,13 +4068,9 @@ def satsolv_or1(var1, var2, result, negate=False):
 		## sign(R) in all-enclosing (1) and per-variable (2) lines
 
 	return result, [
-#		[ ' ', var1, ' ', var2, '-', result ],
-#		[ '-', var1, ' ', result,           ],
-#		[ '-', var1, ' ', result,           ],
-
-		f' {var1} {var2} { rsign1 }{result}',
-		f'{ rsign2 }{var1} {result}',
-		f'{ rsign2 }{var2} {result}',
+		f' { var1 } { var2 } { rsign1 }{ result }',
+		f'{ rsign2 }{ var1 } { result }',
+		f'{ rsign2 }{ var2 } { result }',
 	]
 
 
@@ -3957,6 +4084,7 @@ def satsolv_or1(var1, var2, result, negate=False):
 ## NOR with 'negate' (negates N in all clauses)
 ##
 ## returns list of clauses + control variable + comment
+## polymorphic, works for text and int-only inputs
 ##
 def satsolv_or(base, vars, result=None, negate=False):
 	cls = []
@@ -3965,23 +4093,29 @@ def satsolv_or(base, vars, result=None, negate=False):
 	if result == None:
 		result = base + sNALL0
 
+	if (base == '') and isinstance(vars[0], int):
+		base = 0
+
+## TODO: sanity check: no 0 in input integers' list
+
 	rsign1, rsign2 = ('', '-')  if negate  else ('-', '')
 		## sign(R) in all-enclosing (1) and per-variable (2) lines
 
 ## see also: satsolv_or1()
+## TODO: int/str polymorphism
 	all = list((base +b)  for b in  v)
 	all.append(f"{ rsign1 }{ result }")
 		##
-	cls.append( " ".join(all) )                   ## A | B | not(N)
+	cls.append( " ".join(f'{a}'  for a in all) )          ## A | B | not(N)
 
 	terms = list((base +b)  for b in v)
 
 	cls.extend((f'-{ t } { rsign2 }{ result }')  for t in terms)
 
 	if negate:
-		req = f'NOR(' +(",".join(terms)) +')'
+		req = f'NOR(' +(",".join(str(t)  for t in terms)) +')'
 	else:
-		req = f'(' +(" OR ".join(terms)) +')'
+		req = f'(' +(" OR ".join(str(t)  for t in terms)) +')'
 
 	return cls, result, f'{ result } := { req }'
 
@@ -4099,118 +4233,6 @@ def satsolv_nand_n(sat, vars, result=None):
 
 
 ##----------------------------------------------------------------------------
-## collapse list to runs of identical entries
-##     [ 1, 0, 1, 1 ]  ->  [ [1], [0], [1, 1] ]
-##
-def arr2runs(arr):
-	runs = []
-
-	for v in arr:
-		if (runs == []) or (runs[-1][-1] != v):
-			runs.append([])
-		runs[-1].append(v)
-
-	return runs
-
-
-##----------------------------------------------------------------------------
-## expressions compare up to two runs' worth of bits, comparing only
-## bits of the most significant runs against the big-endian bit array 'vars'
-##
-## first run always from an all-1 region
-##
-## assume V is the variable's value, the three cases below compare:
-##     V  <  1  0000..000
-##     V  <  1111..111                         all-ones
-##     V  <  111..11   000..00
-##
-## 'runs' in the above cases: [ [1],        [0,0,...0,0]   ]
-##                            [ [1,1,1,...,1]              ]
-##                            [ [1,1,..,1], [0,0,0,...0,0] ]
-## 'nbits' is the printable-collapsed form, 100..00, 111..111 etc.
-##
-## returns None, None, None  if no more runs
-## registers any intermediate variables
-##
-def satsolv_less_than_2x(sat, vars, runs, nbits):
-	if runs == []:
-		return None, None, None
-
-	if runs[0][0] != 1:
-		raise ValueError("bits<N did not start with all-1 bit run")
-
-## TODO: this special-casing of single bits disappears, once _nand_n()
-## centralizes all <3 special-cased cases: can pass 1-bit comparison
-## through as-is
-
-	vdescr = 'VARS:' +(".".join(vars))
-
-	if (len(runs) == 2) and (len(runs[0]) == 1):   ## 100..00 -> direct bit
-		result = vars[0]                ## no additional condition/var
-		cls    = [ f'-{result}' ]
-		xcomm  = f'{result}: ({vdescr} < { nbits }b)'
-
-	elif (len(runs) <= 2):
-				## 11100..000 -> NAND(...3 MS variables...)
-				## 11111..111 -> NAND(...all variables...)
-				##
-				##
-				##
-		bits2cmp = vars[ : len(runs[0]) ]
-		cls, result, xcomm = satsolv_nand_n(sat, bits2cmp)
-				##
-		satsolv_add_vars(sat, [ result ])
-				##
-		xcomm += f': ({vdescr} < { nbits }b)'
-
-	elif (len(runs) == 3) and (len(runs[-1]) == 1):
-				## straightforward case:
-				##   n <= 11..100001  exactly three runs; LS one
-				##                    is a single bit
-				##
-				## construct comparison from:
-				##   (1) AND(...MS bit/s...)
-				##         -> if not, value < pattern
-				##   (2) OR(...all-0 runs' bits below...)
-				##         -> if yes, value > pattern
-				##   (3) ...comparison of LS bit...
-				##         -> if yes, value > pattern
-				##
-				## comparison is hierarchical:
-				##   (1) not-AND(1)         -> value < pattern
-				##   (2) AND(1)  AND  OR(2) -> value > pattern
-				##   (3) AND(1)  AND  NOT(OR(2))  AND
-				##          not-AND(3)      -> value < pattern
-				##
-				## with minor additions, would also extrapolate
-				## to three runs, with >1 bits in LS one: just
-				## adds a less-than-X term for the LS run
-				##
-		msvars  = vars[ : len(runs[0]) ]   
-		midvars = vars[ len(runs[0]) : ]
-		lsvars  = vars[ len(runs[0])+len(runs[1]) : ]
-
-		mscls, mscmp, mscomm = satsolv_and('', msvars)
-##		satsolv_add_vars(sat, [ mscmp ])
-				##   (1) -> mscmp
-
-		midcls, midcmp, midcomm = satsolv_or('', midvars)
-##		satsolv_add_vars(sat, [ mscmp ])
-				##   (2) -> midcmp
-
-		lscls, lscmp, lscomm = satsolv_and('', lsvars)
-##		satsolv_add_vars(sat, [ mscmp ])
-				##   (3) -> lscmp
-
-		cls, result, xcomm = None, None, None
-
-	else:
-		raise ValueError("need a generic SAT/range comparison here")
-
-	return cls, result, xcomm
-
-
-##----------------------------------------------------------------------------
 ## break down bitmask to array-of-bits
 ##
 def bitmask2bitarr(mask, endian='big'):
@@ -4237,107 +4259,161 @@ def bitarr2values(arr, indexes=True):
 	                          for  bi, b  in revd)))
 
 
+##--------------------------------------
+## recurring check: None(undefined)/True(=force OK)/False(=force non-OK)
+##
+def is_forced_result(force):
+	return (force == True) or (force == False)
+
+
+##----------------------------------------------------------------------------
+## list dXXvYY variables for a delivery
+##
+def sat_delv_vidlist(didx, vbits):
+	return [ satsolv_var_name(didx, vnumber=v)  for v in range(vbits) ]
+
+
 ##----------------------------------------------------------------------------
 ## is the binary combination of 'vars' < N?
 ## register expression to SAT variables+clauses
 ##
-## 'vars' is bit variables, most to least significant
+## returns list-of-clauses, result variable, comment/description
+##
+## 'vars' is list of bit variables, most to least significant
 ##
 ## registers any newly allocated variables to 'sat'
 ##
-## TODO: proper binary comparison, then Quine McCluskey etc. reduction
-## TODO: right now, we just pick predefined patterns
-##
-## since pack-n-route currently leaves only unallocated deliveries to
-## the SAT solver, we expect to see not more than 3 (maybe 4)-bit variables
-##
-def satsolv_less_than(sat, vars, n):
+def satsolv_less_than(sat, varlist, n, force=True):
 	nbits = f'{ n :b}'
-	nb = bitmask2bitarr(n)
+	nb    = bitmask2bitarr(n)
+	opr   = 'LT.FORCE'
 
-	if len(nb) >= (1 << len(vars)):        ## N is wider than 2^...bits...
+	if len(nb) >= (1 << len(varlist)):     ## N is wider than 2^...bits...
 		return                         ## always succeeds
 
-	runs = arr2runs(nb)
+	nxv = expr2template_addvars(sat, opr, n)  ##, numeric=F)
 
-	assert(runs != [])
-	assert(runs[0][0] == 1)                ## nb[] has no MS zeroes
+## TODO: polymorphic wrapper
+	vi = [ sat['v2i'][v]  for v in varlist ]       ## variables as integers
+	ni = [ sat['v2i'][v]  for v in nxv     ]
 
-	result, cls, xcomm = satsolv_less_than_2x(sat, vars, runs, nbits)
+	tm, orig = expr2template(opr, varlist, nxv, idx=n)
 
-	## ...any special logging etc. would happen here...
+## TODO: polymorphic
+	cls = [ ' '.join(c)  for c in tm ]
 
-	return cls, result, xcomm
+## TODO: recurring trailer for all template-to-instance conversions
+# note: always used in forced-as setting; no ret. value
+	res = None
+
+	nstr = f'{n}[{ bin(n) }]'
+
+	return cls, res, f'vehicle ID: binary({ ",".join(varlist) })<{nstr}'
+
+
+##--------------------------------------
+## how many additional variables are used by one NOT-EQUAL-OR-0
+## condition with (2x) N bits variables?
+##
+##	tm, orig = expr2template(opr, vbits, nextvar, idx=len(v1bits))
+##
+def sat_neq0_addl_var_count(vbits):
+##	tm, _ = expr2template('NEQ0.FORCE', list(range(1, vbits+1)), 0)
+## RRR
+
+	return 0
 
 
 ##----------------------------------------------------------------------------
-## are the values equal, or either one is all-0?
+## register expression to SAT variables+clauses
 ##
-## comparison for check "are A and B equal, or is at least one of them
-## unassigned?" if all-0 is reserved for unassigned
+## returns list-of-clauses, result variable, comment/description
 ##
-## turns into
-##    NOR(v1) | NOR(v2) | NOT-EQ(v1, v2)
-##    ->
-##    NOR(v1) | NOR(v2) | OR(XOR(v1, v2))
+## 'vars' is list of bit variables, most to least significant
+## 'nextvar', if >0, is first additional-variable to use. all entries
+##            MUST have been preregistered in that case
+## 'or1' and 'or2', if OR(...sub-expression...) is already known
+##            either both, or none may be known
 ##
-## single-bit version simplifies to
-##    NAND(v1, v2)     -- only the 1/1 pair is invalid
+## registers any newly allocated variables to 'sat'
 ##
-## returns list of clauses, result variable, comment
+def satsolv_neq_or0(sat, v1bits, v2bits, or1=0, or2=0, force=True, nextvar=0):
+	opr = 'NEQ0.FORCE'
+
+	assert(force == True)            ## no longer using non-forced versions
+
+	if (or1 == 0) != (or2 == 0):
+		raise ValueError("either supply both, or none of OR() values")
+	if (or1 == 0):
+		raise ValueError("only known-OR variant is supported/used")
+
+	if len(v1bits) != len(v2bits):
+ 		raise ValueError("mismatched equal-or-0 vectors " +
+		                 f"({ v1bits }):({ v2bits })")
+	vbits = v1bits[:]
+	vbits.extend(v2bits)
+
+	if nextvar == 0:
+		nextvar = expr2template_addvars(sat, opr, len(v1bits) + 1)
+
+## TODO: proper var-count queries
+	xorsvar = sat[ 'v2i' ][ nextvar[1] ]
+
+## TODO: polymorphism
+##	print('xxx1', xorsvar, or1, or2, nextvar)
+	or1 = sat[ 'v2i' ][ or1 ]
+	or2 = sat[ 'v2i' ][ or2 ]
+
+	## (nextvar, OR(XORs) [OR1=..., OR2=...]      -- if adding XORs
+	## (nextvar, OR(XORs))                        -- if 
+
+				## both OR's already available
+				## NEQ0 == NOT(OR1) or NOT(OR2) or DIFF(...)
+				## only adds variables for DIFF;
+				## ORs assumed already assigned
+	tm, orig = expr2template('DIFF', vbits, xorsvar, idx=len(v1bits))
+
+	orcls, _, _ = satsolv_or('', [ nextvar[1], sat['vars'][or1],
+	                               sat['vars'][or2], ],
+	                         result = nextvar[0])
+
+## TODO: fully polymorphic map
+	cls = []
+	for c in tm:
+		cls.append([])
+		sys.stdout.flush()
+
+		for v in c:
+			sys.stdout.flush()
+			if isinstance(v, int):
+				vi = sat_ints2vars(sat, [ v ])[0]
+			elif isinstance(v, str):
+				vi = v
+			else:
+				raise ValueError(f"invalid clause ({c})")
+			cls[-1].append(str(vi))
+
+	cls = [ ' '.join(c)  for c in cls ]
+
+	or_str =  f"(OR={ sat['vars'][or1] }[{or1}],"
+	or_str += f"{ sat['vars'][or2] }[{or2}])"
+
+## TODO: recurring trailer for all template-to-instance conversions
+	comm = f'NEQ-OR-0({ ",".join(v1bits) }/{ ",".join(v2bits) })' + or_str
+
+	return cls, None, comm
+
+
+##----------------------------------------------------------------------------
+## OR(...) with aggregate expression always True
 ##
-def satsolv_neq_or0(sat, v1, v2, result=None, force=False):
-				## TODO: OR extra bits which are
-				## in v1 or v2 only -> extra term in top clause
-	if len(v1) != len(v2):
-		raise ValueError("NEQ-OR0(...different sized vectors...")
+def satsolv_or_true(sat, varlist):
+	opr      = 'OR.FORCE'
+	nxv      = expr2template_addvars(sat, opr, n)
+	tm, orig = expr2template(opr, varlist, nxv)
+	cls = [ ' '.join(c)  for c in tm ]
 
-	if len(v1) == 1:
-		nv  = satsolv_new_varname2(sat, prefix='NAND')
-		cmt = 'NEQ-OR0({ v1[0] } / { v2[0] }) -> NAND'
-		return satsolv_nand1(x, y, result=nv)
-
-	nor1 = satsolv_new_varname2(sat, prefix='NOR')
-	nor2 = satsolv_new_varname2(sat, prefix='NOR')
-		##
-	cls,  _, _ = satsolv_or('', v1, negate=True, result=nor1)
-	cls2, _, _ = satsolv_or('', v2, negate=True, result=nor2)
-		##
-	cls.extend(cls2)
-
-	xvars = []
-				## XOR(...bits of v1..., ...bits of v2...)
-				##
-	for x, y in zip(v1, v2):
-		xv = satsolv_new_varname2(sat, prefix='XOR')
-
-		cls3, _, _ = satsolv_xor1(x, y, result=xv)
-		cls.extend(cls3)
-		xvars.append(xv)
-
-				## OR(...above XOR bits...)
-				## -> 1 if any XOR is 1 -> at least 1 bit diff
-				##
-	neq = satsolv_new_varname2(sat, prefix='NEQ')
-	cls4, _, _ = satsolv_or('', xvars, result=neq)
-
-	cls.extend(cls4)
-
-	if result == None:
-		result = satsolv_new_varname2(sat, prefix='NEQ_OR0')
-
-				## NOR(1) NOR(2) OR(XOR(...)) -> NEQ-OR0
-				##
-	cls5, _, _ = satsolv_or('', [ nor1, nor2, neq ], result=result)
-
-	cls.extend(cls5)
-
-	if force:
-		cls.append(satsolv_const(result))
-
-	cmt = f'NEQ-OR0({ ",".join(v1) } / { ",".join(v2) })'
-
-	return cls, result, cmt
+	return cls, None, f'OR({ ",".join(varlist) })=True'
 
 
 ##-----------------------------------------
@@ -4348,6 +4424,8 @@ def satsolv_neq_or0(sat, v1, v2, result=None, force=False):
 ##
 ## non-None 'values' is checked for already-assigned value; not updated
 ## caller must use .update(...result...) to merge new assignments
+##
+## see also: dedicated _vars2ints() and _ints2vars()
 ##
 def satsolv_strings2ints(vars, values=None, first=1):
 	res = {}
@@ -4368,8 +4446,8 @@ def satsolv_strings2ints(vars, values=None, first=1):
 ##-----------------------------------------
 ## registers name with non-None 'sat'
 ##
-def satsolv_new_varname(nr=0, sat=None):
-	vname = f'{ sSAT_2ND_VAR }{ nr +1 }'
+def satsolv_new_varname(nr=0, sat=None, pfx=sSAT_2ND_VAR):
+	vname = f'{ pfx }{ nr +1 }'
 
 	if sat:
 		satsolv_add_vars(sat, [ vname ])
@@ -4391,365 +4469,55 @@ def satsolv_new_varname2(sat, prefix=sSAT_2ND_VAR):
 
 
 ##-----------------------------------------
-## partition l into (roughly) k-sized parts
+## list of symbolic names for list of [valid] int.variables
 ##
-## in Python v3.12+, this will be itertools.batched()
+## see also sat_vars2ints(sat, vars)
 ##
-def list2split(l, k):
-	return [l[ i*k : (i+1)*k ]
-		for i in range((len(l) +k -1) // k)]
+def sat_ints2vars(sat, ints):
+	return [ ("-"  if (i < 0)  else "") + sat[ "vars" ][ abs(i) -1 ]
+	         for i in ints ]
 
 
 ##-----------------------------------------
-## comment for 1-OF-N to ...result... SAT clause/s
-## 'vars' is list of input variables
+## multi-variable registration; 'n' next variables
+## faster than calling satsolv_new_varname2() in a loop
 ##
-## TODO: where do we special-case N=1, things like that?
+## returns list of all new variables
 ##
-def sat_1ofn_comment(res, vars):
-	vlist = ",".join(vars)
+def satsolv_new_varname2_many(sat, n, prefix=sSAT_2ND_VAR):
+	nx = satsolv_nr_of_added_vars(sat) +1
 
-	return f'1-OF-N[={ len(vars) }]: ({ res }) for ({ vlist })'
+	nnames = [ prefix +str(i)  for i in range(nx, nx +n) ]
 
+	satsolv_register_added_vars(sat, n)
 
-##-----------------------------------------
-## Return '(top-level) commander variable', newly added (commander) variables,
-## related additional clauses, and comments documenting the collection.
-##
-## The first element of the commander-variable array is true if and only
-## exactly one of 'vars' (variable-name) inputs is True.
-##
-## commander variables are named 'CMDR...'; prefix MUST NOT be used by others
-## TODO: current form restricted to a binary tree
-##       may specialize if truth table generator for k>2 fanout is available
-##
-## 'nr' is the number of defined additional variables, incl. current inputs
-## (used in assigning IDs to intermediate ones)
-##
-## see
-## Kliebert, Kwon: Efficient CNF encoding for selecting 1 of N objects,
-## www.cs.cmu.edu/~wklieber/papers/
-##     2007_efficient-cnf-encoding-for-selecting-1.pdf
-## [accessed 2023-02-24]
-##
-def satsolv_1n(sat, vars, nr=0, allow0=False, result=None):
-	if vars == []:
-		raise ValueError("called with empty variable list")
+	satsolv_add_vars(sat, nnames)
 
-	##-----  trivial special cases  --------------------------------------
-	if len(vars) == 1:
-		return vars[0], [], [], ''
-
-	if len(vars) == 2:              ## -> A XOR B  or  A NAND B (if allow-0)
-		cmd = result  if result  else f'{ sSAT_2ND_VAR }{ nr +1 }'
-
-		if allow0:
-			cls, _, _ = satsolv_nand1(vars[0], vars[1], result=cmd)
-			cmt = f'at-most-1({cmd}) => ({vars[0]} NAND {vars[1]})'
-
-		else:
-			cls, _, _ = satsolv_xor1(vars[0], vars[1], result=cmd)
-			cmt = f'at-most-1({cmd}) => ({vars[0]} XOR {vars[1]})'
-
-		return cmd, [ cmd, ], cls, cmt
-
-	##--------------------------------------------------------------------
-## TODO: should be factored out, since other expressions may reuse
-##       hierarchical grouping+var.assignment
-
-			## recurse: build bottom-up grouping
-			## 1st level: groups of original inputs
-			## 2nd level: commander variables of 1st level groups...
-
-			## TODO: fixed to fanout of 2
-	grps  = list2split(vars, 2)
-	grps0 = grps[:]    ## originals; allow modification of grps[]
-
-	assign, newvar = [], []
-			## assign[] collects [ ...group..., [ cmd.var ] ] list,
-			## in assignment (bottom up) order
-	cls = []
-
-			## if a variable is alone in its group,
-			## propagate it directly up.  in this case, the
-			## originating group remains empty, and we only
-			## store  [ [], [ ...variable... ] ] to assign
-	while grps:
-		curr = []
-		for g in grps:
-			if len(g) == 1:
-				assign.append([ [], g[0] ])
-				curr.append( g[0] )
-				continue
-
-			nv = satsolv_new_varname(nr +len(newvar) +1 )
-			newvar.append(nv)
-				##
-			assign.append([ g, nv, ])
-			curr.append(nv)
-				##
-			satsolv_add_comment(sat,
-				f'  1-OF-N {nv} = OR+not-NAND({",".join(g)})')
-
-		if len(curr) == 1:
-			break
-		grps = list2split(curr, 2)   ## advance to next level
-
-	if result:
-		assign[-1][-1] = result      ## caller-supplied top var.name
-		newvar.pop(-1)               ## was last new-var appended, undo
-	else:
-		result = assign[-1][-1]
-
-					## commander conditions, see section 2
-					##
-					## these conditions essentially simplify
-					## to NAND/OR primitives' clauses,
-					## for fanout k=2
-	cls = []
-	for ai, a in enumerate(assign):
-		c, sub = a[-1], a[-2]
-		assert(len(sub) <= 2)   ## in case increasing fanout, but
-		                        ## forgetting to update something...
-		if sub == []:           ## non-hierarchical, pass-through var
-			continue
-
-## TODO: top-level variable is just an XOR, or an NAND, depending on
-## whether one tolerates 0 or checks for exactly 1 operation.  this
-## might be worth documenting in comments; attempt below.
-##
-##		if (ai+1 >= len(assign)):
-##			xconstr, xn, _ = satsolv_xor1(sub[-2], sub[-1])
-##			xcomm = f'XXX XOR({sub[-2]},{sub[1]})'
-##			for c in xconstr:
-##				satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c,
-##							xcomm)
-##				xcomm = ''
-##		else:
-
-		_, c2 = satsolv_or1(sub[-2], sub[-1], c)
-		cls.extend(c2)
-				## both sub-variables may not be True
-		cls.append( f'-{sub[-2]} -{sub[-1]}' )
-
-	return result, newvar, cls, sat_1ofn_comment(result, vars)
+	return nnames
 
 
 ##-----------------------------------------------------------
-## add clauses for 1-OF-N selections over 'vars'
-## returns top-level 'command' variable which is True if and only if 1-OF-N
-##
-## append comments and clauses to respective lists
-##
-def satsolv_1ofn(sat, vars, force=False):
-	top, nvars, cls, cmt = satsolv_1n(sat, vars, sat[ 'added_vars' ])
+def satsolv_1ofn(sat, vars, result=None, force=True, allow0=False):
+	opr = '1-OF-N'
+	nxi = expr2template_addvars(sat, opr, len(vars), numeric=True)
 
-	satsolv_add_vars(sat, nvars)
+	if (force != True):
+		raise ValueError("fix the non-forced 1-of-N call")
 
-	sat[ 'added_vars' ] += len(nvars)
+## TODO: polymorphic wrapper
+	vi = [ sat['v2i'][v]  for v in vars ]          ## variables as integers
 
-	descr = sat_1ofn_comment(top, vars)
-## force -> allow0
+	tm, orig = expr2template(opr, vi, nxi)
+						## map ints to symbolic names
+	cls = [ " ".join(sat_ints2vars(sat, c))  for c in tm ]
 
-	for c in cls:
-		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + c, descr)
-		descr = ''
-
-	if satsolv_is_debug():
-		for c in cls:
-			satsolv_add_constraint1(sat, '', '  ORIG=' +c)
-
-						## force 1-OF-N by ensuring
-						## commander var is True
-	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + top, descr)
-
-	return top
+	vs = f'({ ",".join(str(vars)) })'
+	return None, None, cls, f'1-OF-N.FORCED({ len(vars) })'
 
 
 ##--------------------------------------
 def allpairs(vars):
 	return itertools.combinations(vars, 2)
-
-
-##----------------------------------------------------------------------------
-## hardwired 0/1-OF-N for small N with trivial expressions
-##
-## returns None if not handled
-##         [ top-level variable, [ newly added variables, ], clauses, comment ]
-##             if solution is applicable
-##
-def satsolv_1n_few(sat, vars, nr=0, allow0=False, result=None, force=False):
-	if len(vars) == 1:
-		if allow0:                                ## A=0/1 -> no clause
-			return [ [], [], [], '', ]
-		else:
-				## explicit clause forcing var to True
-				## do not bother trimming replicated clauses
-				##
-			cls = [ vars[0] ]  if force  else []
-
-			return [ vars[0], [], cls, '', ]      ## 1-OF-N(A) == A
-
-
-	##------------------------------
-	if len(vars) == 2:                          ## 1-of-A/B  or  0/1-of-A/B
-		if allow0:                     ## reject simultaneous True only
-			if result == None:
-				result = satsolv_new_varname2(sat, 'NAND')
-
-			cls = [ f'-{ vars[0] } -{ vars[1] }', ]
-			cmt = f'at-most-1({result})=>NAND({vars[0]},{vars[1]})'
-			return [ [], [], cls, cmt, ]
-						## only clause, no new variable
-## TODO: merge return paths
-		if result == None:
-			result = satsolv_new_varname2(sat, 'N1xXOR')
-
-		cls, _, _ = satsolv_xor1(vars[0], vars[1], result=result)
-		cmt = f'at-most-1({result}) => ({vars[0]} XOR {vars[1]})'
-
-		if force:
-			cls.append(satsolv_const(result))        ## XOR is true
-
-		return [ result, [ result, ], cls, cmt, ]
-
-
-	##------------------------------
-	if len(vars) == 3:
-## TODO: use a more compact encoding than OR+not-pairs
-				## no pair of variables is simultaneously true
-		cls = [ f'-{v1} -{v2}'  for v1, v2  in allpairs(vars) ]
-		or3 = []
-## TODO: proper signs and indexing
-
-		if not allow0:
-			result = satsolv_new_varname2(sat,'THREE2ONEx')
-			cls0, or3, _ = satsolv_or('', vars, result)
-
-			cls.extend(cls0)
-##			cls.append(satsolv_const(result))
-##							## at least one is true
-
-			or3 = [ or3, ]
-
-		return [ result, or3, cls, '', ]
-
-
-	return None
-
-
-##-----------------------------------------
-## Return '(top-level) commander variable', newly added (commander) variables,
-## related additional clauses, and comments documenting the collection.
-##
-## The first element of the commander-variable array is true if and only
-## exactly one of 'vars' (variable-name) inputs is True.
-##
-## commander variables are named 'CMDR...'; prefix MUST NOT be used by others
-## TODO: current form restricted to a binary tree
-##       may specialize if truth table generator for k>2 fanout is available
-##
-## 'nr' is the number of defined additional variables, incl. current inputs
-## (used in assigning IDs to intermediate ones)
-##
-## see
-##   Kliebert, Kwon: Efficient CNF encoding for selecting 1 of N objects,
-##   www.cs.cmu.edu/~wklieber/papers/
-##       2007_efficient-cnf-encoding-for-selecting-1.pdf
-##   [accessed 2023-02-24]
-##
-def satsolv_1n(sat, vars, nr=0, allow0=False, result=None):
-	if vars == []:
-		raise ValueError("called with empty variable list")
-
-	r = satsolv_1n_few(sat, vars, nr=nr, allow0=allow0, result=result)
-	if r:
-		return r[0], r[1], r[2], r[3]
-
-	##--------------------------------------------------------------------
-## TODO: should be factored out, since other expressions may reuse
-##       hierarchical grouping+var.assignment
-
-			## recurse: build bottom-up grouping
-			## 1st level: groups of original inputs
-			## 2nd level: commander variables of 1st level groups...
-			## TODO: fixed to fanout of 2
-			##
-			## TODO: predefine patterns for 3 or 4, and use those
-			##
-	grps  = list2split(vars, 2)
-	grps0 = grps[:]    ## originals; allow modification of grps[]
-
-	assign, newvar = [], []
-			## assign[] collects [ ...group..., [ cmd.var ] ] list,
-			## in assignment (bottom up) order
-			## associating variables with their command variables
-	cls = []
-
-	while grps:
-		curr, grp0size = [], len(grps)
-			## grp0size: initial nr. of pairs at this level
-
-		for g in grps:
-			if len(g) == 1:
-				assign.append([ [], g[0] ])
-				curr.append( g[0] )
-				continue
-					##
-					## if variable is alone in its group,
-					## propagate it directly up.
-					## in this case, the
-					## originating group remains empty
-					## and we only
-					## store  [ [], [ ...variable... ] ]
-					## to assign
-
-				## last assignment: MAY go to 'result'
-				##
-			if (grp0size == 1) and result:
-				nv = result
-			else:
-				nv = satsolv_new_varname2(sat)
-
-			assign.append([ g, nv, ])
-			curr.append(nv)
-				##
-			satsolv_add_comment(sat,
-				f'  1-OF-N command {",".join(g)} -> {nv} ')
-
-		if len(curr) == 1:
-			break
-		grps = list2split(curr, 2)   ## advance to next level
-
-	if result:
-		assign[-1][-1] = result      ## caller-supplied top var.name
-		if newvar != []:
-			newvar.pop(-1)       ## was last new-var appended, undo
-
-	else:
-		result = assign[-1][-1]
-
-					## commander conditions, see section 2
-					##
-					## these conditions essentially simplify
-					## to NAND/OR primitives' clauses,
-					## for fanout k=2
-	cls = []
-	for a in assign:
-		c, sub = a[-1], a[-2]
-		assert(len(sub) <= 2)   ## in case increasing fanout, but
-		                        ## forgetting to update something...
-		if sub == []:           ## non-hierarchical, pass-through var
-			continue
-
-		_, c2 = satsolv_or1(sub[-2], sub[-1], c)
-		cls.extend(c2)
-					## commander=OR(...variables...)
-
-					## both sub-variables may not be True
-		cls.append( f'-{sub[-2]} -{sub[-1]}' )
-
-	return result, newvar, cls, sat_1ofn_comment(result, vars)
 
 
 ##--------------------------------------
@@ -4773,173 +4541,6 @@ def satsolv_add_constraint1(sat, rawc, comment=''):
 def satsolv_add_comment(sat, comment):
 	if sat and ('constraints' in sat):
 		sat[ 'constraints' ].append([ '', comment ])
-
-
-##-----------------------------------------------------------
-## add clauses for 1-OF-N selections over 'vars'
-## returns top-level 'command' variable which is True if and only if 1-OF-N
-##
-## append comments and clauses to respective lists
-##
-def satsolv_1ofn(sat, vars, result=None):
-	top, nvars, cls, cmt = satsolv_1n(sat, vars, sat[ 'added_vars' ],
-	                                  result=result)
-
-	satsolv_add_vars(sat, nvars)
-
-	sat[ 'added_vars' ] += len(nvars)
-
-	descr = sat_1ofn_comment(top, vars)
-
-	for c in cls:
-		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + c, descr)
-		descr = ''
-
-	if satsolv_is_debug():
-		for c in cls:
-			satsolv_add_constraint1(sat, '', '  ORIG=' +c)
-
-						## force 1-OF-N by ensuring
-						## commander var is True
-	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX + top, descr)
-
-	return top
-
-
-##-----------------------------------------
-## 1-OF-N or 0-of-N, hierarchical decomposition: pick P+Q matrix sizes
-## returns p, q per-axis sizes
-##
-def matrix2pq(vars):
-			## assume ~square P*Q is optimal
-			## TODO: minimize (cost(P) + cost(Q)) -> select P, Q
-			##
-	p = int(math.sqrt(len(vars)))
-	if (p ** 2 == len(vars)):
-		q = p     
-			  
-	elif (p * (p+1) >= len(vars)):
-		q = p + 1
-
-	elif ((p + 1) ** 2 >= len(vars)):
-		p, q = p + 1, p + 1
-
-	elif ((p + 1) * (p + 2) >= len(vars)):
-		p, q = p + 1, p + 2
-
-	else:
-		assert(0)  ## ...optimal selection would eliminate selection...
-
-	if debug_is_active(2, vTRC_SCHED):
-		print(f'## 1-OF-N:[{ len(vars) }]->{p}x{q}')
-
-	return p, q
-
-
-##-----------------------------------------
-## 1-OF-N or 0-of-N (selected by 'allow0')
-##
-## returns [ control variable, [ new/intermediate variables],
-##           [ new clauses ], comment ]  tuple
-##
-## 'force' adds explicit clause ensuring 'result' is True
-##
-## 'two-product encoding of 0/1-OF-N'
-##   1) construct P*Q matrix with P*Q >= N
-##   2) variables 1..N <-> entries in matrix
-##   3) 1-OF-N: ensure 1-of-P (X) and 1-of-Q (Y)
-##     3.1) selected entry is intersection
-##   4) 0-of-N: allow NOR(P) AND NOR(Q) (==NOT(P OR Q)) as well
-##   5) only N product variables are used if N<P*Q
-##
-## note: hierarchical decomposition of 1-of-P/Q
-## TODO: use template for small P/Q which we expect to encounter
-##
-## see:
-## Chen: A new SAT encoding of the at-most-one constraint
-## 2010-07
-## TODO: URL
-##
-def satsolv_1ofn_2prod(sat, vars, result=None, force=False, allow0=False):
-## sat next vars -> nr
-	nr, comm, expr = 0, '', []
-
-## TODO: trim added-vs-original variables properly
-
-				## before-after: new/intermediate variables
-	nvars_orig = satsolv_nr_of_added_vars(sat)
-
-	expr = f'1-OF-[{ len(vars) }]({ ",".join(vars) })'
-
-	r = satsolv_1n_few(sat, vars, nr=nr, allow0=allow0, result=result)
-	if r:
-		return r[0], r[1], r[2], r[3]
-
-	p, q = matrix2pq(vars)
-
-	if result == None:
-		result = satsolv_new_varname2(sat,
-		                 prefix='N01:' if allow0 else 'N1x')
-
-	comm = f'{ 0  if allow0  else 1 }-of-{ len(vars) } <-> {p}*{q}'
-	cls, nvars = [], []
-
-			## 'frame' variables, rows (Q) and columns (P)
-			##
-	pvars = [satsolv_new_varname2(sat, prefix=f'XY{ len(vars) }C')
-	                              for i in range(p)]
-			##
-	qvars = [satsolv_new_varname2(sat, prefix=f'XY{ len(vars) }R')
-	                              for i in range(q)]
-
-					## group inputs as p-times-q product
-					##
-	xyvars = [vars[ i*p : (i+1)*p ]  for i in range(q)]
-					##
-					## last row may contain less
-					## variables (if N < P*Q)
-
-	if True:
-		print(f'## P=1-of-{p} x Q=1-of-{q}')
-		print(f'## VARS(P)[{ len(pvars) }]={ pvars }')
-		print(f'## VARS(Q)[{ len(qvars) }]={ qvars }')
-
-	pv, pnvars, pcls, _ = satsolv_1ofn_2prod(sat, pvars, allow0=allow0)
-	qv, qnvars, qcls, _ = satsolv_1ofn_2prod(sat, qvars, allow0=allow0)
-	print(f'## VAR.P={ pv } [{ len(pcls) }] ', pcls)
-	print(f'## VAR.Q={ qv } [{ len(qcls) }] ', qcls)
-
-	cls.extend(pcls)
-	cls.extend(qcls)
-	nvars.extend(pnvars)
-	nvars.extend(qnvars)
-
-				## both MUST be true for 1-by-1 intersection
-				##
-	pq_clauses, _, _ = satsolv_and('', [ pv, qv, ], result=result)
-	cls.extend(pq_clauses)
-
-				## at-most-1(vars): each 'var' corresponds to
-				## not more than one pvar/qvar ->
-				##     (NOT(v) OR p) AND (NOT(v) OR q)
-				##
-	for ri, row in enumerate(xyvars):                  ## loop(q), row
-		for ci, col in enumerate(row):             ## loop(p), column
-			cls.append(f'-{ col } { pvars[ci] }')
-			cls.append(f'-{ col } { qvars[ri] }')
-
-	nvars_after = satsolv_nr_of_added_vars(sat)
-
-	if force:
-		cls.append(f'{ result }')   ## 0/1-OF-N must hold at this level
-
-	print(f'## ADDED.VARS=+{ satsolv_nr_of_added_vars(sat) - nvars_orig }')
-		##
-	if nvars_after > nvars_orig:
-		vlist = ", ".join(sat["vars"][ nvars_orig:nvars_after ])
-		print(f'## ADDED.VARS=[{ vlist }]')
-
-	return result, [], cls, comm
 
 
 ##-----------------------------------------------------------
@@ -5035,7 +4636,7 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 
 		if (common_vehicles(delvs, d1i, d2i) == 0):
 				## TODO: log: delivery pair may not conflict,
-				## since they are limited to disjoint sets of 
+				## since they are limited to disjoint sets of
 				## suitable vehicles
 				##
 			continue
@@ -5074,12 +4675,12 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 					##
 		d1tu, d2tu = dts[ d1 ][ "tu" ], dts[ d2 ][ "tu" ]
 		conflicts = []
-			##
-			## collects [ delivery1, time1(bit),
-			##            delivery2, time2(bit) ] tuples
-			## for conflicting pairs
+				##
+				## collects [ delivery1, time1(bit),
+				##            delivery2, time2(bit) ] tuples
+				## for conflicting pairs
 
-		for u1 in d1tu:
+		for u1 in d1tu:                            ## u1 is unit(time1)
 			u1b  = timevecbit2offset(u1) -1
 			allt = 0
 
@@ -5087,9 +4688,10 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 				## per-bit construction; works
 				## regardless of multiple windows
 				##
-			for shift in range(d12u):
-				allt |= (u1b << shift) & tmax_mask
-				allt |= (u1b >> shift)
+			for shf in range(d12u):
+				allt |= (u1 << shf) | (u1 >> shf)
+			##
+			allt &= tmax_mask
 
 					## units of delivery2 which conflict
 					## with this broader 'allt'
@@ -5099,7 +4701,7 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 			for u2b in u2clash:
 				u2bit = timevecbit2offset(u2b) -1
 
-				conflicts.append([d1, u1b, d2, u2bit])
+				conflicts.append([ d1, u1b, d2, u2bit ])
 
 				if not satsolv_is_debug(2):
 					continue       ## only diags lines left
@@ -5110,19 +4712,21 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 				print(f"## SAT.CONFLICT DELV1={d1}," +
 					f"T={ t1s }[{u1b}] DELV2={d2}," +
 					f"T={ t2s }[{u2bit}] MIN.TIME.DIFF=" +
-					f"{ d12u*vTIME_UNIT_MINS }min")
+					f"{ d12u*vTIME_UNIT_MINS }min" +
+					f"[{ d12u }u]")
 
 		if conflicts and satsolv_is_debug():
 			print(f"## SAT.COMPAT[{d1},{d2}]: TIME.VEC=" +
 				f"[{ delvs[ d1i ][ 'time' ] }]=x{ d1t :x}," +
 				f"[{ delvs[ d2i ][ 'time' ] }]=x{ d2t :x}," +
 				f"MIN.TIME.DIFF=" +
-				f"{ d12u * vTIME_UNIT_MINS }min, " +
+				f"{ d12u * vTIME_UNIT_MINS }min[{ d12u }u], " +
 				f"CONFLICTS={ len(conflicts) }")
 
 		conflict_pairs.extend(conflicts)
 
 	print(f"## SAT.TOTAL.CONFLICTS={ len(conflict_pairs) }")
+	sys.stdout.flush()
 
 			## (1) register all variables, so var-to-int lookups
 			##     always succeed
@@ -5131,8 +4735,26 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 			## rationale: post-filtering var-to-int becomes global
 			## bottleneck at few hundred thousand constraints
 
-	for c in conflict_pairs:
-		satsolv_add_conflict_constraints(sat, c, satvcount)
+	vbits  = satsolve_vidx_bits(satvcount)
+
+				## preregister conflict/NEQ0 variables
+				##
+				## mgmt/expansion of variables' mappings turns
+				## out to be a visible portion of runtime
+				##
+	nextidx = satsolv_next_varnr(sat)
+	incr    = sat_neq0_addl_var_count(vbits)
+##RRR
+	if False:
+		satsolv_new_varname2_many(sat, incr * len(conflict_pairs))
+
+	for ci, c in enumerate(conflict_pairs):
+		if (ci % vPROGRESS) == 0:
+			print(f'## registering conflicts { ci+1 }/' +
+				f'{ len(conflict_pairs) }')
+
+		satsolv_add_conflict_constraints(sat, c, vbits, nextidx=0)
+		nextidx += incr
 
 	if final:
 		register_sat_condition(sat[ 'constraints.raw' ],
@@ -5157,17 +4779,23 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 ##     dXXtYYv0 dXXtYYv1  ->  dXXtYY
 ##     dXXtZZv0 dXXtZZv0  ->  dXXtZZ
 ##
+## constraint added: OR(dXXt0 .. dXXtN) True (=delivery assigned to a vehicle)
+##
 ## relies on the vehicle-bits encoding being >0 if and only if
 ## a vehicle is assigned (all-0 means unassigned)
+##
+## returns dXXtYY variable (name)
 ##
 def satsolv_delv2time(sat, delv, time_unit, vnr_bits):
 	vb = list(vnr_bits)
 
 	tvar  = satsolv_var_name(delv, time_unit=time_unit)
-	vvars = list(satsolv_var_name(delv, time_unit=time_unit, vnumber=v)
-	                              for v in vb)
+	vvars = [ satsolv_var_name(delv, time_unit=time_unit, vnumber=v)
+	          for v in vb ]
+	vi    = [ sat['v2i'][v]  for v in vvars ]
+	ti    = sat['v2i'][ tvar ]
 
-	cls, _, _ = satsolv_or('', vvars, result=tvar)
+	cls, _, _ = satsolv_or('', vi, result=ti)
 
 	comm =  f'delivery+time <-> +vehicles: (d={ delv }, t={ time_unit })'
 	comm += f' [{tvar} = ({ " OR ".join(vvars) })]'
@@ -5175,6 +4803,8 @@ def satsolv_delv2time(sat, delv, time_unit, vnr_bits):
 	for c in cls:
 		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
 		comm = ''
+
+	return tvar
 
 
 ##--------------------------------------
@@ -5191,10 +4821,14 @@ def satsolv_delv2time(sat, delv, time_unit, vnr_bits):
 ##
 ## returns  nr. of conditioned with 'solve' True, registering all
 ##                 dependent variables etc.
+##
 ##          OR conditions with None 'sat':
 ##                 [ ...result variable..., ...<all variables ORed>... ] tuples
 ##
-def satsolv_delv2vehicle(sat, didx, tbits, vnr_bits, solve=True):
+## registers bits' variables with 'mark_vars' (SAT-relevant setting)
+##
+def satsolv_delv2vehicle(sat, didx, tbits, vnr_bits, solve=True,
+                         mark_vars=True):
 	vb, count, res = list(vnr_bits), 0, []
 
 	vvars = list(satsolv_var_name(didx, vnumber=v)  for v in vb)
@@ -5215,6 +4849,7 @@ def satsolv_delv2vehicle(sat, didx, tbits, vnr_bits, solve=True):
 ## TODO: implicit _var_name construction replicated here:
 		alltimes = [ f'{ t }v{vi}'  for t in tvars ]
 
+					## dXXv0 = OR(dXXt0v0 .. dXXtNv0)
 		if solve:
 			vconstr, _, vcomm = satsolv_or('', alltimes,
 						result = vvars[vi])
@@ -5227,29 +4862,22 @@ def satsolv_delv2vehicle(sat, didx, tbits, vnr_bits, solve=True):
 			res.append([ vr, ])
 			res[-1].extend(alltimes)
 
-	return count  if solve  else res
+	return vvars  if solve  else res
 
 
 ##--------------------------------------
+## list of int.variables for list of [valid] symbolic IDs
+##
 ## variables may begin with '-', mapped to negated form (idx<0 in solver input)
 ##
-## TODO: simplified to a form which could be list-comprehended
+## see also sat_ints2vars(sat, vars), the opposite transform
 ##
-## see also:
-##
-def satsolv_vars2ints(sat, vars):
-	res = []
+def sat_vars2ints(sat, vars):
+	sys.stdout.flush()
 
-	for v in vars:
-		sgn, val = 1, v
-
-		if val[0] == '-':
-			sgn = -1
-			val = val[1:]
-
-		res.append(sgn * (sat[ "vars" ].index(val) +1))
-
-	return res
+	return [ -sat[ "v2i" ][ v[1:] ]  if v.startswith('-')
+	         else sat[ "v2i" ][ v ]
+	         for v in vars ]
 
 
 ##--------------------------------------
@@ -5269,14 +4897,14 @@ def satsolv_add_delvs1(sat, dvars, delv):
 	comm =  f'delivery #{didx} scheduled({delv[ "time" ]}) '
 	comm += '(vars=' +(' '.join(dvars)) +')'
 
-	top, _, cls, comm = satsolv_1ofn_2prod(sat, dvars, force=True)
-##	top = satsolv_1ofn(sat, dvars)
-##
+	_, _, cls, comm = satsolv_1ofn(sat, dvars)
+
 	for c in cls:
+## TODO: polymorphic workaround
 		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
 		comm = ''
 
-	return top
+	return None
 
 
 ##----------------------------------------------------------------------------
@@ -5365,6 +4993,7 @@ def constraint2template(sat, constr):
 	if len(ccp) > len(dev.sat_templates.tSAT_CNF_TEMPLATES[ opr ]):
 		if not opr in tTEMPLATE_NSAT_SIZES:
 			tTEMPLATE_NSAT_SIZES[ opr ] = 0
+
 		if len(ccp) > tTEMPLATE_NSAT_SIZES[ opr ]:
 			tTEMPLATE_NSAT_SIZES[ opr ] = len(ccp)
 			sys.stdout.write(f"missing SAT/CNF template " +
@@ -5419,19 +5048,171 @@ def constraint2template(sat, constr):
 	return [ value, ccp ]
 
 
+##----------------------------------------------------------------------------
+## recurring pattern: non-empty, either full-integer or full-string
+## (=symbolic) variable list for CNF-template inputs
+##
+## raise exception if anything is invalid
+##
+def input_type_assertions(inputs):
+	if inputs == []:
+		raise ValueError("CNF template with no inputs?")
+
+	if isinstance(inputs[0], int):
+		diff_type = [ i  for i in inputs
+		              if not isinstance(i, int) ]
+		if (0 in inputs):
+			raise ValueError("ERROR: 0 invalid as input variable")
+
+	elif isinstance(inputs[0], str):
+		diff_type = [ i  for i in inputs
+		              if not isinstance(i, str) ]
+	else:
+		raise ValueError("CNF template with no inputs?")
+
+	if list(diff_type):
+		raise ValueError("CNF template: mixed symbolic/numeric inputs")
+
+
 ##--------------------------------------
 ## add any implicit constraints to SAT collection
 ## MODIFIES 'constraints'
 ##
-## RRR
+## raise exception if anything is invalid
 ##
 def satsolv_implicit(sat, constraints):
 	for c in constraints[ 'constraints.raw' ]:
 		constraint2template(sat, c)
 
-##     'time2vec': 0x1e78,
 
-	return
+##----------------------------------------------------------------------------
+## invariant: strings MAY start with up to one minus sign
+##
+def sat_negated(v):
+	if isinstance(v, str):
+		if v.startswith('--'):
+			raise ValueError(f'multi-negated input ({v})')
+		return v[1:]  if (v[0] == '-')  else ('-' +v)
+
+	return -v
+
+
+##----------------------------------------------------------------------------
+## raw SAT template with 0-based index
+## returns REFERENCE; caller MUST NOT update without copying
+##
+## raises verbose exception if anything fails
+##
+def expr2template_raw(opr, idx, base=1):
+	if not opr in dev.sat_templates.tSAT_CNF_TEMPLATES:
+		raise ValueError(f"ERROR: unknown templateoperation ({opr})")
+
+	if idx >= len(dev.sat_templates.tSAT_CNF_TEMPLATES[ opr ]):
+		raise ValueError(f"ERROR: template size range({ idx })")
+
+	return dev.sat_templates.tSAT_CNF_TEMPLATES[ opr ][ idx -base ]
+
+
+##----------------------------------------------------------------------------
+## add all necesary indirect variables for templated variable
+## returns name of first one, or None if no output
+##
+## 'numeric' forces numeric-list result; default is symbolic
+##
+def expr2template_addvars(sat, opr, idx, base=1, numeric=False):
+	tm  = expr2template_raw(opr, idx, base=base)
+	nxv = satsolv_next_varnr(sat)
+	add = tm[ 'add.vars' ]
+
+	if add > 0:
+		nr = satsolv_new_varname2_many(sat, add)
+
+		if numeric:
+			sys.stdout.flush()
+			nr = sat_vars2ints(sat, nr)
+
+		return nr
+
+	return 0
+
+
+##----------------------------------------------------------------------------
+## combine integer clause template and list of inputs to clauses
+## inputs' list may be string (=symbolic) or integer
+##
+## 'opr' is one of the possibilities from tSAT_CNF_TEMPLATES
+## 'addl' is either index of first additional variable (int) or list
+##        of additional variables. the latter may be strings or
+##        numeric. (the only restriction: list MUST be of uniform type)
+## 'idx' selects entry to pick; defaults to nr. of input vars if 0
+##
+## polymorphic: tolerate arbitrary combinations of input/addl-variable
+## types: both integers (verbatim) or string (symbolic) refs. are supported
+##
+## non-None 'result' is designated output variable
+##   -- currently, all outputs are single-valued at most
+##   -- raises exception if operation produces no output (such as fixed-True OR)
+##
+## returns clauses derived from inputs (list) and original template
+##
+def expr2template(opr, inputs, addl, idx=0, result=None):
+	if idx == 0:
+		idx = len(inputs)
+
+	templ = expr2template_raw(opr, idx)
+	input_type_assertions(inputs)
+
+	res     = []
+	addlst  = isinstance(addl, list)
+	addbase = len(inputs) +1     ## first 1-based additional-variable index
+
+	cls = templ[ 'clauses' ]
+
+				## collated inputs+additional-vars' list
+	vidx = inputs[:]
+	if addlst:
+		vidx.extend(addl)
+
+	for ci, c in enumerate(cls):
+		res.append([])
+		for vi, v in enumerate(c):
+			vabs    = abs(v)
+			negated = (v < 0)
+
+			if vabs == 0:
+				raise ValueError("clause terminator in " +
+					f"template ({ cls })")
+
+
+			if vabs <= len(vidx):
+				curr = vidx[ vabs -1 ]
+				res[-1].append( sat_negated(curr)  if negated
+				                else curr )
+				continue
+## TODO: do all paths supply an additional-vars' array?
+
+			if vabs >= addbase:
+				if addl == None:
+					raise ValueError("+variable without "
+						f"any? (c={ cls })")
+
+## TODO: factor out; similar polymorphic uses exist
+				nidx = vabs -addbase -1              ## 0-based
+				if addlst:
+					if nidx >= len(addl):
+						raise ValueError("clause +var "
+							"is out of range " +
+							f"(c={ c })")
+					vfinal = addl[ nidx ]
+				else:
+					vfinal = addl +nidx
+			else:
+				vfinal = inputs[ vabs -1 ]
+
+			res[-1].append( sat_negated(vfinal)  if negated
+			                else vfinal )
+
+	return res, templ
 
 
 ##----------------------------------------------------------------------------
@@ -5480,6 +5261,8 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 		print(sSATCOMMENT +"no deliveries left for SAT solver")
 		return
 
+## TODO: do we have a list-collapsing wrapper fn?
+
 	print(sSATCOMMENT +f'deliveries remaining [{ len(sdels) } total]: ' +
 		(",".join(str(s) for s in sdels)))
 
@@ -5493,21 +5276,12 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 	debugmsg(f'## SAT.VEHICLES={ sat_vehicles }', 1)
 	debugmsg(f'## SAT.VEHICLE.ID.BITS={ satvbits }', 1)
 
-	if (satvbits > 4):
-		raise ValueError("predefined less-than-N SAT forms are " +
-				"available up to V=3 vehicle-ID bits")
-
 	satsolv_add_comment(sat, f'using { sat_vehicles } SAT vehicles, ' +
 				f'encoded as { satvbits } bits')
 	satsolv_add_comment(sat, f'all-00 SAT-vehicle ID: not (yet?) assigned')
 
 	dts = { }                   ## full list of (delivery, time unit) pairs
 
- 	##-----  SAT-pairs list  ---------------------------------------------
-	## check for conflicting delivery/time unit/vehicle assignments
-
-	vbitlist = range(satvbits)      ## bit indexes for vehicle IDs
- 	                                ## v0..v(N-1) in descriptions
 
 	for sd in sdels:
 		d = delvs[sd]                      ## current delivery's struct
@@ -5518,17 +5292,36 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 			"tu": list( timevec2units(t) ),
 		}
 
+
+ 	##-----  SAT-pairs list  ---------------------------------------------
+	## check for conflicting delivery/time unit/vehicle assignments
+
+	vbitlist = range(satvbits)      ## bit indexes for vehicle IDs
+ 	                                ## v0..v(N-1) in descriptions
+
+## TODO: centralized set-or-tolerate-existing macro
+
+	if (not 'vehicles' in sat) or (sat[ 'vehicles' ] == 0):
+		sat[ 'vehicles' ] = sat_vehicles
+	elif (sat[ 'vehicles' ] != sat_vehicles):
+		raise ValueError("conflicting vehicle count")
+
+	if (not 'deliveries' in sat) or (sat[ 'deliveries' ] == 0):
+		sat[ 'deliveries' ] = len(delvs)
+	elif (sat[ 'deliveries' ] != len(delvs)):
+		raise ValueError("conflicting delivery count")
+
 	for sd in sdels:
 		d = delvs[sd]                      ## current delivery's struct
 		dvars = []
 		didx  = d[ "index" ]
 
+		print(f'## DELIVERY { sd }/{ len(sdels) }')
+
 		tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
 		for t in tu:
 			tb = timevecbit2offset(t) -1
 			tbits.append(tb)
-## TODO: factor out
-## RRR
 			dvars.append(satsolv_add_delvtime(sat, didx, tb))
 
 			for v in satvbitnrs:
@@ -5540,10 +5333,45 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 		for t in tbits:
 			satsolv_delv2time(sat, didx, t, vbitlist)
 
-		_ = satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
+		vidbits = satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
+
+		cls, _, _ = satsolv_or_true(sat, vidbits)
+		comm = f'OR/TRUE({ ",".join(vidbits) })'
+
+		for c in cls:
+			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
+			comm = ''
+
+ 	##-----  /vehicle-number constraints  --------------------------------
 
 	satsolv_delv_window_2x_deps(sat, delvs, xy2dist_table,
 	                            dts, sat_vehicles)
+
+ 	##-----  vehicle-number constraints  ---------------------------------
+	## none of the vehicles remain unassigned (no optional deliveries)
+	##
+	## all vehicle-IDs are within range
+	##   - relevant only if max(...) is not 2^N -1
+
+	if sat_vehicles < ((1 << satvbits) -1):
+		limit = sat_vehicles +1
+
+		lstr = f'{ limit }({ bin(limit) })'
+		debugmsg(f"## all SAT.VEH.IDs < { lstr }")
+
+		for si, sd in enumerate(sdels):
+			d    = delvs[sd]
+			didx = d[ 'index' ]
+			dvs  = sat_delv_vidlist(didx, satvbits)
+			cls, _, comm = satsolv_less_than(sat, dvs, limit)
+
+			print(f'## SAT.VEH.ID[{ didx }]<{ lstr }:', cls)
+			for c in cls:
+				satsolv_add_constraint1(sat,
+				            sSAT_SYM_PREFIX +c, comm)
+				comm = ''
+
+	## TODO: OR1 all vehicle IDs
 
 
 ##--------------------------------------
@@ -5613,8 +5441,6 @@ def plan2varlist(delv, tbits, vbits=0):
 	if vbits:
 		vl.extend(satsolv_var_name(delv, vnumber=v)
 		          for v in range(vbits))
-				## D[elivery](...) || V[ehicle](...)
-
 
 				## D|V = OR( D|T|V )  ...for T...
 				##
@@ -6815,654 +6641,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 		vbitlist = range(satvbits)      ## bit indexes for vehicle IDs
 		                                ## v0..v(N-1) in descriptions
 
-
-##		for d in (d  for d in dels :
-
-## 			dvars = []
-## 			didx  = d[ "index" ]
-## ## TODO: retrieve from above table, now that we populate it
-##
-## 				## register dXXtYY and dXXtYYvZZ
-## 				##   - delivery XX, time unit YY
-## 				##   - delivery XX, time unit YY,
-## 				##     vehicle-ID ZZ
-## 				## 'vehicle ZZ' covers bits, not counters
-## 				## (binary-encoded index of vehicle assigned)
-## 				##
-## 				## with 4 vehicles, v0 and v1; variables:
-## 				##     dXX-tYY-v0
-## 				##     dXX-tYY-v1
-## 				## combinations of v0+v1 used to count
-## 				## (1-based) delivery index
-##
-## 			tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
-##
-## 			for t in tu:
-## 				tb = timevecbit2offset(t)
-## 				tbits.append(tb)
-##
-## 				dvars.append(satsolv_add_delvtime(sat,
-## 				             didx, tb))
-##
-## 				for v in satvbitnrs:
-## 					satsolv_add_delvtime(sat,
-## 					             didx, tb, vnumber=v)
-##
-## 			satsolv_add_delvs1(sat, dvars, d)
-##
-## 			for t in tbits:
-## 				satsolv_delv2time(sat, didx, t, vbitlist)
-##
-## 			satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
-##
-## 		satsolv_delv_window_2x_deps(sat, dels, xy2dist_table,
-## 		                            dts, satvcount)
-##
-## 	del(dts)
-## 	##-----  /SAT-pairs list  --------------------------------------------
-
 	satsolv_report(sat)
 
 	sys.exit(0)
-
-
-## 	##-----  v2:  --------------------------------------------------------
-##
-## 				## pick "reasonably spaced" start times for
-## 				## all deliveries
-## 	dels = copy.deepcopy(aux)
-##
-## 	tstart = time.perf_counter()
-## 	starttimes(dels)
-## 	tend = time.perf_counter()
-## 		##
-## 	debugmsg(f'## time(START.TIMES)={ timediff_str(tstart, tend) }',
-## 	         lvl=2, type=vTRC_TIME)
-## 	tstart = tend
-## 	##-----  tstart is after initial delivery assignments  ---------------
-##
-##
-## 	tmin, tmax = dels[0][ 'MIN_TIME_ALL' ], dels[0][ 'MAX_TIME_ALL' ]
-## 	t = tmin
-##
-## 	backtrack  = []         ## assigned in each turn
-## 	btrack_alt = []         ## alternates to those assigned in each turn
-## 	                        ## MUST evolve in matched pairs
-##
-## 	avail   = len(vpos)     ## number of new vehicles one may assign
-## 	delayed = {}            ## anything pushed back in current schedule
-##
-## 	vpos0 = copy.deepcopy(vpos)
-##
-## 				## enumerate delivery windows (bits in mask)
-## 				## in chronological order
-## 	while (t <= tmax):
-## 		assert(len(backtrack) == len(btrack_alt))      ## matched pairs
-##
-## 		t0 = timevec2asap(t, minutes=True)
-## 		te = t0 + vTIME_UNIT_MINS -1
-## 		tunit = t.bit_length()-1               ## 0-based, from tmin...
-## 		t += t             ## current t is t/2; allow simple continue
-##
-## 		debugmsg(f'## T.WINDOW={ minute2wall(t0) }..' +
-## 			 f'{ minute2wall(te) }', 1)
-##
-## 		##---  enumerate all possible (delivery, vehicle) pairs  -----
-## 		## (1) 'new vehicle' assignment appear, once, if new vehicles
-## 		##     may still be added/assigned
-## 		## (2) delay listed as 'vehicle' if still possible
-##
-## 						## which deliveries have
-## 						## been pre-scheduled here?
-## 		ds = list(d  for d in dels
-## 			if (('window' in d) and (t & d['window']) and
-## 			    (not is_delivery_frozen(d))))
-##
-## 		didxs = list(sorted(d[ "index" ] for d in (ds)))
-##
-## 					## which one of the delayed deliveries
-## 					## may be considered in this time unit?
-## 					##
-## 		ddelay_now = list(d  for d in delayed.keys()
-## 		                  if ((t & dels[d][ 'window' ] and
-## 		                      not is_delivery_frozen(dels[d]))))
-## 					##
-## 		ddelay_now = list(sorted(ddelay_now))
-##
-## 		if debug_is_active(3, vTRC_SCHED | vTRC_STACK):
-## 			print('## BACKTRACK.TAKEN ', backtrack)
-## 			print('## BACKTRACK.ALT   ', btrack_alt)
-## 					## backtrack stack at entry
-##
-## 		if debug_is_active(2, vTRC_SCHED):
-## 			print('## SCHED.INIT0.NOW    ', didxs)
-## 			if ddelay_now:
-## 				print('## +BACKTRACK.DELAYED ',
-## 				      ",".join(str(di)
-## 				          for di in sorted(ddelay_now)))
-##
-## 		didxs.extend(ddelay_now)
-## 		didxs = list(sorted(didxs))   ## anything possibly starting now
-##
-## 		if debug_is_active(2, vTRC_SCHED):
-## 			print('## SCHED.NOW.CHECK    ', didxs)
-##
-## 				## plus anything delayed to now, IF they
-## 				## may be delivered in this window
-##
-## 		debugmsg(f'## T.START0.COUNT={ len(didxs) }', 1,
-## 		         type=vTRC_SCHED)
-## 		if ds:
-## 			debugmsg('## T.DELVS.NOW=' +
-## 				f'{ ",".join(str(di)  for di in didxs) }', 1)
-##
-## 				## time assignments in current round
-## 				## nr. of possible pairs (total)
-## 				## does this combination break/backtrack?
-## 		curr, pairs, btrack = {}, 0, False
-## 				##
-## 				## curr {
-## 				##	delivery: [[veh.ID, ASAP], ...]
-## 				## }
-## 				## collects only already running vehicles
-## 				## new vehicle assignments or delays handled
-## 				## differently
-## 				##
-## 				## pairs is total nr. of non-special
-## 				## vehicle assignments
-## 				##
-## 		spec_sched = {} ## number of special schedule options,
-## 				## indexed by delivery index
-##
-## 				## delivery indexes which may be delayed
-## 				## or may be assigned a new vehicle,
-## 				## respectively
-## 		may_delay, may_assign_new = {}, {}
-## 				##
-## 				## note: redundant; consolidate, see
-## 				## vDELAY_DELIVERY and vNEW_VEHICLE
-##
-## 		ds = list(sorted(ds, key=del_unit2sort))
-## 		for d in ds:
-## 			didx     = d[ 'index' ]
-## 			x, y     = d['x'], d['y']
-## 			new_load = [ d['primary'], d['secondary'] ]
-## 			                 ## assigning new vehicle or delaying
-##
-## 			debugmsg(f'## T.DELV.IDX={ didx }', 1)
-## 			debugmsg(f'## T.DELV.WINDOW={ d["time"] }', 1)
-## 			debugmsg(f'## T.DELV.XY={ x },{ y }', 2,
-## 			         type=vTRC_MAP)
-##
-## 			spec_sched[ didx ] = 0
-##
-## 			vs   = vehicle_may_reach(x, y, t, vpos, xy2d, d,
-## 			                         assign_new=False)
-## 			vids = vehicles_which_may_deliver(new_load, vs,
-## 			                                  vpos, minute0=t0)
-## 			curr[ didx ] = vids
-## 			if (avail > 0):
-## 				may_assign_new[ didx ] = 1
-## 				spec_sched[ didx ] += 1
-##
-## 			if has_time_after(d, t):
-## 				may_delay[ didx ] = 1
-## 				spec_sched[ didx ] += 1
-## 				curr[ didx ].append([ vDELAY_DELIVERY, t0, ])
-##
-## 				## categorize all possibilities; pick option
-## 				## to descend into.  split option tuples into
-## 				## (1) assigned (2) alternate groups; first
-## 				## one is assigned, second one will be picked
-## 				## up when backtracking
-## 				##
-## 				## each delivery has only one option assigned
-## 				## to it; if out of options, backtrack.
-##
-## 			if (vids == []) and (spec_sched[didx] == 0):
-## 				btrack = True
-## 				break
-##
-## 			pairs += len(curr[ didx ]) + spec_sched[didx]
-##
-## 		if btrack:
-## 			assert(0)
-## 			pass
-##
-## 		if debug_is_active(1, vTRC_SCHED):
-## 			print('## DELV.SCHED.TUPLES[time.w=' +
-## 				f'{ tunit }].COUNT={ pairs }')
-## 			print(f'## VEH.AVAIL={ avail }')
-##
-## 			for d in sorted(curr.keys()):
-## 				dstr = ",".join(delvtuple2str(v, asap)
-## 				                for v, asap in curr[d])
-## 					##
-## 				print(f'## DELV[{ d }]={ dstr }')
-##
-## 		if curr == {}:     ## no delivery to schedule in this time unit
-## 			backtrack.append([])
-## 			btrack_alt.append([])
-## 			continue
-## 				## already backtracked above w/o valid schedule
-##
-## 					##------------------------------------
-## 					## nr. of options for each delivery
-## 					## incl. delay or new vehicles
-## 		nro = {}
-## 		for d in curr.keys():
-## 			nro[d] =  len(curr[d]) + (1 if (d in may_delay) else 0)
-## 			nro[d] += (1  if (d in may_assign_new)  else 0)
-##
-## 		assert(0 < min(nro.values()))
-## 					##
-## 					## if delivery exists with no options,
-## 					## MUST have already backtracked above
-##
-## 		##----------------------------------------------------
-## 		## split [delivery: vehicle, ASAP] tuples' list
-## 		## to 'taken', 'not taken' list of options
-## 		##
-## 		## one option per delivery; rest go to
-## 		## alternates for backtrack-alternate stack
-##
-##
-## 		##====================================================
-## 		## this is where choice-enumeration magic happens
-## 		##
-## 		## collect all additions to 'now' and 'alt', then append
-## 		## to backtrack[]/btrack_alt[]
-## 		## entries are [ d.index, vehicle ID, ASAP, ]
-## 		##
-## 		## we do not currently organize that way, but this two-step
-## 		## build would allow context-aware sorting of
-## 		## currently-selected assignments
-## 		##
-## 		now, alt = [], []
-##
-## 				## (1) index of deliveries with (A) only one
-## 				##     option, excluding new vehicles (which
-## 				##     are capacity-limited, and counted below)
-## 				## assign these unconditionally
-## 				##
-## 		didxs_1choice = list(sorted(di  for di in curr.keys()
-## 		                     if ((nro[di] == 1) and              ## (A)
-## 		                         (not di in may_assign_new))))
-##
-## 		if didxs_1choice and debug_is_active(2, vTRC_SCHED):
-## 			print('## DELV.FIXED=', didxs_1choice)
-## 							## TODO: pretty-print
-##
-## 		for di in didxs_1choice:
-## 			if di in may_delay:
-## 				now.extend([ di, vDELAY_DELIVERY, minute0, ])
-## 			else:
-## 				now.extend([ di, curr[di][0][0],
-## 				             curr[di][0][1], ])
-##
-## 				## (2) trim current-index list to anything
-## 				##     remaining with multiple choices
-## 				##
-## 		didxs = list(di  for di in didxs  if (not di in didxs_1choice))
-##
-## 				## (3) enumerate delivery-vehicle assignments
-## 				##     considers number of available ones
-## 				##
-## 		vas = list(vehicle_assignments(didxs, curr, t0, avail,
-## 		                               may_delay))
-##
-## 				## are there enough unassigned vehicles
-## 				## to try all the single-option ones?
-## 				##
-## 				## if not, we need to backtrack: previous
-## 				## choices do not leave us enough unassigned
-## 				## vehicles which SHOULD be assigned now
-##
-## 				## (3) choices (tuples) for each
-## 				##     still-unassigned delivery
-## 				##
-## 				## TODO: 'allow new vehicle' strategy
-## 		for di in didxs:
-## 			v, asap = curr[di].pop(0)
-##
-## #			if (di in may_assign_new):
-## #				avail -= 1
-##
-## 			now.append([ di, v, asap, ])
-## #			if (v == vDELAY_DELIVERY):
-## #				maydelay[di] = 1
-##
-## 			for v, asap in curr[di]:
-## 				alt.append([ di, v, asap, ])
-##
-## 			continue   ## XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-##
-## 			vchoices = list([v, asap]  for v,asap in curr[di]
-## 			                if not is_special_vehicle(v))
-## 				##
-## 				## choices which involve actual vehicles
-## 				##
-## 				## try them in increasing distance order,
-## 				## which SHOULD be the case by now
-## 				## (after vehicle_may_reach())
-##
-## 				## no newly assigned vehicle would
-## 				## arrive later than an existing one,
-## 				## since we assume the former will be
-## 				## started early enough to hit the
-## 				## start of current time unit.
-## 				##
-## 				## note: a vehicle MAY also arrive
-## 				## immediately, f.ex. if its earliest
-## 				## arrival would have been in a preceding
-## 				## time unit, when this delivery would not
-## 				## have been possible.
-##
-## 			while True:         ## first suitable case breaks
-## 				newv = []
-## 				if di in may_assign_new:
-## 					newv = [ di, vNEW_VEHICLE,
-## 					         timevec2asap(t, minutes=True),
-## 					]
-##
-## 				if asap:
-## 					if newv:
-## 						now.append(newv)
-##
-## 					elif vchoices:
-## 						va = vchoices.pop(0)
-## 						now.append([ di, va[0], va[1], ])
-##
-## 					if vchoices:
-## 						alt.extend([ di, v, asap, ]
-## 						       for v,asap in vchoices)
-## 					break
-##
-## 				if alap:
-## 					vchoices = list(reversed(vchoices,
-## 				                key=operator.itemgetter(2)))
-## 					##
-## 					## prefer later-to-earlier deliveries
-## 					## input list was chronological
-##
-## TODO: recurring primitive, factor out
-## (will be simplified once this is simplified to a Karnaugh map)
-##
-## 					if vchoices:
-## 						va = vchoices.pop(0)
-## 						now.append([ di, va[0], va[1], ])
-## 						alt.extend([ di, v, asap, ]
-## 						       for v,asap in vchoices)
-## 					break
-##
-## 				if newv:
-## 					now.append(newv)
-##
-## 				if vchoices:
-## 					va = vchoices.pop(0)
-## 					now.append([ di, va[0], va[1], ])
-## 					alt.extend([ di, v, asap, ]
-## 					           for v,asap in vchoices)
-##
-## 				break
-## 			##-----  end of assign-one-delivery loop
-##
-## 		newvhs = list(di  for di in didxs_1choice
-## 		              if (v == vNEW_VEHICLE))
-## 				##
-## 		newvhs.extend(di  for di,v,asap in now  if (v == vNEW_VEHICLE))
-##
-## 		##-----  now[]
-##
-## 					## ASAP/ALAP? clear preference for
-## 					## immediate assignment or delay
-##
-## 		##=====  end of choice-enumeration magic  ====================
-##
-## 		backtrack.append(now)
-## 		btrack_alt.append(alt)
-##
-## 		debugmsg('##', 1)
-## 		continue
-##
-## 		ds = list(d  for d in dels
-## 		          if ((t & d['time2vec']) and
-## 		              (not is_delivery_frozen(d))))     ## 1
-## 					##
-## 					## deliveries (1) not yet scheduled
-## 					## (2) can be delivered in this window
-##
-## 				## build (delivery, vehicle) pairs, listing
-## 				## all vehicles which may hit this delivery
-## 				##
-## 				## - all specific, already traversing vehicles
-## 				##   which may reach this delivery (in the
-## 				##   currently checked window)
-## 				##
-## 				## - available but not yet started vehicles
-## 				##   are assigned from a 'pool' as they
-## 				##   are interchangeable. we only need to
-## 				##   keep track of how many there are,
-## 				##   and one is sufficient to 'assign'
-## 				##   (since we do not care about which one)
-## 				##
-## 				## - an extra 'virtual vehicle' is added
-## 				##   if delivery may be delayed. this is
-## 				##   a placeholder, making it explicit that
-## 				##   the delivery has been considered, but
-## 				##   it does not happen now.
-## 				##
-## 				## - conversely, if delivery may not be
-## 				##   delayed, is not reachable, and we are
-## 				##   out of unassigned vehicles,
-## 				##   we must backtrack.
-##
-## 		ds = list(sorted(ds, key=del_unit2sort))
-## 		for d in ds:
-## 			didx = d[ "index" ]
-##
-## 			debugmsg(f'## T.DELV.IDX={ didx }', 1)
-## 			debugmsg(f'## T.DELV.WINDOW={ d["time"] }', 1)
-##
-## 			x, y = d['x'], d['y']
-## 			new_load = [ d['primary'], d['secondary'] ]
-##
-## 			vs   = vehicle_may_reach(x, y, t, vpos, xy2d, d)
-## 			vids = vehicles_which_may_deliver(new_load, vs, vpos)
-##
-## 			curr[ didx ] = vids
-##
-## 			if has_time_after(d, t) and (not asap):
-## 				curr[ didx ].append([ vDELAY_DELIVERY, 0, ])
-##
-## 			if vids == []:
-## 				if has_time_after(d, t):
-## 					backtrack.append(
-## 						btrack_delivery(d, delay=True) )
-## 					print(f'## DELAY[{ didx }]')
-## 					continue
-## 				vids = [ vDELAY_DELIVERY, ]
-##
-## 				raise ValueError("no suitable delivery")
-## 							## backtrack
-##
-## 			backtrack.append( btrack_delivery(d) )
-##
-## 				## descend into all (this.delivery, vehicle)
-## 				## options
-##
-## 			debugmsg(f'## D.DELV.V[{didx}]=' +
-## 			         f'{ ",".join(v[0] for v in vids) }', 2)
-## 			debugmsg(f'## D.DELV.V.ASAP[{didx}]=' +
-## 			         ",".join(f"{v[1]}" for v in vids), 2)
-##
-## 			continue
-##
-## 			if len(vids) > 1:
-## 				pass
-##
-## 			for vid, asap in vids:
-## 				backtrack.append(
-## 					btrack_vehicle(vpos[vid], vid, d))
-##
-## 				debugmsg(f'## V.ASSIGN[{ didx }].ARRV=[{vid}]',
-## 				         2, vTRC_SCHED)
-##
-## 				upd = vehicle2xy(vpos, vid, asap, d,
-## 				                 update=True)
-## 				d[ 'minutes' ] = asap
-##
-## 			if debug_is_active(2):
-## 				list_backtrack(backtrack)
-##
-## 		debugmsg('##', 1)
-##
-## ##			if vids == []:
-## ##				if has_time_after(d, t):
-## ##					backtrack.append(
-## ##						btrack_delivery(d, delay=True) )
-## ##					print(f'## DELAY[{ didx }]')
-## ##					continue
-## ##				vids = [ vDELAY_DELIVERY, 0, ]
-## ##
-## ##				raise ValueError("no suitable delivery")
-## ##
-## ##			for vid, asap in vids:
-## ##				backtrack.append(
-## ##					btrack_vehicle(vpos[vid], vid, d))
-## ##
-## ##				debugmsg(f'## V.ASSIGN[{ didx }]=[{ vid }]', 2)
-## ##
-## ##				upd = vehicle2xy(vpos, vid, asap, d,
-## ##				                 update=True)
-## ##				d[ 'minutes' ] = asap
-## ##
-## ##			backtrack.append( btrack_delivery(d) )
-## ##
-## ##				## descend into all (this.delivery, vehicle)
-## ##				## options
-## ##
-## ##			debugmsg(f'## D.DELV.V[{didx}]=' +
-## ##			         f'{ ",".join(v[0] for v in vids) }', 2)
-## ##			debugmsg(f'## D.DELV.V.ASAP[{didx}]=' +
-## ##			         ",".join(f"{v[1]}" for v in vids), 2)
-##
-## 	tstart = timediff_log_now(tstart, 'PACK.ROUTE.ASSIGN0')
-##
-## 	##-----  tstart is after initial greedy assignment  ------------------
-##
-## 	vpos = vpos0
-##
-## 	##-----  v3:  --------------------------------------------------------
-##
-## 	dlist = copy.deepcopy(aux)
-##
-## 				## all entries, replicated from aux
-## 				## sorted in increasing urgency order
-## 				##
-## key=del_timesort -> increasing urgency
-## ##	dlist = sorted((copy.deepcopy(a) for a in aux), key=del_timesort)
-##
-## 	dlist = list(sorted(list(dlist), key=del_unit2sort))
-##
-## 	for d in dlist:
-## 		idx = d[ 'index' ]
-## 		if not 'start' in d:
-## 			continue
-##
-## ##		tvec, x, y = d['time2vec'], d['x'], d['y']
-## 		tvec, x, y = d['start'], d['x'], d['y']
-## 		if tvec == 0:
-## 			continue
-##
-## 		assert('start' in d)       ## must have initial-assigned by now
-##
-## 		print(f"##   DELIVERY={ len(place) +1 }/{ len(dlist) }")
-## 		print(f"## T={ d['time'] }  [t.vec=x{ tvec :0x}]")
-## 		print(f"##   START={ d['start'] }u")
-## 		print("##   TW=" +timevec2utilstr(tvec, maxu, sep='',
-## 		                                  unitcols=1))
-##
-## 		vs = vehicle_may_reach(x, y, tvec, vpos, xy2d, d)
-## 		if vs == []:
-## 			raise ValueError("no suitable delivery")
-##
-## 		primary, secondary = d['primary'], d['secondary']
-## 		vid_picked, arrival = None, vTIME_UNDEF
-##
-## 		for v in vs:
-## 			vid = v[0]
-## 			v1  = vehicle2primary  (vpos[ vid ])
-## 			v2  = vehicle2secondary(vpos[ vid ])
-##
-## 			if (primary +v1) > MAX1:
-## 				print(f"##   OVERLOAD[{ vid }]: " +
-## 				      f"{ primary + v1 }")
-## 				continue
-##
-## 			if MAX2 and ((secondary +v2) > MAX2):
-## 				print(f"##   OVERLOAD.SECONDARY[{ vid }]: " +
-## 				      f"{ secondary + v2 }")
-## 				continue
-##
-## 			if (vid_picked == None) or (v[2] < arrival):
-## 				vid_picked, arrival = vid, v[2]
-##
-## 		if vid_picked == None:
-## 			raise ValueError("no suitable vehicle")
-##
-## 		print("##  del=" +timevec2utilstr(minute2timevec(arrival),
-## 		                                  maxu, sep='', unitcols=1))
-## 				##
-## 		print(f'## DEL { vid_picked } at { minute2wall(arrival) }')
-## 		print(f'## ADD { vid_picked } {primary} sec={secondary}')
-## 		vehicle2xy(vpos, vid_picked, arrival, d)
-## 		print('')
-## 		place.append([ vs[0], [], ])
-## 				## TODO: remember alternatives
-##
-##
-## ##					## filter vehicles which may reach
-## ##					## the suitable deliverxy2dist windows
-## ##		vs = vehicle_may_reach(x, y, tvec, vpos, xy2dist)
-## ##		if vs == []:
-## ##			raise ValueError("no suitable delivery")
-## ##					## -> backtrack
-## ##
-## ##		primary, secondary = d['primary'], d['secondary']
-## ##		vid_picked, arrival = None, vTIME_UNDEF
-## ##
-## ##		for v in vs:
-## ##			vid = v[0]
-## ##			v1  = vehicle2primary  (vpos[ vid ])
-## ##			v2  = vehicle2secondary(vpos[ vid ])
-## ##
-## ##			if (primary +v1) > MAX1:
-## ##				print(f"##   OVERLOAD[{ vid }]: " +
-## ##				      f"{ primary + v1 }")
-## ##				continue
-## ##
-## ##			if MAX2 and ((secondary +v2) > MAX2):
-## ##				print(f"##   OVERLOAD.SECONDARY[{ vid }]: " +
-## ##				      f"{ secondary + v2 }")
-## ##				continue
-## ##
-## ##			if (vid_picked == None) or (v[2] < arrival):
-## ##				vid_picked, arrival = vid, v[2]
-## ##
-## ##		if vid_picked == None:
-## ##			raise ValueError("no suitable vehicle")
-## ##
-## ##		print("##  del=" +timevec2utilstr(minute2timevec(arrival),
-## ##		                                  maxu, sep='', unitcols=1))
-## ##		print(f'## DEL { vid_picked } at { arrival }')
-## ##		print(f'## ADD { vid_picked } {primary} sec={secondary}')
-## ##		vehicle2xy(vpos, vid_picked, arrival, d)
-## ##		print('')
-## ##		place.append([ vs[0], [], ])
-## ##				## TODO: remember alternatives
-
-	yield([ 'pack-and-route schedule placeholder' ])
 
 
 ##=====  /pack-and-route  ====================================================
@@ -7750,9 +6931,49 @@ def table_partial2full(t, border=None):
 
 ##=====  /development only  ==================================================
 
+def tvi():
+					## prepend this
+					## notice if any shift-beyond-0 is off
+					##
+	fixed3 = [ f"d0t{v}"  for v in range(3) ]
+	fixed4 = [ f"d1t{v}"  for v in range(4) ]
+
+	for vs in range(1, 63+1):
+		sat = satsolv_init0()
+		curr = [ f"d2t{t}v0"  for t in range(vs) ]
+
+		for d in fixed3:
+			satsolv_add_1var(sat, d)
+		for d in fixed4:
+			satsolv_add_1var(sat, d)
+		for d in curr:
+			satsolv_add_1var(sat, d)
+
+		_, _, cls, _ = satsolv_1ofn(sat, fixed3)
+		for c in cls:
+			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c)
+		##
+		_, _, cls, _ = satsolv_1ofn(sat, fixed4)
+		for c in cls:
+			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c)
+
+		_, _, cls, comm = satsolv_1ofn(sat, curr)
+		for c in cls:
+			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
+			comm = ''
+
+		print(f'## 1OFN[{ vs }]', sat)
+		sat[ 'constraints' ].append([ '', f'END-OF-CLAUSES({vs})' ])
+		satsolv_report(sat)
+		print()
+
+	sys.exit(0)
+
+
 ##--------------------------------------
 if __name__ == '__main__':
 ##---  TODO: factor out: parameter-read code
+##	tvi()
 
 	if 'SEED0' in os.environ:
 		seed = os.environ[ 'SEED0' ]
@@ -7792,8 +7013,7 @@ if __name__ == '__main__':
 	n = env2num('TUPLE_N')
 	if (n != None):
 		if (n < 1):
-			raise ValueError("tuple size out of range ({})"
-			                 .format(TUPLE_N))
+			raise ValueError(f"tuple/size range ({ TUPLE_N })")
 		MAX_TUPLE_N = n
 
 	DEBUG = env2num('DEBUG', 0)
@@ -7879,7 +7099,7 @@ if __name__ == '__main__':
 				## TODO: hardwared vehicle/shift plans
 				## at least one vehicle with multiple windows
 		v = {
-			'V0': {			## refill windows for V0:
+			'V0': {			 ## refill windows for V0:
 				'1100-1200+1300-1400',
 				'1600-1700',
 			},
@@ -7915,6 +7135,12 @@ if __name__ == '__main__':
 				'1400-1515',
 			],
 		}
+
+		cProfile.run('pack_and_route(tbl, aux, bases, vehicles, vrefill=v, xy2d=xy2dist_table)',
+		             'profile.log')
+##		cProfile.print_stats()
+## PROFILE
+		sys.exit(0)
 
 		for sched in pack_and_route(tbl, aux, bases, vehicles,
 		                            vrefill=v, xy2d=xy2dist_table):
