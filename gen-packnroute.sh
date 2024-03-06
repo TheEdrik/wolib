@@ -1,6 +1,9 @@
 #!/usr/bin/sh
 
 # generate random delivery list and its auxiliary files
+#
+# NOSHARE=...time.spec... generates N deliveries which are all in the
+# same time unit (-> can not share vehicles)
 
 ## number of items, final output
 ##
@@ -39,6 +42,35 @@ DIST=distance
 
 
 ##-----  nothing user-serviceable below  -------------------------------------
+
+##--------------------------------------
+## special corner conditions
+##
+## deliveries in the same time window: N of them require exactly N
+## vehicles
+
+if [ -n "$NOSHARE" ] ; then
+	TF=/tmp/order0.txt
+	RNITEMS=$ITEMS RNTIME=1 RNCOORDS=${BORDER} ./pack.py > $TF
+
+#	if [ ] ; then
+#	else
+		HR=$(( 9 + ( $RANDOM % 6 ) ))
+		MIN=$(( ($RANDOM % 4) * 15 ))
+
+		HRE=$( printf "%02d" $(( $HR + ( ( $MIN + 15 ) / 60 ) )) )
+		MNS=$( printf "%02d"      $MIN               )
+		MNE=$( printf "%02d" $(( ($MIN + 15) % 60 )) )
+
+		SAMETIME=$( printf "%02d" $HR )${MNS}-${HRE}${MNE}
+#	endif
+
+	sed -E "sQ,[^,]+,unitQ,${SAMETIME},unitQ" $TF | tee $DELIVERIES
+	exit
+fi
+
+
+##--------------------------------------
 
 ## generate order list in extended-format input, incl. random
 ## XY coordinates and delivery times
