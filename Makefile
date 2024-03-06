@@ -129,6 +129,11 @@ $(DISTANCES): $(ORDERS)
 
 
 ##--------------------------------------
+## generate N orders which do not allow sharing:
+##   ITEMS=...N... NOSHARE=1 ./gen-packnroute.sh
+
+
+##--------------------------------------
 CLEAN := packnroute.txt p.sat p.solv pnr.log pnr2.log
 
 clean: $(wildcard $(CLEAN))

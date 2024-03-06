@@ -16,6 +16,8 @@
 ## set 'ROLL' to tolerate certain errors in response
 ##    see roll() for list
 ##
+## set 'LIST_NUM' to include numeric ID for symbolic names
+##
 ## set 'ADDED_VARS' to list indirect variables' values too. they
 ## are excluded from response list by default.
 ##
@@ -66,6 +68,7 @@
 ## Author: Visegrady, Tamas  <tamas.visegrady@gmail.com>
 
 import re, sys, os, fileinput
+import sat_tools
 
 
 ##-----------------------------------------
@@ -74,6 +77,8 @@ reVARDEF = re.compile('(?P<id> [a-zA-Z0-9] [a-zA-Z0-9_]*) \[ (?P<nr> \d+) \]',
 ##
 ## match "d0t4v0[14]" -> id = d0t4v0, nr = 14
 
+## TODO: do we have a global constant?
+vUNIT_MINS = 15
 
 reOK   = re.compile('^ s \s+ SATISFIABLE$ ',   re.VERBOSE)
 reFAIL = re.compile('^ s \s+ UNSATISFIABLE$ ', re.VERBOSE)
@@ -89,7 +94,19 @@ reRESPONSES = re.compile('^ v \s+', re.VERBOSE)
 vROLL = False
 
 
-##-----------------------------------------
+##----------------------------------------------------------------------------
+## read DIMACS spec (input); parse complete list of clauses
+##
+## optionally, parses output into array-of-ints (variables), if present
+## (if 'result' is non-None; list/iterator of result lines)
+##
+## cross-checks that main parameters of input+output seem to match
+##
+def sat2values(dimacs, result=None):
+	return res
+
+
+##----------------------------------------------------------------------------
 ## retrieve VARIABLES section, populate reverse maps
 ## return None if file is not recognized
 ##
@@ -114,8 +131,9 @@ def vars2list(lines):
 		sys.stderr.write("no /VARIABLES terminating tag; " +
 					"accepting possibly partial input\n")
 
-	all = all[ matches[0]+1 : matches[1] ]
-	res = {}
+	all  = all[ matches[0]+1 : matches[1] ]     ## VARIABLES ... /VARIABLES
+	res  = {}
+	back = {}
 
 	for l in (r.split()  for r in all):
 		for elem in l:
@@ -141,9 +159,10 @@ def vars2list(lines):
 					f"{ res[nr] })\n")
 				return None
 			else:
-				res[ nr ] = id
+				res [ nr ] = id
+				back[ id ] = nr
 
-	return res
+	return res, back
 
 
 ##-----------------------------------------
@@ -218,8 +237,8 @@ reDTV = re.compile('^ d (?P<del>\d+) t (?P<t>\d+) v (?P<bit>\d+) $',
 
 
 ##-----------------------------------------------------------
-## locate variables in known-canonical form; turn them back to
-## schedule-relevant inputs
+## locate variables in known-canonical form of solver output
+## turn them back to schedule-relevant inputs
 ##
 ## returns dicts (see list in end); no consistency checking yet
 ##
@@ -405,7 +424,7 @@ def vars2check(dicts):
 			vi = booleans2int(dtv[ d ][ t ])        ## int(vehicle)
 			if vi and (not vi in vplan):
 				vplan[ vi ] = {}
-				print(f"## VEH.ID[D={ d },T={ t }]={ vi }")
+				print(f"## VEH.ID[DELV={ d },T={ t }]={ vi }")
 
 			if vbitcount != len(dtv[ d ][ t ]):
 				actual = len(dtv[ d ][ t ])
@@ -436,9 +455,18 @@ def vars2check(dicts):
 		ts = sorted( vplan[d].keys() )
 		if ts == 0:
 			continue               ## only with optional deliveries
+
 		print(f"VEH[{ d }].STOPS[{ len(ts) }]=", end='')
-		print(":".join(f'T={t},V={ vplan[d][t] }'  for t in ts))
-		print()
+
+						## T=...[+..],D=...
+						##
+		fmt = [ f'T[{ ti+1 }]={ unit2wallclk(t) }' +
+			f'{ f"[+{ vUNIT_MINS * (t - ts[ti-1]) }m]"  if ti  else "" },' +
+			f'D={ vplan[d][t] }'
+			for ti, t in enumerate(ts) ]
+
+		print(";".join(fmt))
+
 	print("## /VEHICLE.PLANS")
 
 			## vehicle ID rows MUST be all-False, except for
@@ -516,7 +544,21 @@ if __name__ == '__main__':
                 sys.stderr.write(f"ERROR: read [{ sys.argv[1] }] failed\n")
                 sys.exit(1)
 
-	v2ints = vars2list(vars)
+	clauses = sat_tools.dimacs2clauses(sat_tools.dimacs2clauses_itr(vars))
+	if 'NORMALIZE' in os.environ:
+		comm       = sat_tools.dimacs2comments(vars)
+		maxv, seen = sat_tools.clauses2varlimits(clauses)
+
+## note: assume ASCII host
+		print(f'p cnf { maxv } { len(clauses) }')
+		if comm:
+			print('c')
+			print('\n'.join(sat_tools.comments2print(comm)))
+			print('c')
+		print('\n'.join(sat_tools.clauses2print(clauses)))
+		sys.exit()
+
+	v2ints, ints2v = vars2list(vars)
 	if v2ints == None:
                 sys.stderr.write(f"ERROR: invalid ID-to-number mapping\n")
                 sys.exit(1)
@@ -558,7 +600,9 @@ if __name__ == '__main__':
 		if is_indirect_var(r) and not ('ADDED_VARS' in os.environ):
 			continue
 
-		print(f'  { r }: { res[r] }')
+		ri = f'[{ ints2v[r] }]'  if 'LIST_NUM' in os.environ  else ''
+
+		print(f'  { r }{ ri }: { res[r] }')
 
 	if 'VERIFY' in os.environ:
 		verify(res)
