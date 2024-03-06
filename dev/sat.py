@@ -225,6 +225,14 @@ def ints2xbits(arr, xbits):
 
 
 ##--------------------------------------
+## recurring (diags) step: list all clauses in verbose+readable form
+##
+def list_clauses(cls, indent=2):
+	for ci, c in enumerate(cls):
+		print(f"## { ' ' * indent } C[{ ci+1 }] { c }")
+
+
+##--------------------------------------
 ## template header, fixed units up front
 ##   - numeric result with 'fmtbits' 0
 ##   - string-formatted with 'fmtbits' > 0
@@ -360,11 +368,59 @@ def ints2renumber(arr, x):
 
 
 ##--------------------------------------
+def clauses_max_varnr(cls):
+	maxv = max(max(abs(v)  for v in c)  for c in cls)
+	return maxv
+
+
+##--------------------------------------
+## inner core of template_specialize()
+## 'val' is True or False; others must have been managed before calling
+##
+## TODO: restricted to removing 'True' fixed values
+##
+## returns None if there are no affected clauses
+## specialized/shortened clause list otherwise
+##
+def clauses_specialize(cls, x):
+	res, maxv = [], -1
+
+	print(f'## SPECIALIZE({ x })')
+
+				## any of the clauses referencing X or -X?
+	xrefs = [ c  for c in cls  if ((x in c) or (-x in c)) ]
+	if not xrefs:
+		return None
+
+	for c in cls:
+		if (x in c) and (-x in c):
+			raise ValueError(f"self-contradictory clause ({c})")
+
+		if (-x in c):
+			res.append(ints2renumber([ v  for v in c
+			                              if (v != -x) ], x))
+		elif (x in c):
+			continue    ## 'X' is present; entire clause is skipped
+
+		else:
+			res.append(ints2renumber(c, x))
+
+		maxv = max(maxv, max(res[-1]))
+
+	print(f'## SPEC.AFTER: MAX(V)=({ maxv })')
+
+	return res
+
+
+##--------------------------------------
 ## simplify clause list, if we know that variable 'X' is fixed True/False
 ## clauses MUST all be numeric (non-symbolic)
 ##
 ## updates 't' template in-place, incl. removing/renumbering affected variables
 ## NOP with val==None, which means 'undefined' in our cases
+##
+## removes additional-variable count with addl (since most of our
+## default-forced variables are additional ones)
 ##
 ## recurring pattern: template for expression X(...) is generated;
 ## X as return value is known. (typical example: 1-of-N, with guarantee
@@ -374,37 +430,35 @@ def ints2renumber(arr, x):
 ##    A X   ->          discard clause: 'A' never contributes evaluation
 ##    B -X  ->  B       -X is never True: 'B' alone controls evaluation
 ##
-def template_specialize(t, x, val=True):
+def template_specialize(t, x, val=True, addl=True):
 	if ((val != True) and (val != None)):
 		raise ValueError(f'unsupported fixed var/value ({ val })')
 	if val == None:
 		return
 
-				## any of the clauses referencing X or -X?
-	xrefs = [ c  for c in t[ 'clauses' ]  if ((x in c) or (-x in c)) ]
-	if not xrefs:
+	res = clauses_specialize(t[ 'clauses' ], x)
+##	res = []
+##	for c in t[ 'clauses' ]:
+##		if (x in c) and (-x in c):
+##			raise ValueError(f"self-contradictory clause ({c})")
+##
+##		if (-x in c):
+##			res.append(ints2renumber([ v  for v in c
+##			                              if (v != -x) ], x))
+##		elif (x in c):
+##			pass        ## 'X' is present; entire clause is skipped
+##
+##		else:
+##			res.append(ints2renumber(c, x))
+
+	if res == None:
 		return
-
-	res = []
-	for c in t[ 'clauses' ]:
-		if (x in c) and (-x in c):
-			raise ValueError(f"self-contradictory clause ({c})")
-
-		if (-x in c):
-			res.append(ints2renumber([ v  for v in c
-			                              if (v != -x) ], x))
-		elif (x in c):
-			pass        ## 'X' is present; entire clause is skipped
-
-		else:
-			res.append(ints2renumber(c, x))
-
 
 ## TODO: is there a reusable 'normalize' variant?
 
 	t[ 'clauses'    ] = res
 	t[ 'nr.clauses' ] = len(res)
-	t[ 'add.vars'   ] -= 1
+	t[ 'add.vars'   ] -= (1  if addl  else 0)
 
 	if t[ 'result' ] == x:
 		t[ 'result' ] = 0
@@ -2433,6 +2487,9 @@ def hterms2clauses(terms, nrvars, addl, rvar=0, result=None):
 ## 'nbits' is the printable-collapsed form, 100..00, 111..111 etc., of
 ## the constant which is being compared against
 ## 'nvars' are the variables which form the comparison value
+## 'result' True  ensures result is True
+##          None  no restriction
+##          False (currently not supported)
 ##
 ## 'rvar' (return variable) assigned to 1st added variable if not specified
 ##
@@ -2449,6 +2506,9 @@ def satsolv_less_than_template_2x(nvars, runs, nbits, rvar=0, result=None,
 	if runs[0][0] != 1:
 		raise ValueError("bits<N did not start with all-1 bit run")
 
+	if (result != None) and (result != True):
+		raise ValueError("bits<N can not force '{ force }' result")
+
 	if rvar == 0:
 		rvar = nvars +1
 		if satsolv_is_debug():
@@ -2458,16 +2518,25 @@ def satsolv_less_than_template_2x(nvars, runs, nbits, rvar=0, result=None,
 	if satsolv_is_debug():
 		print('## AND/OR TERMS', rv, terms, f'+{ len(addl) }V', addl)
 
-					## single term is always AND originally
-					## -> turns into NAND, without any extra
-					## variable
+				## single term is always AND originally
+				## -> turns into NAND, without any extra
+				## variable
+				##
 	if addl and (len(terms) == 1):
 		assert(terms[0].startswith('AND'))
 		assert(len(addl.keys()) == 1)
-##		addl = {}
 
 	cls, avars = hterms2clauses(terms, nvars, addl, rvar=rvar,
 	                            result=result)
+
+	print(f'## CLAUSES.ORIG[{ len(cls) }]', cls)
+	if result == True:
+		print(f'## FORCED[var={ rvar }]')
+		c2 = clauses_specialize(cls, rvar)
+		if c2:
+			print(f'## CLAUSES.FORCED[{ len(c2) }]', c2)
+			cls = c2
+		avars -= 1            ## del fixed variable (was 1st added one)
 
 	print(f'## LEN(RUNS)={ len(runs) }')
 
@@ -2476,7 +2545,9 @@ def satsolv_less_than_template_2x(nvars, runs, nbits, rvar=0, result=None,
 	if len(vars) < len(runs[:2]):
 		raise ValueError("not enough Booleans for less-than-N-2x")
 
-	xcomm = descr  if descr  else f'LT({ nvars }b)'
+	opr = 'LTF'  if (result == True)  else 'LT'
+
+	xcomm = descr  if descr  else f'{ opr }({ nvars }b)'
 
 	return cls, result, xcomm, avars
 
@@ -2710,7 +2781,7 @@ def satsolv_report(sat):
 ##
 ## ORed together: v1[] != v2[]
 ##
-def satsolv_diff_template(v1, v2, rbase=0):
+def satsolv_diff_template(v1, v2, result=0, rbase=0):
 	t1, t2 = list(v1), list(v2)
 	if len(t1) != len(t2):
 		raise ValueError(f"DIFF(..) input lengths differ ({t1},{t2})")
@@ -2721,25 +2792,36 @@ def satsolv_diff_template(v1, v2, rbase=0):
 
 	res = template0(f'DIFF({ len(v1) })', len(v1)*2)
 
-	if rbase == 0:
+	## additional vars:
+	##   <result>  XOR(1)  XOR(2) ... XOR(N)   OR
+	##             XOR(1)  XOR(2) ... XOR(N)   OR
+
+	addr = 0
+	if result == 0:
+		result = 2 * len(t1) +roffs
+		rbase  = result +1
+		addr   = 1
+	elif rbase == 0:
 		rbase = 2 * len(t1) +1
 
+						## constituent XORs
+	xorvars = [ (v + rbase + 1)  for v in range( len(t1) ) ]
+
 	if len(t1) == 1:
-		print('xxx.XOR', t1, t2)
-		return satsolv_xor1_template(t1[0], t2[0], rv = rbase,
+		print('## DIFF(1)->XOR(1)', t1, t2)
+		return satsolv_xor1_template(t1[0], t2[0], rv = result,
 		                             descr='DIFF(1)->XOR(1)')
 
-
-						## result; constituent XORs
-	xorvars = [ (v + rbase)  for v in range( len(t1) +1 ) ]
 	clauses = []
 
-	orx_t = satsolv_or_template( xorvars[1:], rvar=xorvars[0] )
+	print('## XOR(pair) variables:', xorvars)
+
+	orx_t = satsolv_or_template( xorvars, rvar=result )
 	                                             ## OR(...XOR variables...)
 
 	for v in range(len(t1)):
-		res[ 'clauses' ].extend(satsolv_xor1_template(v+1, v +len(t1)+1,
-                                    rv = xorvars[ v+1 ])[ 'clauses' ])
+		res[ 'clauses' ].extend(satsolv_xor1_template(v+1, v+1+len(t1),
+                                    rv = xorvars[ v ])[ 'clauses' ])
 
 	res[ 'add.vars'   ] = len(xorvars)
 	res[ 'result'     ] = xorvars[0]
@@ -2771,21 +2853,28 @@ def satsolv_diff_template(v1, v2, rbase=0):
 ##
 def satsolv_noneq0_template(vars, result=None, non0=True, force=False,
                             or1=0, or2=0):
-	sat     = satsolv_init0()
-	clauses = []
+	sat      = satsolv_init0()
+	clauses  = []
+	var_nadd = 0           ## how many 'intermediate' variables are not new
+	addvs    = 0
+## TODO: check TODOs below; these vars become redundant
 
 	if result == None:
-		result = 2* vars +1
+		result = 2* vars +1 +(2  if or1  else 0)
+		addvs  += 1
 
 ## TODO: merge into satsolv_neq_or0() which has the rest of logic already
 	if vars == 1:
-		res = satsolv_and_template(2, rvar=3, negate=True, force=force)
-#		if force == True:
-#			print("## TEMPLATE(ORIG)", res)
-#			template_specialize(res, result, True)
+		res = satsolv_and_template(2, rvar=result,
+		                           negate=True, force=force)
+		if or1:
+			res[ 'inputs' ] += 2                        ## two OR's
+		print(f"## TEMPLATE(FINAL) r={ result }", res)
 		return res
 
-	addl = [ { 2*vars+1 : "final NEQ0 result" }, ]
+	varidx = { 'NEQ0': result }
+
+	addl = [ { varidx[ "NEQ0" ] : "final NEQ0 result" }, ]
 				## first entry: output bit
 
 				## [-1].keys() has a single element; list()
@@ -2794,68 +2883,80 @@ def satsolv_noneq0_template(vars, result=None, non0=True, force=False,
 				##     not subscriptable
 				##
 				## TODO: check version-portable proper type
-				##
+## TODO: list() indirection is horrible; check for proper dict_keys()
+## type conversion
+
 	if or1 == 0:
-		or1nv = list(addl[-1].keys())[0] +1       ## variable(OR1)
+		or1nv = varidx[ 'NEQ0' ] +1
 		or2nv = or1nv +1
-		orx   = or2nv +1                          ## OR(...all XORs...)
-## TODO: proper rebase(outputs[]), then pick from there
-## we 'just know' that last variables are the ORs
 		addl.append({ or1 : f"OR(1..{vars})"                })
 		addl.append({ or2 : f"OR({vars+1}..{vars*2})"       })
+
+		varidx[ 'OR1' ] = or1nv
+		varidx[ 'OR2' ] = or2nv
+		orx = or2nv +1
+		addvs += 2
 	else:
-		orx   = list(addl[-1].keys())[0] +1
+		varidx[ 'OR1' ] = or1
+		varidx[ 'OR2' ] = or2
+		orx = varidx[ 'NEQ0' ] +1
+
+	varidx[ 'DIFF' ] = orx
+	addvs += 1
+
+	rbase = orx +1                        ## start of subordinate variables
+
+	if result:
+		var_nadd += 1
 
 	addl.append({ orx : f"OR(...XOR(1)..XOR({vars})..)" })
 
 	if or1 == 0:
 		or_t  = satsolv_or_template(vars)
 				## rebase to OR1 variable = or1nv (above)
+		or1avars = or1nv - vars - or_t['add.vars']
+
 		or_t  = template_rebase(or_t,
 		                 addl_vars = or1nv - vars - or_t['add.vars'])
 
 		or2_t = satsolv_or_template(vars)
 				## rebase to OR2 variable = or2nv (above)
+		or2avars = or2nv - 2*vars - or2_t['add.vars']
+
 		or2_t = template_rebase(or2_t, vars=vars,
 		                 addl_vars = or2nv - 2*vars - or2_t['add.vars'])
 
-	rbase = orx +1                        ## start of subordinate variables
+		print(f"## OR(1) +{ or1avars }.VARS")
+		print(f"## OR(2) +{ or2avars }.VARS")
+	else:
+		print(f"## OR(1)={ or1 }, OR(2)={ or2 }")
+##
+## TODO: sync, either append all to addl[], or track _nadd
+##		var_nadd = 0
 
 ## XOR(...pairs...) + OR(...XOR's...)
 
+	print('## NONEQ-OR-0 mappings:', varidx)
+
 	diff_t = satsolv_diff_template(range(vars), range(vars+1, vars*2 +1),
-	                               rbase = rbase)
-	print(f'xxx.OR(XOR[{ vars }])', diff_t)
+	                               result=varidx[ 'DIFF' ], rbase = rbase)
+	print(f'## OR(XOR[{ vars }])', diff_t)
 
-#	xorvars = [ (orx +1 +v)  for v in range(vars) ]               ## all >0
-#
-#	xv, xc = satsolv_diff(range(vars), range(vars+1, vars*2 +1),
-#	                      rbase=xorvars[0])
-#
-#	addl.extend([ { xorvars[v]: f"XOR({v+1},{vars+v+1})" }
-#	              for v in range(vars) ])
-#
-#	orx_t = satsolv_or_template(vars)
-#				## rebase to OR(XOR) variable = orx (above)
-#				## inputs are counterintuitive, since they
-#				## follow this result
-#	orx_t = template_rebase(orx_t, vars=xorvars[0]-1, addl_vars=-vars-1)
-#
-#	xorcls = []
-#	for v in range(vars):
-#		xorcls.append(satsolv_xor1_template(v+1, v+vars+1,
-#		                                    rv=xorvars[v]))
-## /XOR(...)
+	addl.extend({ rbase +x : f'XOR({x})' }
+	            for x in range(diff_t[ 'add.vars' ]))
+	addvs += vars                              ## XOR(.) for each input bit
 
-	cls = or_t[ 'clauses' ]
 	if or1 == 0:
+		cls = or_t[ 'clauses' ]
 		append_clauses(cls, or2_t)
+	else:
+		cls = []
 
 	append_clauses(cls, diff_t)
 #	for xc in xorcls:
 #		append_clauses(cls, diff_t)
 
-## TODO: need a wrapper to simplify stacked tebases
+## TODO: need a wrapper to simplify stacked rebases
 			## XOR(...var1..., ...var2...) -> OR(...) <=> NOT-EQUAL
 			## NEQ-OR0 clause:
 			##     R = ( NOR(1)  or  NOR(2)  or  OR(...XORs...) )
@@ -2868,15 +2969,37 @@ def satsolv_noneq0_template(vars, result=None, non0=True, force=False,
 		                             orx ], rvar = result)
 	cls.extend(full[ 'clauses' ])
 
-	res = template0(f'NEQ0({vars})', vars*2)
+	type = 'NEQ0' + ('.FORCE'  if force  else '')
+
+	print('## ADD.VARS(NEQ0)', len(addl), addl)
+	print('## -ADD.VARS', var_nadd)
+
+			## all paths MUST be consistent
+	assert(len(addl) >= var_nadd)
+
+	instr = f'2x ({vars} +1)'  if or1  else f'2x {vars}'
+
+	res = template0(f'NEQ0({ instr })', vars *2 +(2  if or1  else 0))
 	##
-	res[ 'add.vars' ] = len(addl)
+## TODO: check that all sub-templates properly account for result/or1/or2,
+## then derive from those
+
+	res[ 'add.vars' ] = addvs                       ## len(addl) - var_nadd
 	res[ 'result'   ] = result
 	res[ 'clauses'  ] = cls
 
+	maxvarnr = clauses_max_varnr(cls)
+	print(f'## MAX(VARNR)={ maxvarnr }')
+
 	if force:
-		print("## TEMPLATE(ORIG)", res)
-		template_specialize(res, result, True)
+		print(f"## TEMPLATE(ORIG) r={ result }", res)
+		list_clauses(res[ 'clauses' ])
+		print("## /TEMPLATE(ORIG)")
+		template_specialize(res, result, val=True, addl=False)
+				## addvs already adjusted for result != 0
+
+		maxvarnr = clauses_max_varnr(res[ 'clauses' ])
+		print(f"## TEMPLATE(FINAL) r={ result }", res)
 
 	return res
 
@@ -4117,6 +4240,27 @@ if __name__ == '__main__':
 
 				if satsolv_is_debug():
 					print(f'## NEQ-OR0({i})', res)
+## TODO: recurring feature 'list all added variables'
+				nvars = list(range(i+1, i+1+res[ 'add.vars' ]))
+
+				clauses2print(res[ 'clauses' ], vars[ : 2*i ],
+				        nvars, res[ 'result'  ], 'NEQ0',
+				        raw=False, instance=str(i))
+
+## both OR(...vars1...) and OR(...vars2...) are known
+## param order:
+##    ...vars1...  ...vars2...  OR1(..vars1..)  OR2(..vars2..)
+## forced output, so no ret.value
+##
+		if 'NEQ0.OR.FORCE' in what:
+			for i in range(1, BITS+1):
+				or1, or2 = i+i+1, i+i+2
+
+				res = satsolv_noneq0_template(i, force=True,
+				              or1=or1, or2=or2)
+
+				if satsolv_is_debug():
+					print(f'## NEQ-OR0-FORCE.OR({i}+2)', res)
 ## TODO: recurring feature 'list all added variables'
 				nvars = list(range(i+1, i+1+res[ 'add.vars' ]))
 
