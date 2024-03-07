@@ -16,6 +16,11 @@
 ## set 'ROLL' to tolerate certain errors in response
 ##    see roll() for list
 ##
+## set 'FULL_VARS' to list even unnecessary variables
+##   example: dXXtYY (delivery XX time unit YY) is False if none of the
+##   dXXtYYvZZ vehicle-ID bits are False. the entire group may be skipped
+##   in such cases.
+##
 ## set 'LIST_NUM' to include numeric ID for symbolic names
 ##
 ## set 'ADDED_VARS' to list indirect variables' values too. they
@@ -80,10 +85,27 @@ reVARDEF = re.compile('(?P<id> [a-zA-Z0-9] [a-zA-Z0-9_]*) \[ (?P<nr> \d+) \]',
 ## TODO: do we have a global constant?
 vUNIT_MINS = 15
 
-reOK   = re.compile('^ s \s+ SATISFIABLE$ ',   re.VERBOSE)
-reFAIL = re.compile('^ s \s+ UNSATISFIABLE$ ', re.VERBOSE)
+reOK   = re.compile('^ s \s+ SATISFIABLE$ ',         re.VERBOSE)
+reFAIL = re.compile('^ s \s+ UNSATISFIABLE$ ',       re.VERBOSE)
 
 reRESPONSES = re.compile('^ v \s+', re.VERBOSE)
+
+
+##-----------------------------------------------------------
+## capture patterns
+##
+## all feature 'delivery'
+## the patterns are redundant; please do not comment on it
+##
+## delivery, time unit (del, t)
+reDT = re.compile('^ d (?P<del>\d+) t (?P<t>\d+) $', re.VERBOSE)
+##
+## delivery, vehicle-ID bit (del, bit)
+reDV = re.compile('^ d (?P<del>\d+) v (?P<bit>\d+) $', re.VERBOSE)
+##
+## delivery, time, vehicle-ID bit (del, t, bit)
+reDTV = re.compile('^ d (?P<del>\d+) t (?P<t>\d+) v (?P<bit>\d+) $',
+                   re.VERBOSE)
 
 
 ##-----------------------------------------
@@ -104,6 +126,29 @@ vROLL = False
 ##
 def sat2values(dimacs, result=None):
 	return res
+
+
+##----------------------------------------------------------------------------
+## returns None for other variables
+def var2dt(varname):
+	dt = re.match(reDT, varname)
+	if dt:
+		return [ dt.group('del'), dt.group('t') ]
+
+	return None
+
+
+##----------------------------------------------------------------------------
+## dXXtYYvZZ to dXXtYY etc.; reconstruct logical grouping
+## returns None for other, unrecognized var.names
+##
+## matching is minimal
+##
+def var2parent(varname):
+	if varname.startswith('d') and ('v' in varname):
+		return varname[ : varname.index('v') ]
+
+	return None
 
 
 ##----------------------------------------------------------------------------
@@ -217,23 +262,6 @@ def satsolv_ints2strings(vars, lut):
 			res[ id ] = v
 
 	return res
-
-
-##-----------------------------------------------------------
-## capture patterns
-##
-## all feature 'delivery'
-## the patterns are redundant; please do not comment on it
-##
-## delivery, time unit (del, t)
-reDT = re.compile('^ d (?P<del>\d+) t (?P<t>\d+) $', re.VERBOSE)
-##
-## delivery, vehicle-ID bit (del, bit)
-reDV = re.compile('^ d (?P<del>\d+) v (?P<bit>\d+) $', re.VERBOSE)
-##
-## delivery, time, vehicle-ID bit (del, t, bit)
-reDTV = re.compile('^ d (?P<del>\d+) t (?P<t>\d+) v (?P<bit>\d+) $',
-                   re.VERBOSE)
 
 
 ##-----------------------------------------------------------
@@ -456,7 +484,7 @@ def vars2check(dicts):
 		if ts == 0:
 			continue               ## only with optional deliveries
 
-		print(f"VEH[{ d }].STOPS[{ len(ts) }]=", end='')
+		print(f"VEH[{ d }].STOPS[{ len(ts) }]:", end='')
 
 						## T=...[+..],D=...
 						##
@@ -601,6 +629,13 @@ if __name__ == '__main__':
 			continue
 
 		ri = f'[{ ints2v[r] }]'  if 'LIST_NUM' in os.environ  else ''
+
+		if not 'FULL_VARS' in os.environ:
+			if (var2dt(r) and not res[r]):
+				continue
+			vp = var2parent(r)
+			if vp and (vp in res) and not res[vp]:
+				continue
 
 		print(f'  { r }{ ri }: { res[r] }')
 
