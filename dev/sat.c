@@ -10,18 +10,22 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+//
+#define _GNU_SOURCE    /* need memmem(3) */
 #include <string.h>
 #include <math.h>            // temporary; sqrt() only
 
 #undef   SYS_NO_LMDB
 #define  SYS_NO_LMDB  1  /* workaround: needs rest of transaction/logic */
 
-#include <hiredis/hiredis.h>
-#include <hiredis/read.h>
-
 #define  USE_READINT
 #define  USE_ERR_ANNOTATE
 #define  USE_HEXDUMP    -1   /* no wrapping */
+#define  USE_READALL
+// #define USE_HEXDUMP -1
+// #define   USE_SIPHASH
+// #define   USE_SIPHASH_S
+//
 #include "common-util.h"
 
 typedef enum {
@@ -79,7 +83,15 @@ static unsigned char scratch[ 1024 *1024 ];
 // recurring pair: array + nr. of elements
 #define  ARRAY_OF(_arr)  _arr, ARRAY_ELEMS(_arr)
 
+// expect up to a few dozen million variables
+// 2^26 possible entries for in-memory hash table
+//
+#define  IMH_IDX_BITS      22    // 2^22 slots
+#define  IMH_SLOT_ENTRIES  16
 #include "imhash.h"
+
+#define  UTF8_NL  '\x0a'         // DIMACS is ASCII/UTF8-only, host-independent
+
 
 #if !defined(SYS_NO_LMDB)  /*=====  delimiter: LMDB access  ================*/
 /* see www.lmdb.tech/doc/starting.html for API overview  [accessed 2023-04-14]
@@ -316,254 +328,736 @@ static int lmd_hash0(MDB_env **env, MDB_dbi *dbi, RdHash_t hash)
 #endif   /*=====  /delimiter: LMDB access  =================================*/
 
 
-#if !defined(SYS_NO_REDIS)  /*=====  delimiter: Redis access  ==============*/
-#define  RD_DEFAULT_PORT  6379
+#if 1   /*=====  delimiter: map CNF var.numbers <-> strings in-memory  =====*/
+
+#if !defined(__linux__)
+#error "we expected an mmap(2)-capable platform"
+#endif
+
+// limits for expected applications
+#define  SAT_MAX_VARS  20000000
+#define  SAT_MAX_VARNAME_BYTES  ((size_t) 256)
+
+
+#if 1    /*-----  delimiter: populate var.name/number lookup  --------------*/
+
+/*--------------------------------------
+ * global variables
+ * note: we already use single-instanced imhash; just acknowledge we have
+ * other single-instance variables.
+ */
+
+/* int-to-name lookup, of strings thrown into an append-only array
+ * note: name-to-int counterpart is imh_idx()
+ *
+ * ps stores 0-separated concatenated names, each at .offset[] and
+ * .bytes[] (the latter is net strlen-style bytecount, excluding trailing \0)
+ *
+ * there is a reasonable upper limit on names' bytecounts
+ */
+struct SatVarIdx {
+	unsigned char *pstr;
+	size_t sallocd;
+	size_t sused;
+
+	uint32_t offset[ SAT_MAX_VARS ];  // (name, nbytes) inside pstr[.sused]
+	uint8_t  bytes[ SAT_MAX_VARS ];
+
+			// map between table indexes and CNF var. numbers
+			// CNF-numbers are used as index-1 (since they are >0)
+			//
+			// 0 entries are unused
+
+	uint32_t idx2cnf[ SAT_MAX_VARS ];
+	uint32_t cnf2idx[ SAT_MAX_VARS ];   // CNF var. number to 1-based index
+
+	unsigned int used;         // in our tables
+	unsigned int maxvarnr;     // in CNF
+} sat_varidx ;
+
+#define STV_STR_UNITS   ((size_t) 10000000)   /* collated string growth size */
 
 
 //--------------------------------------
-typedef enum {
-	SAT_E_INTERNAL = -1,
-	SAT_E_DB       = -2,
-	SAT_E_DB_VALUE = -3   // unexpected data/type found in database
-} SatErr_t ;
+struct SatHeader {
+	unsigned long vars;
+	unsigned long clauses;
+} ;
+//
+#define SAT_HEADER_INIT0  { 0, 0, }
 
 
-//--------------------------------------
-static redisContext *rds_open(const char *hostname, int port)
+/*--------------------------------------
+ * returns 1-based index, string representation of 'name' appended to sat_varidx
+ *         0  if can not allocate, or invalid input, incl. empty 'name/nbytes'
+ */
+static uint32_t sat_varstr_append(const void *name, size_t nbytes)
 {
-	struct timeval timeout = { 1, 500000 };                      // 1.0 sec
-	redisContext *ctx = NULL;
+	if (!name || !nbytes || (nbytes > SAT_MAX_VARNAME_BYTES) ||
+	    (sat_varidx.used >= SAT_MAX_VARS))
+		return 0;
 
-	if (!hostname)
-		hostname = "localhost";
+		// note: NULL check is redundant with 0-initialized struct
 
-	if (!port)
-		port = RD_DEFAULT_PORT;
+	if (!sat_varidx.pstr ||
+	    (sat_varidx.sused +nbytes +1 > sat_varidx.sallocd))
+	{
+		size_t nb = sat_varidx.sused +nbytes +1 +STV_STR_UNITS;
+		void *n   = realloc(sat_varidx.pstr, nb);
 
-	ctx = redisConnectWithTimeout(hostname, port, timeout);
+		if (!n)
+			return cu_reportrc("int-to-name table out of memory", 0);
 
-	if (!ctx || ctx->err) {
-		if (ctx) {
-			printf("Connection error: %s\n", ctx->errstr);
-			redisFree(ctx);
-			ctx = NULL;
-		} else {
-			printf("Connection: redis context alloc fail\n");
-		}
+		sat_varidx.pstr    = n;
+		sat_varidx.sallocd = nb;
 	}
+	// if we got here, bytes between (.sused .. sallocd) fit <name || 0>
 
-	return ctx;
+	sat_varidx.offset[ sat_varidx.used ] = sat_varidx.sused;
+	sat_varidx.bytes [ sat_varidx.used ] = nbytes;
+
+	memmove(&(sat_varidx.pstr[ sat_varidx.sused ]), name, nbytes);
+	sat_varidx.sused += nbytes +1;
+
+	sat_varidx.pstr[ sat_varidx.sused -1 ] = '\0';
+
+	sat_varidx.used++;
+
+	return sat_varidx.used;
 }
 
 
+
+
+/*============================================================================
+ * note: expect ASCII data (DIMACS spec); allow running non-ASCII hosts
+ */
+
+
 //--------------------------------------
-static inline int rd_reply_is_type(const redisReply *reply, int type)
+// <ctype.h> is host-specific; make sure UTF-8 (ASCII) is accepted
+// below are UTF-8-only replacements of typical ctype.h classifiers
+
+
+// isalpha -> is UTF-8 letter?
+//
+static int is_ualpha(unsigned char c)
 {
-	return (reply && (reply->type == type));
+	return ((('a' <= c) && (c <= 'z')) ||
+	        (('A' <= c) && (c <= 'Z')));
 }
 
 
+#if 0
 //--------------------------------------
-#define RD_REPLY_IS_INT(r)     rd_reply_is_type((r), REDIS_REPLY_INTEGER)
-#define RD_REPLY_IS_STRING(r)  rd_reply_is_type((r), REDIS_REPLY_STRING)
-
-
-//--------------------------------------
-static inline size_t rds_hash2id(const char **name, RdHash_t hash)
+// isspace -> is UTF-8 whitespace?
+//
+static int is_uspace(unsigned char c)
 {
-	switch (hash) {
-	case HSH_MAINHASH:
-		if (name)
-			*name = HSH_MAINHASH_NAME;
-		return HSH_MAINHASH_NBYTES;
-
-	case HSH_ADDLHASH:
-		if (name)
-			*name = HSH_ADDLHASH_NAME;
-		return HSH_ADDLHASH_NBYTES;
+	switch (c) {
+	case '\x09':        // ASCII tab
+	case '\x20':        // ASCII space
+	case '\x0a':        // ASCII LF
+	case '\x0d':        // ASCII CR
+		return 1;
 
 	default:
-		if (name)
-			*name = NULL;
 		return 0;
 	}
 }
+#endif
 
 
-/*--------------------------------------
- * empty the entire 'hash' table
- *
- *---  Redis:  --------
- *  DEL  ...table...
- */
-static int rds_hash0(redisContext *ctx, RdHash_t hash)
+//--------------------------------------
+// isalpha -> is UTF-8 digit?
+//
+static int is_udigit(unsigned char c)
 {
-	int rc =  0;
+	return (('0' <= c) && (c <= '9'));
+}
 
-	if (ctx) {
-		const char *db = NULL;
-		size_t dbytes;
 
-		dbytes = rds_hash2id(&db, hash);
+//--------------------------------------
+struct SatRegion {
+	size_t offset;
+	size_t bytes;
+} ;
+//
+#define  SAT_REGION_INIT0  { 0, 0, }
 
-		if (db && dbytes) {
-			redisReply *reply = NULL;
 
-			reply = redisCommand(ctx, "DEL %b", db, dbytes);
-			rc    = RD_REPLY_IS_INT(reply) ? 1 : -1;
+//--------------------------------------
+// simplistic state machine to capture all variable definitions,
+// incl. any form in DIMACS comments
+//
+// d0t2v0[30]  ->  name="d0t2v0", nr=30  ->
+//
+//   <letter>  [letter or digit]*  [  <digit+>  ]
+//
+// arbitrary whitespace is tolerated between top-level fields, but not
+// inside them (f.ex. between <letter> and [letter or digit]+).
+//
+// unintended matches, such as "<newline> c <space>" from DIMACS comments,
+// reset the state machine. None of the DIMACS-possible combinations
+// are ambiguous matches.
+//
+typedef enum {
+	SAT_VSP_PRE     = 1,
+	SAT_VSP_LETTER1 = 2,
+	SAT_VSP_LETTER2 = 3,     // incl. "or digit"
+	SAT_VSP_BRACK1  = 4,
+	SAT_VSP_DIGIT   = 5,
+	SAT_VSP_BRACK2  = 6,
 
-			freeReplyObject(reply);
-		}
-	}
+	SAT_VSP_INITIAL = SAT_VSP_PRE,
+	SAT_VSP_DONE    = 9998,
+	SAT_VSP_ERROR   = 9999
+} SatVarSpec_t ;
+//
+#define SAT__BRACK_START  '\x5b'    // ASCII '['
+#define SAT__BRACK_END    '\x5d'    // ASCII ']'
 
-	return rc;
+
+//--------------------------------------
+// d0t2v0[30]  ->  name="d0t2v0", nr=30
+// these are not clauses, but definitions, nr>0 for any valid one
+//
+// nr>0 if initialized
+//
+struct SatVar {
+	struct SatRegion name;
+	uint32_t nr;               // >0 if variable ID has been read & checked
+
+	size_t offset;                 // if >0, offset of current trailing ']'
+} ;
+//
+#define  SAT_VAR_INIT0  { SAT_REGION_INIT0, 0, 0, }
+
+
+//--------------------------------------
+// UTF-8 "/VARIABLES", matching ASCII-only DIMACS spec
+//
+static const unsigned char sat_varspec[10] = {
+	0x2f,                                           // "/"
+	0x56,0x41,0x52,0x49,0x41, 0x42,0x4c,0x45,0x53,  // "VARIABLES"
+} ;
+//
+#define  SAT_VARNEG_CHR  '/'
+
+
+//--------------------------------------
+static inline int is_initialized_region(const struct SatRegion *pr)
+{
+	return (pr && (pr->offset || pr->bytes));
+}
+
+
+//--------------------------------------
+static inline int is_initialized_var(const struct SatVar *pv)
+{
+	return (pv && pv->offset && is_initialized_region(&( pv->name )));
 }
 
 
 /*--------------------------------------
- * register (str, sbytes) -> (value) into hashtable selected by (db, dbytes)
- * does not change existing assignment
- *
- * returns <0  if anything failed
- *
- * assigns (...nr. of elements..) +1 if 'value' is 0
- * caller MUST NOT update database while changing that way
- * with uint64, we do not care about counter wrapping
- *
- * note: successful hash/update operations return ints, so not
- * specifically checking for _REPLY_ERROR
- *
- *---  Redis:  --------
- *  HLEN    ...table...                  -- query hash element count
- *  HSETNX  ...table...  ...key...  ...value...
- *                                       -- sets key->value if key is
- *                                       -- not yet present
+ * returns >0  if 'pr' MAY contain more pending data inside (data, dbytes)
+ *         <0  if anything is inconsistent
+ *          0  if structs are compatible, but there is no data left
  */
-static int rds_str2db1(redisContext *ctx, const char *str, size_t sbytes,
-                                            uint64_t value,
-                                            RdHash_t hash)
+static inline int
+is_compatible_region(const struct SatRegion *pr,
+                        const unsigned char *data, size_t dbytes)
 {
-	redisReply *reply = NULL;
-	int rc = 0;
+	if (!pr || !data || !dbytes)
+		return 0;
+
+						// note redundant expressions
+	if ((pr->offset > dbytes) ||
+	    (pr->bytes  > dbytes) ||
+	    (pr->offset + pr->bytes > dbytes))
+		return -1;
+
+	return 1;
+}
+
+
+//--------------------------------------
+// valid configs do not return (0,0), which indicates any failure
+//
+static struct SatRegion
+sat_variables_region(const unsigned char *sat, size_t sbytes)
+{
+	struct SatRegion r = SAT_REGION_INIT0;
 
 	do {
-	if (ctx && str) {
-		const char *db = NULL;
-		size_t dbytes;
+	if (sat && sbytes) {
+		unsigned char *v1, *v2;               // SHOULD really be const
+		size_t offs1;
 
-		dbytes = rds_hash2id(&db, hash);
-		if (!dbytes) {
-			rc = SAT_E_INTERNAL;
+		v1 = memmem(sat, sbytes, &( sat_varspec[1] ),
+		            sizeof(sat_varspec) -1);
+							// first VARIABLES instance
+							// MUST NOT be /-negated
+		if (!v1)
 			break;
-		}
 
-		if (!sbytes)
-			sbytes = strlen(str);
+		offs1 = (const unsigned char *) v1 - sat;   // start of 'VAR..'
+		if (offs1 && (sat[ offs1 -1 ] == SAT_VARNEG_CHR))
+			break;                  // fist instance is already /-negated
 
-		if (!value) {
-			reply = redisCommand(ctx, "HLEN %b", db, dbytes);
-			rc    = RD_REPLY_IS_INT(reply) ? 1 : SAT_E_DB;
-			value = reply ? (reply->integer +1) : 0;
+		offs1 += sizeof(sat_varspec);
 
-			freeReplyObject(reply);
-			if (rc < 0)
-				break;
-		}
+		v2 = memmem(sat + offs1, sbytes - offs1, sat_varspec,
+		            sizeof(sat_varspec));
+		if (!v2)
+			break;
 
-		reply = redisCommand(ctx, "HSETNX %b %b %u", db, dbytes,
-		                     str, sbytes, value);
-
-		rc = RD_REPLY_IS_INT(reply) ? (int) reply->integer : -1;
-
-		freeReplyObject(reply);
-
-		if (rc >= 0) {
-			reply = redisCommand(ctx, "HSETNX %b %u %b",
-					db, dbytes, value, str, sbytes, value);
-
-			rc = RD_REPLY_IS_INT(reply) ? (int) reply->integer : -1;
-		}
+		r.offset = offs1;
+		r.bytes  = ((const unsigned char *) v2 - sat) - offs1;
 	}
 	} while (0);
 
-	freeReplyObject(reply);
+	return r;
+}
 
-	return rc;
+
+// TODO: specialized variant which (1) memchr() to locate '[' and ']'
+// is restricted to 64 bytes -> extremely fast memchr() calls
+
+
+/*--------------------------------------
+ * returns 'empty' struct if no more name->index candidates are found
+ * 
+ * NULL 'prev' or INIT0-set *prev resets 
+ * other calls chain, advancing 'prev' and returning updated form
+ */
+static struct SatVar satvar_next(const struct SatVar *prev,
+                                 const unsigned char *sat, size_t sbytes)
+{
+	unsigned int state = SAT_VSP_INITIAL;
+	struct SatRegion n = SAT_REGION_INIT0,
+	                 d = SAT_REGION_INIT0;
+	struct SatVar v = SAT_VAR_INIT0;
+	size_t offs, done = 0;              // done>0 is offset of trailing ']'
+
+	if (prev)
+		v = *prev;
+
+	offs = v.offset + !!(v.offset);  // skip beyond prev. ']' if continuing
+
+// TODO: exact input-check rules
+	if (sat && sbytes && (offs < sbytes)) {
+	} else {
+		v = (struct SatVar) SAT_VAR_INIT0;
+	}
+
+	while ((offs < sbytes) && !done) {
+// TODO: factor out, and generate from table (if it grows much larger)
+		unsigned char c = sat[ offs ];
+		++offs;
+
+		switch (state) {
+			case SAT_VSP_PRE:
+				if (is_ualpha(c)) {
+					state    = SAT_VSP_LETTER1;
+					n.offset = offs -1;
+				}
+				break;
+
+			case SAT_VSP_LETTER1:
+				if (is_ualpha(c) || is_udigit(c)) {
+					state = SAT_VSP_LETTER2;
+				} else if (c == SAT__BRACK_START) {
+					state = SAT_VSP_BRACK1;
+				} else {
+					state = SAT_VSP_PRE;   // back to start
+				}
+				break;
+
+			case SAT_VSP_LETTER2:
+				if (is_ualpha(c) || is_udigit(c)) {
+					// NOP: we stay in LETTER2 region
+				} else if (c == SAT__BRACK_START) {
+					state   = SAT_VSP_BRACK1;
+					n.bytes = offs -1 -n.offset;
+				} else {
+					state = SAT_VSP_PRE;   // back to start
+				}
+				break;
+
+			case SAT_VSP_BRACK1:
+				if (is_udigit(c)) {
+					state    = SAT_VSP_DIGIT;
+					d.offset = offs -1;
+// printf("(D1=%zu)", d.offset);
+				} else {
+					state = SAT_VSP_PRE;   // back to start
+				}
+				break;
+
+			case SAT_VSP_DIGIT:
+				if (is_udigit(c)) {
+						// NOP: we stay in DIGIT region
+				} else if (c == SAT__BRACK_END) {
+// TODO: use SAT_VSP_DONE
+					state   = SAT_VSP_BRACK2;
+					d.bytes = offs -1 -d.offset;
+				} else {
+					state = SAT_VSP_PRE;   // back to start
+				}
+				break;
+
+			case SAT_VSP_BRACK2:
+				done = offs -1;
+				break;
+		}
+	}
+
+	if (done) {
+		uint64_t nr = cu_readuint((const char *) &(sat[ d.offset ]),
+		                          d.bytes);
+		if (!nr)
+			nr = CU_INVD_UINT64;     // 0 is invalid as variable ID
+
+		if (nr == CU_INVD_UINT64) {
+			done = 0;
+		} else {
+			v.name   = n;
+			v.offset = done;
+			v.nr     = nr;
+		}
+	}
+
+	return done ? v : ((struct SatVar) SAT_VAR_INIT0);
 }
 
 
 /*--------------------------------------
- * register (str, sbytes) into main hashtable
- * assigns (...nr. of elements..) +1 if 'value' is 0
+ * populates imhash-originated imhash_main[] from (sat, sbytes) DIMACS-encoded
+ * variable(name)->index mapping
  *
- * 'what', at some point, may select if we need multiple string-to-int hashes
+ * stores name-string-indexing entries into sat_varidx
+ *
+ * returns nr. of entries fed into hash
+ *         0   if anything failed
  */
-static int rds_str2db_main(redisContext *ctx, const char *str, size_t sbytes,
-                                                uint64_t value)
+static unsigned int sat_spec2variables(const unsigned char *sat, size_t sbytes)
 {
-	return rds_str2db1(ctx, str, sbytes, value, HSH_MAINHASH);
+	struct SatVar v = SAT_VAR_INIT0;
+	struct SatRegion r;
+	unsigned int n = 0;
+
+	r = sat_variables_region(sat, sbytes);
+	if (!is_initialized_region(&r))
+		return 0;
+
+	v.offset = r.offset;
+	sbytes   = r.offset + r.bytes;          // trim to net VARIABLES region
+
+// name is  ( &( sat[ v.name.offset ] ), v.name.bytes )
+// int. index is v.nr
+
+	do {
+	uint32_t idx, nameidx;
+	size_t hash;
+
+	v = satvar_next(&v, sat, sbytes);
+	if (!is_initialized_var(&v) || !v.nr)
+		break;
+
+	if (v.nr > SAT_MAX_VARS) {
+		cu_reportrc("CNF variable index out of range", 0);
+		break;
+	}
+// TODO: tolerate redundant, identical definitions
+	if (sat_varidx.cnf2idx[ v.nr -1 ]) {
+		fprintf(stderr, "ERROR: repeated CNF variable def (%"
+		        PRIu32 ")\n", v.nr);
+		cu_reportrc("CNF variable definition repeated", 0);
+		break;
+	}
+
+	hash = imh_append(NULL, &idx, &( sat[ v.name.offset ] ), v.name.bytes);
+	if (hash == IMH_SIZE_INVALID)
+		return cu_reportrc("hash table out of elements", 0);
+
+	nameidx = sat_varstr_append(&( sat[ v.name.offset ] ), v.name.bytes);
+	if (!nameidx)
+		return cu_reportrc("name-hash out of memory", 0);
+
+	if (v.nr > sat_varidx.maxvarnr)
+		sat_varidx.maxvarnr = v.nr;
+
+	sat_varidx.idx2cnf[ nameidx -1 ] = v.nr    -1;
+	sat_varidx.cnf2idx[ v.nr -1    ] = nameidx -1;
+
+	++n;
+	} while (n);
+
+	return n;
 }
 
 
 /*--------------------------------------
- * retrieve table[str] from 'hash'
- * returns ~0 if not found, invalid hash ID etc.
+ * returns  0  for any missing/invalid/etc. variable
+ *         >0  if found and related table entries are all valid
  */
-static uint64_t rds_lookup1(redisContext *ctx, const char *str, size_t sbytes,
-                                                 RdHash_t hash)
+static uint64_t sat_var2number(const void *name, size_t nbytes)
 {
-	redisReply *reply = NULL;
 	uint64_t rc = 0;
 
 	do {
-	if (ctx && str) {
-		const char *db = NULL;
-		size_t dbytes;
+	uint32_t idx;
 
-		dbytes = rds_hash2id(&db, hash);
-		if (!dbytes) {
-			rc = ~((uint64_t) 0);
-			break;
-		}
+	idx = imh_idx(name, nbytes);                  // in-hash index, 1-based
 
-		if (!sbytes)
-			sbytes = strlen(str);
+	if (idx > sat_varidx.used)
+		idx = 0;
 
-		reply = redisCommand(ctx, "HGET %b %b", db, dbytes,
-		                     str, sbytes);
+	if (!idx)
+		break;
 
-					// hash flattened INTs to STRING
-		rc = RD_REPLY_IS_STRING(reply)
-		     ? cu_readuint(reply->str, 0)
-		     : ~((uint64_t) 0);
-	}
+	idx = sat_varidx.cnf2idx[ idx -1 ];
+	if (idx >= sat_varidx.maxvarnr)
+		break;                  // error: table is inconsistent
+
+	rc = idx +1;
 	} while (0);
-
-	freeReplyObject(reply);
 
 	return rc;
 }
 
 
 /*--------------------------------------
- * retrieve table[str] from 'hash'
- * returns ~0 if not found, invalid hash ID etc.
+ * returns ptr to 0-terminated, read-only, UTF-8 string (replicated
+ * from DIMACS input)
+ *
+ * since 'varnr' is net DIMACS index, without any annotations, it
+ * is an u32, not the u64 output of sat_var2number().
+ *
+ * sets net bytecount to *nbytes if non-NULL
  */
-static uint64_t rds_lookup_main(redisContext *ctx,
-                                  const char *str, size_t sbytes)
+static const void *sat_varnr2name(size_t *nbytes, uint32_t varnr)
 {
-	return rds_lookup1(ctx, str, sbytes, HSH_MAINHASH);
+	uint32_t idx;
+
+	if (!varnr || (varnr > sat_varidx.maxvarnr))
+		return NULL;
+
+	if (varnr > sat_varidx.used)
+		return NULL;
+
+	idx = sat_varidx.cnf2idx[ varnr -1 ];
+	if (idx >= sat_varidx.used)
+		return NULL;         // varnr > ...: SNH, index is inconsistent
+
+	if (nbytes)
+		*nbytes = sat_varidx.bytes[ idx ];
+
+	return &( sat_varidx.pstr[ sat_varidx.offset[ idx ] ]);
 }
-#endif   /*=====  !SYS_NO_REDIS  ===========================================*/
+
+
+//--------------------------------------
+// "p cnf " in UTF8/ASCII
+// whitespace etc. is fixed-defined
+//
+static const unsigned char dimacs_header0[6] = {
+	0x70,0x20,0x63,0x6e,0x66, 0x20,
+} ;
+
+
+
+static struct SatHeader sat_dimacs2header(const void *pd, size_t dbytes)
+{
+	struct SatHeader hdr = SAT_HEADER_INIT0;
+
+	do {
+	void *pnl;
+	size_t nb;
+
+	if (!pd || !dbytes)
+		break;
+
+	pnl = memchr(pd, UTF8_NL, dbytes);
+	if (!pnl)
+		break;
+
+	nb = ((const unsigned char *) pnl) - ((const unsigned char *) pd);
+	if (nb < sizeof(dimacs_header0))
+		break;
+	if (memcmp(pd, dimacs_header0, sizeof(dimacs_header0)))
+		break;
+// cu_hexprint("## HDR+=", pd, nb);
+
+	} while (0);
+	
+	return hdr;
+}
+
+
+//--------------------------------------
+static int is_valid_sat_header(const struct SatHeader *ph)
+{
+	return (ph && ph->vars && ph->clauses) ;
+}
+
+
+/*--------------------------------------
+ * import variable name/number mappings from our pack-n-route annotated DIMACS
+ *
+ * commands:
+ *   V=...name...      variable of (name)
+ *   N=...variable...  variable name
+ *
+ * initializes global SAT index; changes in-memory imhash
+ */
+static int sat_varmgr(const char *table, const char **cmd, unsigned int count)
+{
+	struct SatHeader hdr = SAT_HEADER_INIT0;
+	const unsigned char *pd;
+	unsigned int vars;
+	size_t dbytes;
+	long rc = -1;
+
+	if (!table)
+		return -1;
+
+	rc = cu_readall(table, &pd, ~0);
+	if (rc < 0)
+		return -1;
+	dbytes = (size_t) rc;
+
+	rc = -1;                              // any error can just break below
+
+	do {
+	uint64_t n;
+
+	memset(&sat_varidx, 0, sizeof(sat_varidx));
+
+	hdr = sat_dimacs2header(pd, dbytes);
+	if (0 && !is_valid_sat_header(&hdr))
+		return cu_reportrc("SAT: can not recover DIMACS header", -1);
+
+	vars = sat_spec2variables(pd, dbytes);
+	if (!vars)
+		break;
+
+	while (count && *cmd) {
+		size_t cb = strlen(cmd[0]);
+
+		if (!strcmp(cmd[0], "N.MAX")) {
+			printf("N.MAX=%u\n", sat_varidx.maxvarnr);
+
+		} else if ((cb >= 2) && (cmd[0][0] == 'V') &&
+		                        (cmd[0][1] == '='))
+		{
+			n = sat_var2number(&( cmd[0][2] ), cb-2);
+
+			if (n) {
+				printf("V[%s]=%" PRIu64 "\n", &(cmd[0][2]), n);
+			} else {
+				printf("V[%s]=NOT FOUND\n", &(cmd[0][2]));
+			}
+
+		} else if ((cb >= 2) && (cmd[0][0] == 'N') &&
+		                        (cmd[0][1] == '='))
+		{
+			const char *pn = NULL;
+			uint64_t nr;
+
+			nr = cu_readuint(&(cmd[0][2]), 0);
+// TODO: document+wrap u32/64 conversions
+			if (nr != CU_INVD_UINT64) {
+				pn = sat_varnr2name(NULL, nr);
+
+				printf("N[%" PRIu64 "]=%s\n", nr,
+				       pn ? pn : "NOT FOUND");
+			} else {
+				fprintf(stderr, "ERROR: invalid variable "
+				        "index (%s)\n", cmd[0]);
+			}
+		}
+// ...
+
+		--count;
+		++cmd;
+	}
+	} while (0);
+
+	imh_main_dispose();
+	cu_releaseall(pd, 0);
+
+	return rc;
+}
+
+
+#endif   /*-----  /delimiter: var.name/number lookup  ----------------------*/
+
+#if 0
+int main(int argc, const char **argv)
+{
+	const unsigned char *pd;
+	unsigned int i, vars;
+	size_t dbytes;
+	long rc = -1;
+
+	if (argc < 2)
+		return -1;
+	--argc;
+	++argv;
+
+	rc = cu_readall(argv[0], &pd, ~0);
+	if (rc < 0)
+		return -1;
+
+	dbytes = (size_t) rc;
+	rc = -1;                              // any error can just break below
+
+	do {
+	vars = sat_spec2variables(pd, dbytes);
+	if (!vars)
+		break;
+
+			// var-to-int list, then int-to-var reverse list
+
+	for (i=0; i<vars; ++i) {
+// TODO: centralized 'is valid entry' check
+		printf("V[");
+		fwrite(&( sat_varidx.pstr[ sat_varidx.offset[i] ] ),
+		       sat_varidx.bytes[i], 1, stdout);
+		printf("]=%" PRIu32 "\n", sat_varidx.idx2cnf[i] +1);
+	}
+
+	printf("\n");
+
+	for (i=0; i<ARRAY_ELEMS(sat_varidx.cnf2idx); ++i) {
+		uint32_t cidx = sat_varidx.cnf2idx[i];
+		if (!cidx)
+			continue;
+		if (cidx > vars)
+			return -1;    // SNH: inconsistent index
+
+		printf("N[%" PRIu32 "]=(", cidx);
+
+		fwrite(&( sat_varidx.pstr[ sat_varidx.offset[ cidx-1 ] ] ),
+		       sat_varidx.bytes[ cidx-1 ], 1, stdout);
+		printf(")\n");
+	}
+
+	rc = 0;
+	} while (0);
+
+	imh_main_dispose();
+	cu_releaseall(pd, 0);
+
+	return rc;
+}
+#endif
+#endif   /*=====  /delimiter: CNF var.numbers <-> string mapper  ===========*/
 
 
 struct PNR_DB {
-#if !defined(SYS_NO_REDIS)
-	struct {
-		redisContext *ctx;
-	} rd ;
-#endif
-
 #if !defined(SYS_NO_LMDB)
 	struct {
 		MDB_env *henv;
@@ -583,10 +1077,6 @@ struct PNR_DB {
 static struct PNR_DB *db_release(struct PNR_DB *db)
 {
 	if (db) {
-#if !defined(SYS_NO_REDIS)
-		redisFree(db->rd.ctx);
-#endif
-
 #if !defined(SYS_NO_LMDB)
 		ldb_close(&( db->lm.henv ), &( db->lm.hdbi ));
 		ldb_close(&( db->lm.aenv ), &( db->lm.adbi ));
@@ -803,7 +1293,6 @@ struct SatState {
 /*--------------------------------------
  * recurring primitive: offset, entries in remaining part of SatNumbers
  */
-static int32_t *sat_nrs_1st_unused(const struct SatNumbers *pn) ;
 static int32_t *sat_nrs_1st_unused(const struct SatNumbers *pn) ;
 //
 #define  SAT_NR_UNUSED(pn)   sat_nrs_1st_unused(pn), sat_nrs_unused_count(pn)
@@ -1618,10 +2107,13 @@ int is_valid_cstring2(const struct SatState *ps, uint64_t s1, uint64_t s2)
 static uint64_t sat_varname2int(struct SatState *ps,
                                      const char *name, size_t nbytes)
 {
-	if (!name || !nbytes || !ps || !ps->db.rd.ctx)
+//	if (!name || !nbytes || !ps || !ps->db.rd.ctx)
+	if (!name || !nbytes || !ps)
 		return 0;
 
-	return rds_lookup_main(ps->db.rd.ctx, name, nbytes);
+// TODO: rest of non-Redis
+return 0;
+//	return rds_lookup_main(ps->db.rd.ctx, name, nbytes);
 }
 
 
@@ -1647,6 +2139,8 @@ static uint64_t sat_name2cs(struct SatState *ps,
 		uint64_t cs = 0;                      /* from database if >0 */
 
 		do {
+#if 0
+// TODO: non-Redis
 		if (ps->db.rd.ctx) {
 			cs = sat_varname2int(ps, name, nbytes);
 			if (cs && (cs != ~((uint64_t) 0))) {
@@ -1654,17 +2148,21 @@ static uint64_t sat_name2cs(struct SatState *ps,
 				break;                         // found, report
 			}
 		}
+#endif
 
 		cs = sat_str_append(&( ps->s ), name, nbytes);
 		if (!cs)
 			break;
 
+#if 0
+// TODO: non-Redis
 		if (ps->db.rd.ctx) {
 			int dbrc = rds_str2db_main(ps->db.rd.ctx, name, nbytes,
 			               (uint64_t) ps->addvars + ps->vars +1);
 			if (dbrc < 0)
 				break;
 		}
+#endif
 
 		if (mode == HSH_MAINHASH) {
 			ps->vars++;
@@ -4940,11 +5438,18 @@ static struct SAT_Summary templ2vars(const void *templ, unsigned int units,
 //----------------------------------------------------------------------------
 int main(int argc, char **argv)
 {
-	const char *hostname = (argc > 1) ? argv[1] : "localhost";
-	int port = (argc > 2) ? atoi(argv[2]) : 6379;
+// TODO: non-Redis
+//	const char *hostname = (argc > 1) ? argv[1] : "localhost";
+//	int port = (argc > 2) ? atoi(argv[2]) : 6379;
 	struct SatState psat;
 	struct PNR_DB db;
 	int rc = -1;
+
+	--argc;
+	++argv;
+
+	if ((argc >= 2) && !strcmp(argv[0], "SAT.CMD"))
+		return sat_varmgr(argv[1], (const char **) &(argv[2]), argc-2);
 
 	memset(&db,   0, sizeof(db));
 	memset(&psat, 0, sizeof(psat));
@@ -5114,18 +5619,6 @@ return 0;
 #endif
 
 	do {
-#if !defined(SYS_NO_REDIS)
-	db.rd.ctx = rds_open(hostname, port);
-	if (!db.rd.ctx)
-		return -1;
-
-	if (rds_hash0(db.rd.ctx, HSH_MAINHASH) <0)
-		break;
-	if (rds_hash0(db.rd.ctx, HSH_ADDLHASH) <0)
-		break;
-
-	psat.db = db;
-#endif
 #if !defined(SYS_NO_LMDB)
 	if (lmd_hash0(&(db.lm.henv), &(db.lm.hdbi), HSH_MAINHASH) <0)
 		break;
@@ -5226,12 +5719,6 @@ if (0) {
 	}
 	}
 	} while (0);
-
-	if (0) {
-		rds_hash0(psat.db.rd.ctx, HSH_MAINHASH);
-		rds_hash0(psat.db.rd.ctx, HSH_ADDLHASH);
-	}
-// TODO: control purging
 
 	db_release(&db);
 	sat_dispose(&psat);
