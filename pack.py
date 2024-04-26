@@ -52,10 +52,24 @@
 ##                    stack  details of backtracking
 ##                    flow   control/data flow
 ##                    all    any traceable quantity (all of the above)
+##   PACK_N_ROUTE_SKIP  force use of SAT-solver; no approximations
 ##   SAT=...            output SAT solver input for the current problem
 ##   SATDEBUG=...       diagnostics level if >0, SAT-only diagnostics
 ##   SAT_VEHICLES=...   number of vehicles to assume, over BFD-derived limit
 ##                      absolute number, or +...relative to BFD-limit...
+##   SAT_VEHBITS=...    number of vehicle-specific bits; a set of vehicle-ID-
+##                      indexed bits are provided then. See 'Vehicle bitmasks'
+##                      for application details.
+##   SAT_VEHCONSTRAINTS=...
+##                      assignments/restrictions on vehicle-specific bits
+##                      indexed by delivery ID; assume 'VB0..VBN' are
+##                      available vehicle-bitmask bits (see SAT_VEHBITS).
+##                      sample condition: "D0=VB0;D1=-VBN;D2=FIXV4"
+##                      (1) VB...   is vehicle-bitmask(bit)
+##                      (2) FIXV... is vehicle number ...
+##                      (3) one term per semicolon-separated entry
+##                      (4) assignments are aggregated for each D... index
+##
 ##   CSV=...            report full CSV version of time plan
 ##                      sub-options set within 'CSV' value (val1:val2:...):
 ##       compact        condensed form: not outputting each vehicle-ID bit
@@ -137,6 +151,13 @@
 ##     generally not performed on identical-sized primary and secondary sets
 ##   - when optimizing for multiple binned entries, repeate procedure for
 ##     previous non-selected set with identical MAX1 (and MAX2, if applicable)
+##
+## selection representation
+##   [ primary weight, secondary weight, ID, index ]
+##
+## TODO:
+##   [ [ weights... ], ID, input index ]
+
 
 
 ## pack-and-route:
@@ -170,8 +191,8 @@ import socket               ## best-result reporting; ignores all write errors
 import math, random
 import pathtools
 import textwrap
-import dev.sat_templates
-			## templates are 0-based based on problem size
+import dev.sat_templates    ## templates are 0-based based on problem size
+import dev.sat_tools
 import cProfile
 
 ## keep these global; needs dict if working on context-local limits
@@ -183,7 +204,7 @@ import cProfile
 ##              MUST supply MAX2 in that case
 ## TUPLE_N      override max-tuples limit
 ## MAX_ELEMS    >0 if there is an upper limit on number of entries selected
-## FORMAT       'json' for REST APIs; default is 'csv'
+## FORMAT       'json' (case-insensitive) for REST APIs; default is 'csv'
 ##
 MAX1, MAX2, FIELD2, DEBUG, MAX_ELEMS = None, None, False, 0, 0
 TUPLE_N, PCT = 0, None
@@ -219,6 +240,7 @@ sCSVPREFIX  = 'CSV='      ## common prefix for CSV output (schedule)
 sSATCOMMENT = '## SAT='   ## SAT-related comment, for our own tracing
 sSAT_CONSTR_END = ' 0'    ## terminate [term list of] constraint
 sSAT_2ND_VAR    = 'N'     ## prefix for secondary SAT (CNF) variables
+sSAT_MARKER_VAR = 'MARKER'    ## dummy variable separating groups of clauses
 sSAT_SYM_PREFIX = 'RAW='  ## prefix for clauses which are stored as strings,
                           ## only mapped to integer indexes in the end
                           ## DIMACS CNF: "1 2 -3 0"
@@ -343,6 +365,16 @@ tTRACETYPES = {
 ## caches parsed 'TRACE' env.variable
 ##
 sys_trace = None
+
+
+##--------------------------------------
+## returns None if not found
+##
+def int_from_env(varname, defval=None):
+	if varname in os.environ:
+		return int(os.environ[ varname ])
+
+	return defval
 
 
 ##--------------------------------------
@@ -531,6 +563,8 @@ def order_struct_init0():
 ## with non-None 'pts', we output coordinate list (in commented-out
 ## explanatory table)
 ##
+## set 'FIXED_WIDTH' in environment to force use of 32-bit units
+##
 ## input: see xy2table()
 ##
 def xy2c(arr, pts=None):
@@ -542,9 +576,15 @@ def xy2c(arr, pts=None):
 
 	n = len(arr[ "points" ])
 
-	res.append(f'#define  { sCDELIVERIES }  ((unsigned int) {n})')
-	res.append('#include <stdint.h>')
-	res.append('')
+	sdef = 'NO_STATIC_XYTABLE'
+
+	res.extend([
+		f'#define  { sCDELIVERIES }  ((unsigned int) {n})',
+		'#include <stdint.h>',
+		'',
+		f'/* define { sdef } to force non-static table */',
+		'',
+	])
 
 	res.extend([
 		f'struct { sCXY_TYPE } {{',
@@ -628,11 +668,25 @@ def xy2c(arr, pts=None):
 		' */',
 	])
 
-	res.append(f'static const uint32_t { sCDIST }' +
+	if (maxd >= (1 << 32)):
+		raise ValueError("distances out of range?")
+	elif (maxd >= 0x10000) or ('FIXED_WIDTH' in os.environ):
+		ctype = 'uint32_t'
+	elif (maxd >= 0x100):
+		ctype = 'uint16_t'
+	else:
+		ctype = 'uint8_t'
+
+	res.extend([
+		f'#if !defined({ sdef })',
+		'static',
+		'#endif',
+		'/**/',
+	])
+	res.append(f'const { ctype } { sCDIST }' +
 		f'[ {sCDELIVERIES} ][ {sCDELIVERIES} ] /* {n}x{n} */= {{')
 		##
 		## align all columns; cdigits stores per-column digit.count
-		##
 
 	for ri, row in enumerate(d):
 		curr = ''.join(f'{row[ci] :>{ cdigits[ ci ] }},' +colbrk[ci]
@@ -785,8 +839,10 @@ def aux2plus(aux):
 
 
 ##--------------------------------------
+## see XXX for inverse
+##
 def unitindex2vectorbit(u):
-	"map 0-based time-unit index to corresponding"
+	"map 0-based time-unit index to corresponding bitmask elem"
 
 	return 1 << u
 
@@ -929,7 +985,15 @@ def arr2sums(arr):
 
 
 ##--------------------------------------
-def report_env(filehash=None):
+def is_direct_format(fmt):
+	return (fmt != 'json')
+
+
+##--------------------------------------
+def report_env(filehash=None, fmt='csv'):
+	if not is_direct_format(fmt):
+		return
+
 	print(f"## MAX1={MAX1}")
 	if MAX2:
 		print(f"## MAX2={MAX2}")
@@ -1016,6 +1080,51 @@ def selection2lines(sel, format='plain'):
 
 
 ##--------------------------------------
+## NDJSON reporting; newline-delimited JSON
+##
+## input is array of selections (see 'selection representation')
+## 'negated' means non-selected report
+##
+def report_selection_json(sel, add_sum=True, negated=False):
+	descr = {}
+	elems = []
+	res   = { 'descr': descr, 'selection': elems }
+
+	descr[ 'elem.count' ] = len(sel)
+
+	if add_sum:
+		t = descr[ 'sum' ] = sum(s[0]  for s in sel)
+
+		if not negated:
+			descr[ 'remain' ]  = MAX1 - t
+
+## TODO: centralized wrappers for all remain/percentage/etc. reporting
+
+			descr[ 'remain.%'   ] = (100.0 * (MAX1 - t)) / MAX1;
+			descr[ 'remain.ppm' ] = 1000000 * (MAX1 - t) // MAX1;
+
+## special-case 1: allow in-band special-casing of single, oversized
+## items (which could be passed through for final special-casing,
+## and not just ignored, during packing)
+##
+			if (descr[ 'remain' ] < 0) and (len(sel) > 1):
+				raise ValueError('inconsistent MAX(...)')
+## TODO: centralize
+
+	if negated:
+		descr[ 'non-selected' ] = True
+
+	for si, s in enumerate(sel):
+		elems.append({
+			'weight': [ s[0], s[1] ],
+			'ID':     s[2],
+			'ser.nr': s[3],
+		})
+
+	print(json.dumps(res))
+
+
+##--------------------------------------
 ## 'sel' and 'nsel' are internal-format arrays, of current selected
 ## and non-selected entries, respectively
 ##
@@ -1042,36 +1151,47 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 				                     +elem2str(s[1]))
 			raise ValueError("ERROR: oversized selection")
 
-	if (msg):
-		print(msg)
 	if (format == 'csv'):
 		prefix = '#'
 
-	print(selection2hdr(sel), end='')
-	if remain:
-		print(", margin={} ({:.2f}% of {})"
-		      .format(MAX1 - stotal, ratio(stotal), MAX1), end='')
-	print()
+	if is_direct_format(format):
+		if msg:
+			print(msg)
+
+		print(selection2hdr(sel), end='')
+
+		if remain:
+			print(f", margin={ MAX1-stotal } " +
+			      f"({ ratio(stotal) :.2f}% of { MAX1 })", end='')
+		print()
 
 	if sel:
-		for s in enumerate(ordered(sel)):
-			if (format == 'plain'):
-				print('elem[{}]: '.format(s[0])
-				      + elem2str(s[1], format))
-			else:
-				print(f'{s[1][0]},{s[1][1]},' +
-				      f'{elem2str(s[1], format)}')
+		if format == 'json':
+			report_selection_json(sel)
+		else:
+			for s in enumerate(ordered(sel)):
+				if (format == 'plain'):
+					print('elem[{}]: '.format(s[0])
+					      + elem2str(s[1], format))
+				else:
+					print(f'{s[1][0]},{s[1][1]},' +
+					      f'{elem2str(s[1], format)}')
 ## TODO: shared function -> selection2lines()
-		print()
+			print()
 
+## TODO: anything different about non/selection structs,
+## or can we already use the same formatter?
 	if nsel:
-		if (format == 'csv'):
-			print('#', end='')
-		print("not selected: {} elements" .format(len(nsel)))
+		if format == 'json':
+			report_selection_json(nsel, negated=True)
+		else:
+			if (format == 'csv'):
+				print('#', end='')
+			print("not selected: {} elements" .format(len(nsel)))
 
-		for s in enumerate(ordered(nsel)):
-			print('  ## not.sel[{}]: '.format(s[0]) +elem2str(s[1]))
-		print()
+			for s in enumerate(ordered(nsel)):
+				print('  ## not.sel[{}]: '.format(s[0]) +elem2str(s[1]))
+			print()
 
 
 ##--------------------------------------
@@ -1102,7 +1222,7 @@ def report(sel, nsel, msg=None, remain=True, chk_oversize=True, format='csv'):
 ##                  --             | |  |  |  | |
 ##                  -- 1015-1030 --+ |  |  |  | |
 ##                  --    ...        |  |  |  | +--  0800-0815
-##                  -- 0945-1000 ----+  |  |  |         ...
+##                  -- 0945-1000 ----+  |  |  |         ...RRR
 ##                  --    ...           |  |  +----  0830-0845
 ##                  -- 0915-0930 -------+  |            ...
 ##                  --                     +-------  0900-0915
@@ -1366,7 +1486,7 @@ def add_and_remove(sel, nsel, add_idxs, rm_idxs, curr=0, prev=0, log=True):
 ## still remains under element-count limit
 ##
 def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None,
-                  sock=None):
+                  sock=None, format='csv'):
 
 	if (scount < 1) or (nscount < 1):
 		raise ValueError("invalid selection-swap size")
@@ -1454,13 +1574,13 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None,
 		best_sum1, best_sum2 = sum1updated, sum2updated
 		swap_del, swap_add   = st, nst
 
-		print("## remove:")
-		for si in st:
-			print('##  - ' +elem2str(sel[si]))
-
-		print("## add:")
-		for nsi in nst:
-			print('##  + ' +elem2str(nsel[nsi]))
+		if is_direct_format(fmt):
+			print("## remove:")
+			for si in st:
+				print('##  - ' +elem2str(sel[ si ]))
+			print("## add:")
+			for nsi in nst:
+				print('##  + ' +elem2str(nsel[ nsi ]))
 
 		nbcomment, nbmark = '', ''
 		if (all_best != None):
@@ -1489,7 +1609,9 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None,
 			sbest, nsbest = add_and_remove(sel, nsel, swap_add,
 			                               swap_del, log=False)
 
-			report(sbest, nsbest, msg='# best combination, so far:')
+			report(sbest, nsbest, format=fmt,
+			       msg='# best choice, so far:')
+
 			all_best[ 'sum'        ] = new_best
 			all_best[ 'selection'  ] = sbest
 			all_best[ 'nselection' ] = nsbest
@@ -1502,13 +1624,15 @@ def klfm_swap_one(sel, nsel, scount=1, nscount=1, all_best=None, start=None,
 			tnow  = time.perf_counter()
 			tdiff = f" time(IMPR)={(tnow - start) *1E6:.1f}us "
 
-		print(f"## primary sum improves {sum1}->" +
-		      f"{best_sum1}{tdiff}", end='')
+		if is_direct_format(fmt):
+			print(f"## primary sum improves {sum1}->" +
+			      f"{best_sum1}{tdiff}", end='')
 
-		print(f"(remain: { MAX1-sum1 }->{ MAX1-best_sum1 }){nbmark}")
-		if nbcomment != '':
-			print('##' +nbcomment)
-		print(flush=True)
+			print(f"(remain: { MAX1-sum1 }->{ MAX1-best_sum1 })" +
+				f"{nbmark}")
+			if nbcomment != '':
+				print('##' +nbcomment)
+			print(flush=True)
 
 
 			## possible case: early-terminate: exact match
@@ -1548,7 +1672,8 @@ def over_pct_threshold(selected):
 ## 'sel' and 'nsel' are internal-format arrays, of current selected
 ## and non-selected entries, respectively
 ##
-def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
+def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None,
+              format='csv'):
 	if not sel or not nsel:
 		return None, None, None
 
@@ -1569,11 +1694,13 @@ def klfm_swap(sel, nsel, max_tuple_n, all_best=None, start=None, sock=None):
 			continue                 ## stay below elem-count limit
 
 		s1, s2, nsum = klfm_swap_one(sel, nsel, scount, nscount,
-		                             all_best, start=start, sock=sock)
+		                             all_best, start=start, sock=sock,
+		                             format=format)
 
 		if (not s1) or (not s2) or (not nsum):
-			print('## {}+{} swap: no improvement'
-			      .format(scount, nscount))
+			if is_direct_format(format):
+				print('## {}+{} swap: no improvement'
+				      .format(scount, nscount))
 			continue                       ## no improvement at all
 
 		if best and (nsum <= best):
@@ -1903,8 +2030,10 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##     ...delivery...: [ ...time units... ]    ## int(time-unit vector)
 ##                                             ## delivery can be scheduled...
 ##   }
-##   'vehicle.idbits': [ ...vehicle ID bits... ]  ## ints for each vehicle ID
-##                                                ## 0..N-1
+##   'vehicle.idbits': [ ...vehicle ID bits... ]   ## ints for each vehicle ID
+##                                                 ## 0..N-1
+##   'vehicle.bmaskbits': [ ...v-bitmask bits... ] ## vehicle-bitmask bits
+##                                                 ## see 'Vehicle bitmasks'
 ##
 ##   'varlist': [ ...list of 'base' variables... ]
 ##                 ## base variables are those inherent in the schedule,
@@ -1957,11 +2086,12 @@ def timevec2utilstr(timevec, maxunits, unitcols=3, sep=' ', sep2=0):
 ##
 def plan_constraints0():
 	return {
-		'vehicle2time':    {},
-		'vehicle.idbits':  [],
-		'varlist':         [],
-		'vars':            {},
-		'constraints.raw': [],
+		'vehicle2time':       {},
+		'vehicle.idbits':     [],
+		'vehicle.bmaskbits':  [],
+		'varlist':            [],
+		'vars':               {},
+		'constraints.raw':    [],
 	}
 
 
@@ -2017,7 +2147,6 @@ def plan_constraints0():
 tVID2TIME = 'VEHICLE2TIME'               ##
 
 
-
 ##--------------------------------------
 ## VRoute Status
 ##   statistics for delivery orders when searching for minimum
@@ -2055,10 +2184,37 @@ tVID2TIME = 'VEHICLE2TIME'               ##
 
 
 ##--------------------------------------
+## Vehicle bitmasks
+##
+## Certain properties are encoded as bitmasks; they represent group
+## membership etc. as indexed by vehicle ID.
+##
+## Example: which kind of vehicle this is? is this an electric vehicle?
+##    v0   v1  -v2   VB0     vehicle ID b001 has           vehicle bit VB0 set
+##    v0  -v1   v2  -VB1                b010 does not have             VB1 set
+##
+## comparisons to vehicle bitmasks may be derived from delivery-specific
+## bits: delivery XX encodes the vehicle ID it is assigned to
+## in bits dXXv0 .. dXXvN.
+##
+## we reserve variables for a predefined number of 'VB' bits; see
+## SAT_VEHBITS for the env. definition.
+
+
+##--------------------------------------
 ## TODO: Python version-portable automatic values
 ##
 def vehicle2primary(vehicle):
 	return  vehicle[ 'primary' ]  if ('primary' in vehicle)  else 0
+
+
+##--------------------------------------
+## returns nr. of chars to skip if inverted
+##
+def is_negated_satstr(s):
+	if s.startswith('-') or s.startswith('!'):
+		return 1
+	return 0
 
 
 ##============================================================================
@@ -2183,6 +2339,58 @@ def satsolv_is_debug(level=1):
 
 
 ##--------------------------------------
+## string clause to list-of-integers
+## returns None if not matching string-clause formats
+##
+def str2clauselist(sat, c):
+	if c.startswith(sSAT_SYM_PREFIX):
+		c  = c[ len(sSAT_SYM_PREFIX): ]
+		constr = c.split()
+
+		if re.search('[a-zA-Z]', c):
+			constr = c.split()
+			constr = " ".join(str(s) for s in
+			                  sat_vars2ints(sat, constr))
+		else:
+			constr = c
+		return constr
+
+	else:
+		return None
+
+
+##--------------------------------------
+def sat_clause_count(sat):
+	if not sat:
+		return 0
+
+	return sum((0  if (c == '')  else 1)
+	           for c, craw in sat[ 'constraints' ])
+
+
+##--------------------------------------
+## generator for all clauses of 'sat', all in integer-mapped form
+## returns list-of-integers; original clause-list entry
+##
+## polymorphic, tolerates lists-of-integers (1) or raw strings (2)
+##
+## see also satsolv_report(), which has closely related code
+##
+def satsolv_clauses2ints(sat):
+	for c, comm in sat[ 'constraints' ]:
+		if c == '':
+			continue
+
+		if isinstance(c, list):
+			yield c, c
+			continue
+
+		cl = str2clauselist(sat, c)
+		if cl:
+			yield [ int(v)  for v in cl.split() ], c
+
+
+##--------------------------------------
 ## sanity-check
 ## - we expect to generate normalized DIMACS 
 ##   - number of variables is minimal
@@ -2191,18 +2399,32 @@ def satsolv_is_debug(level=1):
 ##     variable+clause lists
 ## - to heavy for regular usage; TODO: extract lightweight version
 ##
-def satsolv_assert_normalized(sat):
+## level>=2 is extremely log-heavy
+##
+def satsolv_assert_normalized(sat, level=1):
 	if not sat:
 		raise ValueError("missing SAT context to check")
 
-	if not satsolv_is_debug(2):
-		pass
-
 	vars, addl = sat[ 'vars' ], sat[ 'added_vars' ]
 
-			## retrieve integer variable IDs
-	for c in sat[ 'clauses' ]:
-		pass
+	clcount, vmax, vseen = 0, -1, set()
+
+	for c, craw in satsolv_clauses2ints(sat):
+		for v in c:
+			if v == 0:
+				raise ValueError("0 in clause list")
+			vseen.add(v)
+			vmax = max(vmax, abs(v))
+		clcount += 1
+
+#	print('## CLAUSES.SUM', clcount, vmax, vseen)
+#	print(f'## SAT.VARS={ satsolv_next_varnr(sat) -1 }=' +
+#		f'{ len(sat["vars"]) }+{ sat[ "added_vars" ] }')
+
+#	print('## CLAUSES.CLAIM', sat_clause_count(sat), end='')
+#	if level >= 2:
+#		print(" ", sat[ 'constraints' ], end='')
+#	print()
 
 
 ##--------------------------------------
@@ -2234,7 +2456,7 @@ def satsolve_vidx_bits(vehicles):
 
 				## includes pattern to indicate 'not serviced'
 
-	return (vehicles +1).bit_length()
+	return vehicles.bit_length()
 
 
 ##--------------------------------------
@@ -2317,8 +2539,11 @@ def satsolv_add_delvtime(sat, delvid, unit, vnumber=None):
 ## bundle as many as possible
 ## esp. delivery+time-unit collisions add many short lists -> O(N^2) extension
 ##
-def satsolv_add_vars(sat, vars):
+def satsolv_add_vars(sat, vars, addvars=0):
 	if sat:
+		if addvars:
+			satsolv_register_added_vars(sat, addvars)
+
 		v = list(v  for v in vars  if (not v in sat[ 'vars.set' ]))
 
 		nv0 = len(sat[ 'vars' ])
@@ -2330,11 +2555,15 @@ def satsolv_add_vars(sat, vars):
 
 
 ##--------------------------------------
-def satsolv_add_1var(sat, var):
-	if sat and (not var in sat[ 'vars.set' ]):
-		sat[ 'v2i' ][ var ] = len(sat[ 'vars' ]) +1
-		sat[ 'vars'     ].append(var)
-		sat[ 'vars.set' ].add(var)
+def satsolv_add_1var(sat, varname, addvars=0):
+	if sat:
+		if addvars:
+			satsolv_register_added_vars(sat, addvars)
+
+		if (not varname in sat[ 'vars.set' ]):
+			sat[ 'v2i' ][ varname ] = len(sat[ 'vars' ]) +1
+			sat[ 'vars'     ].append(varname)
+			sat[ 'vars.set' ].add(varname)
 
 
 ##--------------------------------------
@@ -2385,8 +2614,8 @@ def satsolv_add_constraints(sat, constraints, comment=''):
 ## sat[ "vars" ] MUST already have initalized all referenced dXXtYY etc.
 ## variables.
 ##
-## TODO: all conflicts use the same NEQ0 clauses -> may preregister
-## all new variables etc. (N * M == pairs * new variables)
+## TODO: all conflicts use the same NEQ0 clauses -> may preregister all new
+## variables etc. from clause template (N * M == pairs * new variables)
 ##
 def satsolv_add_conflict_constraints(sat, constr, vbits, nextidx=0):
 	d1, t1, d2, t2 = constr
@@ -2408,6 +2637,9 @@ def satsolv_add_conflict_constraints(sat, constr, vbits, nextidx=0):
 	or1 = satsolv_var_name(d1, time_unit=t1)
 	or2 = satsolv_var_name(d2, time_unit=t2)
 
+## TODO: use when factored out as recurring primitive
+
+##	print("XXX+CONSTR", d1, t1, d2, t2, or1, or2)
 	cls, _, comm = satsolv_neq_or0(sat, v1bits, v2bits, or1=or1, or2=or2)
 	for c in cls:
 		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
@@ -2449,7 +2681,6 @@ def satsolv_report(sat):
 
 	print(sSATPREFIX +'c CONSTRAINTS:')
 					## do not change CONSTRAINTS framing
-	print('xxx', sat)
 
 	comments = 0
 	for commstr in (s  for s in sat[ "constraints" ]  if s[1]):
@@ -2486,6 +2717,12 @@ def satsolv_report(sat):
 
 		if cvars == '':
 			continue
+
+## TODO: see satsolv_clauses2ints(), since clause-to-int listing
+## has also emerged there; merge the two paths
+
+## RRR
+		cl = str2clauselist(sat, cvars)
 
 		if cvars.startswith(sSAT_SYM_PREFIX):
 			cvars  = cvars[ len(sSAT_SYM_PREFIX): ]
@@ -3051,7 +3288,7 @@ def msbit(t):
 
 
 ##--------------------------------------
-## returns 1-based index of t bit
+## returns 1-based index (=unit) of t bit
 ##
 ## not checking for t being single bit
 ##
@@ -4163,20 +4400,33 @@ def satsolv_str2ids(ids):
 
 
 ##-----------------------------------------
-## SAT/CNF: are two variable collections identical?
-## used to cross-check possibly conflicting deliveries, with two N-bit
-## configurations: different delivery + time(unit) + vehicle index(N-bit):
-##   (1) either one of the indexes is all-0: not yet assigned
-##   (2) N-bit value 1 != N-bit value 2 (-> assigned to different vehicles)
+## force vector == fixed.constant or vector != fixed.constant
 ##
-## inputs are collections of variables of identical size
+## vector is list of variables; constant is binary
 ##
-def satsolv_differ_n(var1, var2, result=None):
-	if (not var1) or (not var2) or (len(var1) != len(var2)):
-		raise ValueError("inconstent bitvectors-differ input")
+## returns list of clauses
+## 
+def sat_const_n(sat, vec, const, negate=True):
+	if len(vec) != len(const):
+		raise ValueError("provide equal sizes for 'constant(N)'")
 
-	comment = ''
-	return [], result, comment
+	if negate:
+		cls = [ [ sat_negated(v)  if c  else v
+		          for v, c in zip(vec, const) ] ]
+	else:
+		cls = [ [ v  if c  else sat_negated(v) ]
+		        for v, c in zip(vec, const) ]
+
+	return cls
+
+
+##-----------------------------------------
+def sat_differ(sat, vec1, vec2, force=False):
+	if len(vec1) != len(vec2):
+		raise ValueError("provide equal sizes for 'diff'")
+
+	diff = expr2template_addvars(sat, 'DIFF', len(vec1))
+	print('## TODO: templ.diff', diff)
 
 
 ##-----------------------------------------
@@ -4283,7 +4533,7 @@ def sat_delv_vidlist(didx, vbits):
 ##
 ## registers any newly allocated variables to 'sat'
 ##
-def satsolv_less_than(sat, varlist, n, force=True):
+def satsolv_less_than(sat, varlist, n, force=True, want_array=False):
 	nbits = f'{ n :b}'
 	nb    = bitmask2bitarr(n)
 	opr   = 'LT.FORCE'
@@ -4295,33 +4545,22 @@ def satsolv_less_than(sat, varlist, n, force=True):
 
 ## TODO: polymorphic wrapper
 	vi = [ sat['v2i'][v]  for v in varlist ]       ## variables as integers
-	ni = [ sat['v2i'][v]  for v in nxv     ]
+
+	if nxv:
+		ni = [ sat['v2i'][v]  for v in nxv ]
 
 	tm, orig = expr2template(opr, varlist, nxv, idx=n)
 
-## TODO: polymorphic
-	cls = [ ' '.join(c)  for c in tm ]
+	cls = tm  if want_array  else [ ' '.join(c)  for c in tm ]
 
 ## TODO: recurring trailer for all template-to-instance conversions
 # note: always used in forced-as setting; no ret. value
 	res = None
 
 	nstr = f'{n}[{ bin(n) }]'
+	comm = f'vehicle ID: binary({",".join(str(v) for v in varlist)})<{nstr}'
 
-	return cls, res, f'vehicle ID: binary({ ",".join(varlist) })<{nstr}'
-
-
-##--------------------------------------
-## how many additional variables are used by one NOT-EQUAL-OR-0
-## condition with (2x) N bits variables?
-##
-##	tm, orig = expr2template(opr, vbits, nextvar, idx=len(v1bits))
-##
-def sat_neq0_addl_var_count(vbits):
-##	tm, _ = expr2template('NEQ0.FORCE', list(range(1, vbits+1)), 0)
-## RRR
-
-	return 0
+	return cls, res, comm
 
 
 ##----------------------------------------------------------------------------
@@ -4359,24 +4598,18 @@ def satsolv_neq_or0(sat, v1bits, v2bits, or1=0, or2=0, force=True, nextvar=0):
 ## TODO: proper var-count queries
 	xorsvar = sat[ 'v2i' ][ nextvar[1] ]
 
+			## (nextvar, OR(XORs) [OR1=..., OR2=...]
+			## (nextvar, OR(XORs))
+
+	vbits.extend([ or1, or2, ])
 ## TODO: polymorphism
-##	print('xxx1', xorsvar, or1, or2, nextvar)
 	or1 = sat[ 'v2i' ][ or1 ]
 	or2 = sat[ 'v2i' ][ or2 ]
 
-	## (nextvar, OR(XORs) [OR1=..., OR2=...]      -- if adding XORs
-	## (nextvar, OR(XORs))                        -- if 
+	tm, orig = expr2template('NEQ0.FORCE.OR', vbits, xorsvar,
+	                         idx=len(v1bits))
 
-				## both OR's already available
-				## NEQ0 == NOT(OR1) or NOT(OR2) or DIFF(...)
-				## only adds variables for DIFF;
-				## ORs assumed already assigned
-	tm, orig = expr2template('DIFF', vbits, xorsvar, idx=len(v1bits))
-
-	orcls, _, _ = satsolv_or('', [ nextvar[1], sat['vars'][or1],
-	                               sat['vars'][or2], ],
-	                         result = nextvar[0])
-
+## map ints-to-vars
 ## TODO: fully polymorphic map
 	cls = []
 	for c in tm:
@@ -4456,14 +4689,14 @@ def satsolv_new_varname(nr=0, sat=None, pfx=sSAT_2ND_VAR):
 
 
 ##-----------------------------------------
-## auto-registers next name with given prefix and solver-derived var.number
+## auto-registers next name as added variable, with given prefix
+## and solver-derived var.number
 ##
 def satsolv_new_varname2(sat, prefix=sSAT_2ND_VAR):
 	nname = satsolv_nr_of_added_vars(sat) +1
 	nname = prefix +str(nname)
 
-	satsolv_register_added_vars(sat, 1)
-	satsolv_add_1var(sat, nname)
+	satsolv_add_1var(sat, nname, 1)
 
 	return nname
 
@@ -4489,9 +4722,7 @@ def satsolv_new_varname2_many(sat, n, prefix=sSAT_2ND_VAR):
 
 	nnames = [ prefix +str(i)  for i in range(nx, nx +n) ]
 
-	satsolv_register_added_vars(sat, n)
-
-	satsolv_add_vars(sat, nnames)
+	satsolv_add_vars(sat, nnames, n)
 
 	return nnames
 
@@ -4684,6 +4915,9 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 			u1b  = timevecbit2offset(u1) -1
 			allt = 0
 
+## TODO: global defaultdict wrapper
+			dt1 = f'd{ d1 }t{ timevecbit2offset(u1b) }'
+
 				## bits(u1) shifted +-[...conflicting range...]
 				## per-bit construction; works
 				## regardless of multiple windows
@@ -4699,7 +4933,9 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 			u2clash = list(u  for u in d2tu  if (allt & u))
 
 			for u2b in u2clash:
-				u2bit = timevecbit2offset(u2b) -1
+				u2bit  = timevecbit2offset(u2b) -1
+				u2unit = timevecbit2offset(u2bit)
+## TODO: sync notation, then remove replication
 
 				conflicts.append([ d1, u1b, d2, u2bit ])
 
@@ -4737,24 +4973,17 @@ def satsolv_delv_window_2x_deps(sat, delvs, dist, dts, satvcount,
 
 	vbits  = satsolve_vidx_bits(satvcount)
 
-				## preregister conflict/NEQ0 variables
+	## TODO: preregister conflict/NEQ0 variables
 				##
 				## mgmt/expansion of variables' mappings turns
 				## out to be a visible portion of runtime
 				##
-	nextidx = satsolv_next_varnr(sat)
-	incr    = sat_neq0_addl_var_count(vbits)
-##RRR
-	if False:
-		satsolv_new_varname2_many(sat, incr * len(conflict_pairs))
-
 	for ci, c in enumerate(conflict_pairs):
 		if (ci % vPROGRESS) == 0:
 			print(f'## registering conflicts { ci+1 }/' +
 				f'{ len(conflict_pairs) }')
 
 		satsolv_add_conflict_constraints(sat, c, vbits, nextidx=0)
-		nextidx += incr
 
 	if final:
 		register_sat_condition(sat[ 'constraints.raw' ],
@@ -4795,10 +5024,11 @@ def satsolv_delv2time(sat, delv, time_unit, vnr_bits):
 	vi    = [ sat['v2i'][v]  for v in vvars ]
 	ti    = sat['v2i'][ tvar ]
 
-	cls, _, _ = satsolv_or('', vi, result=ti)
-
 	comm =  f'delivery+time <-> +vehicles: (d={ delv }, t={ time_unit })'
 	comm += f' [{tvar} = ({ " OR ".join(vvars) })]'
+
+## TODO: recurring theme, factor out
+	cls, _, _ = satsolv_or('', vi, result=ti)
 
 	for c in cls:
 		satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
@@ -4858,6 +5088,8 @@ def satsolv_delv2vehicle(sat, didx, tbits, vnr_bits, solve=True,
 				            sSAT_SYM_PREFIX +c, vcomm)
 				vcomm = ''
 				count += 1
+
+##				satsolv_assert_normalized(sat, level=2)
 		else:
 			res.append([ vr, ])
 			res[-1].extend(alltimes)
@@ -4881,6 +5113,19 @@ def sat_vars2ints(sat, vars):
 
 
 ##--------------------------------------
+def satsolv_add_marker_opt(sat, level=1, marker=False, array=False):
+	if not marker:
+		return
+
+	if array:
+		assert(0)         ## TODO: non-int-mapped form
+	else:
+		c = ' '.join([ str(sSAT_MARKER_VAR) ] * level)
+
+	satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, '')
+
+
+##--------------------------------------
 ## register constraint on hitting exactly one delivery window for 'delv'
 ## 'dvars' contains IDs (names) of delivery+unit Booleans
 ##
@@ -4890,12 +5135,14 @@ def sat_vars2ints(sat, vars):
 ##
 ## all variable names MUST have already been registered to 'sat'
 ##
-def satsolv_add_delvs1(sat, dvars, delv):
+def satsolv_add_delvs1(sat, dvars, delv, marker=False):
 	vs   = list(enumerate(dvars))                   ## (idx, variable name)
 	didx = delv[ "index" ]
 
 	comm =  f'delivery #{didx} scheduled({delv[ "time" ]}) '
 	comm += '(vars=' +(' '.join(dvars)) +')'
+
+	satsolv_add_marker_opt(sat, level=1, marker=marker)
 
 	_, _, cls, comm = satsolv_1ofn(sat, dvars)
 
@@ -5071,6 +5318,7 @@ def input_type_assertions(inputs):
 		raise ValueError("CNF template with no inputs?")
 
 	if list(diff_type):
+		print('## mixed symbolic/numeric input', inputs)
 		raise ValueError("CNF template: mixed symbolic/numeric inputs")
 
 
@@ -5098,6 +5346,13 @@ def sat_negated(v):
 
 
 ##----------------------------------------------------------------------------
+## invariant: strings MAY start with up to one minus sign
+##
+def sat_negated_arr(arr):
+	return [ sat_negated(v)  for v in arr ]
+
+
+##----------------------------------------------------------------------------
 ## raw SAT template with 0-based index
 ## returns REFERENCE; caller MUST NOT update without copying
 ##
@@ -5115,9 +5370,12 @@ def expr2template_raw(opr, idx, base=1):
 
 ##----------------------------------------------------------------------------
 ## add all necesary indirect variables for templated variable
-## returns name of first one, or None if no output
+## returns name/number of first one, or 0 if no output
 ##
 ## 'numeric' forces numeric-list result; default is symbolic
+##
+## note: several of our primitives are used in result==True configurations,
+## and produce no output.
 ##
 def expr2template_addvars(sat, opr, idx, base=1, numeric=False):
 	tm  = expr2template_raw(opr, idx, base=base)
@@ -5155,7 +5413,7 @@ def expr2template_addvars(sat, opr, idx, base=1, numeric=False):
 ##
 ## returns clauses derived from inputs (list) and original template
 ##
-def expr2template(opr, inputs, addl, idx=0, result=None):
+def expr2template(opr, inputs, addl, idx=0, result=None, numeric=False):
 	if idx == 0:
 		idx = len(inputs)
 
@@ -5182,7 +5440,6 @@ def expr2template(opr, inputs, addl, idx=0, result=None):
 			if vabs == 0:
 				raise ValueError("clause terminator in " +
 					f"template ({ cls })")
-
 
 			if vabs <= len(vidx):
 				curr = vidx[ vabs -1 ]
@@ -5221,7 +5478,8 @@ def expr2template(opr, inputs, addl, idx=0, result=None):
 ## 'vroute' is already assigned delivery routes (see VRoute)
 ## 'sat_vehicles' is the nr. of vehicles for remaining/SAT processing
 ##
-def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
+def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table,
+                 marker=False):
 	if (not use_satsolver()) or sat == None:
 		return
 
@@ -5311,12 +5569,14 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 	elif (sat[ 'deliveries' ] != len(delvs)):
 		raise ValueError("conflicting delivery count")
 
+ 	##-----  delivery secondary params (dXXtYY = OR(...v0 .. ...vN)  -----
+
 	for sd in sdels:
 		d = delvs[sd]                      ## current delivery's struct
 		dvars = []
 		didx  = d[ "index" ]
 
-		print(f'## DELIVERY { sd }/{ len(sdels) }')
+		print(f'## DELIVERY { sd+1 }/{ len(sdels) }')
 
 		tu, tbits = dts[ d[ "index" ] ][ "tu" ], []
 		for t in tu:
@@ -5328,12 +5588,16 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 				satsolv_add_delvtime(sat,
 				             didx, tb, vnumber=v)
 
-		satsolv_add_delvs1(sat, dvars, d)
+		satsolv_add_delvs1(sat, dvars, d, marker=marker)
 
 		for t in tbits:
 			satsolv_delv2time(sat, didx, t, vbitlist)
 
+		satsolv_add_marker_opt(sat, level=1, marker=marker)
+
 		vidbits = satsolv_delv2vehicle(sat, didx, tbits, vbitlist)
+
+		satsolv_add_marker_opt(sat, level=1, marker=marker)
 
 		cls, _, _ = satsolv_or_true(sat, vidbits)
 		comm = f'OR/TRUE({ ",".join(vidbits) })'
@@ -5342,10 +5606,17 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +c, comm)
 			comm = ''
 
- 	##-----  /vehicle-number constraints  --------------------------------
+ 	##-----  /delivery secondary params  ---------------------------------
+
+	satsolv_add_marker_opt(sat, level=1, marker=marker)
+	satsolv_add_marker_opt(sat, level=2, marker=marker)
+## RRR
 
 	satsolv_delv_window_2x_deps(sat, delvs, xy2dist_table,
 	                            dts, sat_vehicles)
+## RRR
+	satsolv_add_marker_opt(sat, level=2, marker=marker)
+	satsolv_add_marker_opt(sat, level=1, marker=marker)
 
  	##-----  vehicle-number constraints  ---------------------------------
 	## none of the vehicles remain unassigned (no optional deliveries)
@@ -5370,6 +5641,8 @@ def satsolv_rest(sat, delvs, arrivals, vroute, max_vehicles, xy2dist_table):
 				satsolv_add_constraint1(sat,
 				            sSAT_SYM_PREFIX +c, comm)
 				comm = ''
+
+	satsolv_add_marker_opt(sat, level=1, marker=marker)
 
 	## TODO: OR1 all vehicle IDs
 
@@ -5510,10 +5783,13 @@ def sat_conditions_report(conds):
 ## list conditions, assuming default SAT conditionals (see 'SAT SETUP')
 ## returns 'Plan Constraints' struct
 ##
+## vbitcount, if >0, defines a set of vehicle bits, cross-matrix
+## for all vehicles. see 'Vehicle bitmasks' for details.
+##
 ## currently, restricted to SAT-using configurations
 ## returns None if nothing to consider
 ##
-def plan2constraints(deliveries, aux, bases, vehicles):
+def plan2constraints(deliveries, aux, bases, vehicles, vbitcount=0):
 	res = plan_constraints0()
 
 	if not use_satsolver():
@@ -5546,6 +5822,11 @@ def plan2constraints(deliveries, aux, bases, vehicles):
 		res[ 'varlist'         ].extend( vlist )
 		res[ 'constraints.raw' ].extend( conds )
 
+	if vbitcount:
+		res[ 'vehicle.bmaskbits' ] = list(range(vbitcount))
+		vlist.extend(f'VB{ v }'  for v in range(vbitcount))
+		res[ 'varlist' ].extend( vlist )
+
 	vl = sorted( set(res[ 'varlist' ]) )
 	res[ 'varlist' ] = vl
 
@@ -5561,7 +5842,7 @@ def plan2constraints(deliveries, aux, bases, vehicles):
 ## (if greedy scan is skipped completely)
 ##
 def pack_n_route_finish(sat, constrs, delvs, arrivals, vcost, satvcount,
-                        xy2dist_table):
+                        xy2dist_table, marker=False):
 
 						## register any implicit,
 						## not-yet-processed
@@ -5569,7 +5850,8 @@ def pack_n_route_finish(sat, constrs, delvs, arrivals, vcost, satvcount,
 	satsolv_implicit(sat, constrs)
 
 						## solve the rest through SAT
-	satsolv_rest(sat, delvs, arrivals, vcost, satvcount, xy2dist_table)
+	satsolv_rest(sat, delvs, arrivals, vcost, satvcount, xy2dist_table,
+	             marker=marker)
 
 	satsolv_report(sat)
 	sys.exit(0)
@@ -5677,6 +5959,97 @@ def plan_csv_report(dels, aux, satvcount, deffile='schedule.csv'):
 
 
 ##--------------------------------------
+def uint2bits(n, bits):
+	if n >= (1 << bits):
+		raise ValueError("vehicle ID/bitcount range")
+
+	n = f'{ n :0{ bits }b}'                ## fixed width
+
+	return [ int(v)  for v in n ]
+
+
+##--------------------------------------
+## extract vehicle-bit constraints from 'SAT_VEHCONSTRAINTS' setting
+##
+## 'vidbits'     is nr. of vehicle-identifying bits
+## 'bitmaskbits' is nr. of predefined vehicle-bitmask bits
+##
+## sample condition: "D0=VB0;D1=-VB2"  ->
+##     D0 <->     VB0
+##     D1 <-> not(VB2)
+##
+## returns symbolic list of clauses
+##
+def sat_vehicle_constraints(sat, vidbits, bitmaskbits):
+	if bitmaskbits == 0:
+		return []
+
+	if not 'SAT_VEHCONSTRAINTS' in os.environ:
+		return []
+
+	craw = os.environ[ 'SAT_VEHCONSTRAINTS' ]
+
+	print(f'## +CONDITIONS.RAW=({ craw })')
+
+	cs = [ v.upper().split('=')  for v in craw.split(";") ]
+
+## TODO: centralized extractor
+
+## TODO: automatically assume OR for 'V1=X;V1=Y'
+
+	cls = []
+					## [ 'D0', 'VB0' ], [ 'D1', '-VB2' ]
+	for ci, c in enumerate(cs):
+		didx, vbidx = c[0], c[1]
+
+		if not didx.startswith('D'):
+			raise ValueError(f"invalid bitmask spec[{ci}]: " +
+			                 f"({ c })")
+
+				## vbneg is true if comparison is inverted
+
+		vbneg, fixv = False, None    ## fixv non-None: specific vehicle
+
+		if is_negated_satstr(vbidx):
+			vbidx, vbneg = vbidx[1:], True
+
+				## set vbidx (VB bit) or vid (fixed vehicle)
+
+## TODO: VB-wrapping macros
+		if vbidx.startswith('VB'):
+			vbidx = int(vbidx[ 2: ])
+		elif vbidx.startswith('FIXV'):
+			fixv = int(vbidx[ 4: ])
+			if int(fixv) == 0:
+				raise ValueError("invalid fixed-vehicle ID (0)")
+			fixv = uint2bits(fixv, vidbits)
+## TODO:
+## vehicle ID is reserved-non-0
+## only valid with optional deliveries, which we do not currently support
+
+		else:
+			raise ValueError(f"invalid vehicle-bit spec[{ci}]: " +
+			                 f"({ c }:{ vbidx })")
+
+		didx   = int( didx[ 1: ])
+		dvbits = list(satsolv_var_name(didx, vnumber=v)
+		              for v in range(vidbits))
+
+		if fixv:                            ## VID(0..N) == fixed(0..N)
+			cls.extend( sat_const_n(sat, dvbits, fixv,
+			                        negate=vbneg) )
+		else:
+			cls.append(dvbits)
+			vbidx = f'VB{ vbidx }'
+			cls[-1].extend([ sat_negated(vbidx)  if vbneg
+			                 else vbidx ])
+## TODO: merged _const_n() representation?
+
+	print('## +CONDITIONS.CLS:', cls)
+	return cls
+
+
+##--------------------------------------
 ## passed parsed coordinate+time-equipped delivery plan, and base list
 ## enumerate possible base-start times and reachable schedules
 ##
@@ -5686,13 +6059,18 @@ def plan_csv_report(dels, aux, satvcount, deffile='schedule.csv'):
 ## 'asap' and 'alap' prefer as-soon-as-possible or as-late-as-possible
 ## schedules, if feasible. (may specify both; interaction is undefined)
 ##
+## 'marker', if True, adds a placeholder variable to separate
+## groups of clauses. This variable will be (1) forced to True
+## (2) separates different kinds of constraints' sections
+## in the generated clauses list.
+##
 ## iterator: keeps returning improving schedules
 ##
 ## creates new plan with [] (default)
 ## perturbs existing one if passed non-[]
 ##
 def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
-                   xy2d=None, asap=False, alap=False):
+                   xy2d=None, asap=False, alap=False, marker=True):
 	sched, place, vpos, decisions = [], [], {}, []
 	minutes_now = 0
 				## vpos is vehicle positions, if already known
@@ -5703,6 +6081,9 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 		raise ValueError("aux.data is uninitialized")
 
 	sat = satsolv_init0()
+
+	if marker:
+		satsolv_add_1var(sat, sSAT_MARKER_VAR)
 
 				## time vector: all scheduled delivery windows
 	alltime_v = 0
@@ -5765,29 +6146,18 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 	##-----  tstart is after nr-of-units(BFD) calc  ----------------------
 
-	satvcount  = satsolv_vehicle_count(len(bfds))
+	satvcount = satsolv_vehicle_count(len(bfds))
 				## incl. any additional slack for lower
 				## limit inferred from BFD assignment vehicles
 
-## TODO: moved all to satsolv_rest(); no longer used in main flow
-##	satvbits   = satsolve_vidx_bits(satvcount)
-##	satvbitnrs = list(range(satvbits))                  ## 0..N-1, integers
-##				##
-##				## width of representation for index(vehicle)
-##				## incl. an all-0 entry marking
-##				## 'no vehicle assigned'
-##
-##	if use_satsolver():
-##		debugmsg(f'## SAT.VEHICLES={ satvcount }', 1)
-##		satsolv_add_comment(sat, f'using { satvcount } vehicles, ' +
-##				f'encoded as { satvbits } bits')
-##		satsolv_add_comment(sat, f'  all-00: not (yet?) assigned')
+	vbitcount = int_from_env('SAT_VEHBITS', defval=0)
 
 	##=====  enumeration: list all conditions  ===========================
 	##
 	## generated list is equivalent to what is sent to external solver
 	##
-	constrs = plan2constraints(deliveries, aux, bases, satvcount)
+	constrs = plan2constraints(deliveries, aux, bases, satvcount,
+	                           vbitcount=vbitcount)
 
 	if use_satsolver():
 		satsolv_add_vars(sat, constrs[ 'varlist' ])
@@ -5795,6 +6165,14 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 				## locations
 
 		sat[ 'constraints.raw' ].extend(constrs[ 'constraints.raw' ])
+
+## TODO: recurring, factor out
+		cls = sat_vehicle_constraints(sat, satsolve_vidx_bits(satvcount),
+		                              vbitcount)
+		for c in cls:
+			cs = ' '.join(str(v) for v in c)
+## TODO: int-to-str conversion not necessary
+			satsolv_add_constraint1(sat, sSAT_SYM_PREFIX +cs)
 
 	plan_csv_report(deliveries, aux, satvcount)
 
@@ -6005,7 +6383,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 
 				pack_n_route_finish(sat, constrs, dels,
 					arrivals, vcost, satvcount,
-					xy2dist_table)
+					xy2dist_table, marker=marker)
 
 			show_backtrack(backtrack, btrack_alt)
 			debugmsg(f'## MAIN.LOOP.NOW={ minute2wall(now_min) }',
@@ -6607,7 +6985,7 @@ def pack_and_route(deliveries, aux, bases, vehicles, vrefill=[], plan=[],
 	if ('PACK_N_ROUTE_SKIP' in os.environ):
 						## solve the rest through SAT
 		pack_n_route_finish(sat, constrs, dels, arrivals,
-			vcost, satvcount, xy2dist_table)
+			vcost, satvcount, xy2dist_table, marker=marker)
 
 	tstart = timediff_log_now(tbacktrack0,
 		'BFD.ASSIGN.ALL'  if done  else 'BFD.ASSIGN.PARTIAL')
@@ -6800,7 +7178,7 @@ def xy2table(tab, aux, fmt='json'):
 		'points':    pts,
 		'time':      cost,
 	}
-	if fmt == 'json':
+	if fmt.lower() == 'json':
 		print(json.dumps(res))
 	else:
 		print(xy2c(res, pts))
@@ -6932,6 +7310,18 @@ def table_partial2full(t, border=None):
 ##=====  /development only  ==================================================
 
 def tvi():
+	vs = list(str(i) for i in range(1, 8+1))
+	vs = list(range(1, 8+1))
+
+	for i in range(1, 256):
+		sat = satsolv_init0()
+		satsolv_add_vars(sat, vs)
+
+		cls, _, comm = satsolv_less_than(sat, vs, i, want_array=True)
+		print(f'LT[{i}/{ bin(i) }]', len(cls), cls)
+		print()
+	sys.exit(0)
+
 					## prepend this
 					## notice if any shift-beyond-0 is off
 					##
@@ -6987,6 +7377,7 @@ if __name__ == '__main__':
 			          .format(os.getenv('FIELD')))
 
 	sock, fmt = None, 'csv'
+## TODO: factor out
 	if 'TARGET' in os.environ:
 		t = os.getenv('TARGET')
 				## TODO: prepackaged env2num()-like macro
@@ -7008,7 +7399,6 @@ if __name__ == '__main__':
 		tgth = t[0]  if (t[0] != '')  else 'localhost'
 		sock = socket_open(t[0], t[1])
 ## TODO: wrap with proper exceptions to wrapper
-
 
 	n = env2num('TUPLE_N')
 	if (n != None):
@@ -7095,6 +7485,7 @@ if __name__ == '__main__':
 				##
 		sys.exit( xy2table(tbl, aux, fmt=fmt) )
 
+	##-----  pack-n-route  -----------------------------------------------
 	if bases and aux:
 				## TODO: hardwared vehicle/shift plans
 				## at least one vehicle with multiple windows
@@ -7105,39 +7496,12 @@ if __name__ == '__main__':
 			},
 
 			'V1': [
-				'1300-1500',
-				'1700-1830',
-			],
-
-			'V2': [
-				'1300-1415',
-				'1730-1900',
-				'0945-1030',
-			],
-
-			'V3': [
-				'1400-1515',
-			],
-
-			'V4': [
-				'1400-1515',
-			],
-
-			'V5': [
-				'1400-1515',
-			],
-
-			'V6': [
-				'1400-1515',
-			],
-
-			'V7': [
 				'1400-1515',
 			],
 		}
 
-		cProfile.run('pack_and_route(tbl, aux, bases, vehicles, vrefill=v, xy2d=xy2dist_table)',
-		             'profile.log')
+		cProfile.run('pack_and_route(tbl, aux, bases, vehicles, ' +
+			'vrefill=v, xy2d=xy2dist_table)', 'profile.log')
 ##		cProfile.print_stats()
 ## PROFILE
 		sys.exit(0)
@@ -7146,16 +7510,19 @@ if __name__ == '__main__':
 		                            vrefill=v, xy2d=xy2dist_table):
 			print('TODO: schedule placeholder', sched)
 		sys.exit(0)
+	##-----  /pack-n-route  ----------------------------------------------
 
 	tstart = time.perf_counter()
 
-	report_env()
+	report_env(fmt=fmt)
 	sel, nsel = best_fit_decreasing(tbl, MAX_ELEMS)
 	tstart = timediff_log_now(tstart, 'BFD')
 
 ## TODO: BFD returns empty if not filling minimum -> special-case reporting
 
-	report(sel, nsel, msg='best-fit decreasing raw output:')
+	if is_direct_format(fmt):
+		report(sel, nsel, msg='best-fit decreasing raw output:',
+		       format=fmt)
 	if sock:
 		socketwrite(sock, sel, fmt=fmt, prefix=['BFD.plan'])
 
@@ -7170,7 +7537,7 @@ if __name__ == '__main__':
 			break
 
 		plus, minus, impr = klfm_swap(sel, nsel, MAX_TUPLE_N,
-		                         vSOLUTION, start=tstart, sock=sock)
+				vSOLUTION, start=tstart, sock=sock, format=fmt)
 		round += 1
 
 		if impr and (impr > 0):
@@ -7182,10 +7549,10 @@ if __name__ == '__main__':
 
 	print()
 	report(sel, None, msg=f'final packing proposal ({MAX_TUPLE_N}' +
-	                      f'+{MAX_TUPLE_N} tuples):')
+	                      f'+{MAX_TUPLE_N} tuples):', format=fmt)
 
 	if 'NONSEL' in os.environ:
 		if nsel:
 			report(nsel, None, msg='non-selected items:',
-			       remain=False, chk_oversize=False)
+			       remain=False, chk_oversize=False, format=fmt)
 
