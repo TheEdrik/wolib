@@ -3,7 +3,7 @@ HEADERS := $(wildcard *.h)
 SRC     := $(wildcard *.c)
 
 sat: sat.c $(HEADERS)
-	$(CC) -Wall -Wextra $(INCDIRS) -o $@ sat.c -lhiredis -lm
+	$(CC) -Wall -Wextra $(INCDIRS) -o $@ sat.c -lm
 
 TIDY     :=
 CLEAN    := sat.o sat tags cscope.out
