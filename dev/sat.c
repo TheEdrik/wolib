@@ -54,6 +54,14 @@ typedef enum {
 #define  SAT_ID_MAX_BYTES  ((size_t) 8)  /* operation/ID limit */
 #define  SAT_NR_MAX_BYTES  ((size_t) 8)
 
+// number of expressions supported
+// these are top-level expressions such as "OR(dt0,dt1,dt2)=True"
+#define  SAT_MAX_EXPRS     ((size_t) 1024)
+//
+// expect value to be sufficiently low that int[] or similar
+// allocation MAY be stack-allocated
+
+
 typedef enum {
 	SAT_FL_INVERT     = 1,  // OR -> NOR, AND -> NAND etc.
 	SAT_FL_ADD_VAR    = 2,  // add clause forcing the aggregate variable
@@ -93,239 +101,67 @@ static unsigned char scratch[ 1024 *1024 ];
 #define  UTF8_NL  '\x0a'         // DIMACS is ASCII/UTF8-only, host-independent
 
 
-#if !defined(SYS_NO_LMDB)  /*=====  delimiter: LMDB access  ================*/
-/* see www.lmdb.tech/doc/starting.html for API overview  [accessed 2023-04-14]
- *
- * these are core LMDB calls below, local instance only
- */
-#include <errno.h>               /* LMDB passes through libc (POSIX) values */
-#include <lmdb.h>
-
-#if 0
 //--------------------------------------
-static inline
-MDB_val *kvs__lmdb_data2mdb(MDB_val *pv, const void *data, size_t dbytes)
-{
-	if (pv) {
-		pv->mv_data  = (void *) data;
-		pv->mv_size  = dbytes;
-	}
+struct SatRegion {
+	size_t offset;
+	size_t bytes;
+} ;
+//
+#define  SAT_REGION_INIT0  { 0, 0, }
 
-	return pv;
-}
+// in-band marker: functions have 'original' data, such as read-only input,
+// or 'local' data structures. (each has its own offset+bytecount aux.data,
+// but the two are in different regions)
+//
+// ORing this bit to .size fields selects local structures
+//
+#define  SAT_OFFSET_LOCAL  0x80000000
 
 
-/*--------------------------------------
- * generic LMDB-to-KVS error mapping
- * SHOULD be called with error conditions only
- * includes libc err.codes as MDB may pass those through
+/*=====  expression parser  ==================================================
+ * ...identifier...( ...expression... )
  */
-static int kvs__lmdberr2kvs(int rc)
-{
-	switch (rc) {
-	case MDB_NOTFOUND: return KVS_ERR_NFOUND;
 
-							// libc(POSIX) errors
-	case ENOMEM:       return KVS_ERR_RESOURCE;
+#define  U8_PAREN_OPEN   '\x28'   // ')'
+#define  U8_PAREN_CLOSE  '\x29'   // '('
+#define  U8_COMMA        '\x2c'   // ','
+#define  U8_EQSIGN       '\x3d'   // '='
 
-	default:
-		break;
-	}
+#define  SAT_EXPR_MAX_TERMS  ((unsigned int) 128) // net, excluding operation ID
 
-	return rc;
-}
-#endif
+//--------------------------------------
+// offsets into related input
+// note: all are size_t/unsigned int mapped
+//
+struct SAT_Expr {
+	unsigned int offs [ SAT_EXPR_MAX_TERMS ];
+	unsigned int bytes[ SAT_EXPR_MAX_TERMS ];
 
+		// offset, bytecount of operator(ID); always present
+	unsigned int opr;
+	unsigned int obytes;
 
-/*--------------------------------------
- * opens a DB file, user-restricted, without creating any transactions
- */
-static int lmd_open(MDB_env **env, MDB_dbi *dbi,
-                              unsigned int mode, RdHash_t hash)
-{
-	const char *fname = NULL;
-	int rc, flags = 0;
+		// result assigned to, if present
+	unsigned int assign;   // >0 bytes [assign, abytes] if ...=...value...
+	unsigned int abytes;   // nr. of net bytes of assign-to-ID
+	unsigned int assignnr; // 1-based if assignment variable 
 
-	if (!env || !dbi)
-		return -1;
-	*env = NULL;
-	*dbi = 0;
+	                                             // terms only, excluding
+	                                             // ID or assignment
+	unsigned int varnr[ SAT_EXPR_MAX_TERMS ];    // 1-based, >0 when parsed
+				// [0] is in .operation, not in .varnr[]
 
-	flags |= (HSH_READONLY & mode) ? MDB_RDONLY : MDB_WRITEMAP;
+	unsigned int operation;                           // parsed to SX_OPR_t
+	uint64_t opconst;      // for those with SX_OPROP_CONSTL
 
-	switch (hash) {
-	case HSH_MAINHASH:
-		fname = HSH_FS_MAINHASH_FILE;
-		break;
+	unsigned int used;     // start of varnr[]
 
-	case HSH_ADDLHASH:
-		fname = HSH_FS_ADDLHASH_FILE;
-		break;
-
-	default:
-		return -2;
-	}
-
-	rc = mdb_env_create(env);
-
-	flags |= MDB_NOSYNC | MDB_NOSUBDIR;
-
-	if (!rc) {
-		rc = mdb_env_open(*env, fname, flags, 0600);
-	}
-
-	return rc ? -1 : 0;
-}
-
-
-#if 0
-/*--------------------------------------
- * tolerates NULL DB etc., returning 'not found'
- * non-NULL 'val' and 0 'vbytes' writes empty data
- *
- * write transaction attached(nested) to 'txparent' if non-NULL
- */
-static int kvs__lmdb_value2key(const unsigned char *key, size_t kbytes,
-                               const unsigned char *val, size_t vbytes,
-                                           MDB_env *env, MDB_dbi dbi,
-                                           MDB_txn *txparent,
-                                               int flags)
-{
-	MDB_txn *wr = NULL;
-	int rc = 0;
-
-	if (!key || !kbytes)
-		return 0;
-
-	rc = mdb_txn_begin(env, txparent, 0, &wr);
-	if (rc)
-		return rc;
-
-	//-----  transaction open  -------------------------
-	rc = mdb_open(wr, NULL, 0, &dbi);
-	if (!rc) {
-		MDB_val k, v;
-
-		kvs__lmdb_data2mdb(&k, key, kbytes);
-		kvs__lmdb_data2mdb(&v, val, vbytes);
-
-		rc = mdb_put(wr, dbi, &k, &v, 0);
-	}
-
-	if (rc) {
-		mdb_txn_abort(wr);
-	} else {
-	        rc = mdb_txn_commit(wr);
-	}
-	//-----  transaction closed  -----------------------
-
-	MARK_UNUSED(flags);
-
-	return (rc < 0) ? kvs__lmdberr2kvs(rc) : rc;
-}
-
-
-/*--------------------------------------
- * tolerates NULL env etc., returning 'not found'
- * read transaction attached(nested) to 'txparent' if non-NULL
- */
-static int kvs__lmdb_key2value(unsigned char *val,  size_t vbytes,
-                         const unsigned char *key,  size_t kbytes,
-                                     MDB_env *env, MDB_dbi dbi,
-                                     MDB_txn *txparent,
-                                         int flags)
-{
-	MDB_txn *rd = NULL;
-	int rc = 0;
-
-	if (!key || !kbytes || !env)
-		return KVS_ERR_TOOSMALL;
-
-	rc = mdb_txn_begin(env, txparent, MDB_RDONLY, &rd);
-	if (rc)
-		return rc;
-
-	//-----  transaction open  -------------------------
-	do {
-	MDB_val k, v;
-
-	rc = mdb_open(rd, NULL, 0, &dbi);
-	if (rc)
-		break;
-
-	kvs__lmdb_data2mdb(&k, key, kbytes);
-
-	rc = mdb_get(rd, dbi, &k, &v);
-	if (rc)
-		break;
-
-	if (!val) {
-		rc = (long) v.mv_size;                            // size query
-
-	} else if (vbytes < v.mv_size) {
-		rc = KVS_ERR_TOOSMALL;
-
-	} else {
-		if (v.mv_size)
-			memcpy(val, v.mv_data, v.mv_size);
-		rc = (long) v.mv_size;
-	}
-	} while (0);
-	mdb_txn_abort(rd);
-
-	MARK_UNUSED(flags);
-
-	return (rc < 0) ? kvs__lmdberr2kvs(rc) : rc;
-}
-#endif
-
-
-/*--------------------------------------
- * do not expect failure when closing
- */
-static int ldb_close(MDB_env **env, MDB_dbi *dbi)
-{
-	if (env && *env) {
-		if (dbi) {
-			mdb_close(*env, *dbi);
-			*dbi = 0;
-		}
-
-		mdb_env_close(*env);
-		*env = NULL;
-	}
-
-	return 0;
-}
-
-
-/*--------------------------------------
- * empty any existing 'hash' (main) or 'addl' tables
- * returns <0, >0 upon error/success, respectively
- */
-static int lmd_hash0(MDB_env **env, MDB_dbi *dbi, RdHash_t hash)
-{
-	int rc;
-
-	rc = lmd_open(env, dbi, 0, hash);
-
-	if (!rc && dbi) {
-		MDB_txn *clr = NULL;
-
-		rc = mdb_txn_begin(*env, NULL, 0, &clr)  |
-		     mdb_drop(clr, *dbi, 0 /*empty DB*/) |
-		     mdb_txn_commit(clr);
-
-		if (rc) {
-			mdb_txn_abort(clr);
-			rc = -1;
-		}
-	}
-
-	return rc ? -1 : 1;
-}
-
-#endif   /*=====  /delimiter: LMDB access  =================================*/
+// TODO: set this once; see sat__expr_op2properties()
+	unsigned int flags;
+} ;
+//
+#define SAT_EXPR_INIT0 \
+    { { 0, }, { 0, }, 0, 0, 0, 0, 0, { 0, }, 0, 0, 0, 0, }
 
 
 #if 1   /*=====  delimiter: map CNF var.numbers <-> strings in-memory  =====*/
@@ -339,6 +175,14 @@ static int lmd_hash0(MDB_env **env, MDB_dbi *dbi, RdHash_t hash)
 #define  SAT_MAX_VARNAME_BYTES  ((size_t) 256)
 
 
+//--------------------------------------
+static void printf_buf(const void *ptr, size_t pbytes)
+{
+	if (ptr && pbytes)
+		fwrite(ptr, pbytes, 1, stdout);
+}
+
+
 #if 1    /*-----  delimiter: populate var.name/number lookup  --------------*/
 
 /*--------------------------------------
@@ -347,7 +191,44 @@ static int lmd_hash0(MDB_env **env, MDB_dbi *dbi, RdHash_t hash)
  * other single-instance variables.
  */
 
-/* int-to-name lookup, of strings thrown into an append-only array
+struct SatVarStr {           // concatenated sub-strings
+	unsigned char *pstr;
+	size_t sallocd;
+	size_t sused;
+} ;
+
+
+/*--------------------------------------
+ * expressions collected in python-to-SAT mode
+ * note: all are size_t/unsigned int mapped
+ *
+ * global; do not expect to ever fit stack
+ */
+static struct SAT_Expressions {
+	struct SAT_Expr x[ SAT_MAX_EXPRS ];
+	unsigned int used;
+
+// TODO: check .idx2cnf and .cnf2idx, which are related
+// TODO: merge them; only string-storage details differ
+
+			// offset, bytecount into related data structure
+			// (default)
+			// OR
+			// into .addstr below (SAT_OFFSET_LOCAL)
+			//
+	struct SatRegion varname[ SAT_MAX_VARS ];
+//	uint32_t cnf2idx[ SAT_MAX_VARS ];   // CNF var. number to 1-based index
+	unsigned int idxused;
+
+			// nr. of aux. variables for each expression
+	unsigned int auxvars[ SAT_MAX_EXPRS ];    // 1-based, >0 when parsed
+
+	struct SatVarStr addstr;     // any string registered to expression set
+} exprs;
+
+
+/*--------------------------------------
+ * int-to-name lookup, of strings thrown into an append-only array
  * note: name-to-int counterpart is imh_idx()
  *
  * ps stores 0-separated concatenated names, each at .offset[] and
@@ -356,9 +237,11 @@ static int lmd_hash0(MDB_env **env, MDB_dbi *dbi, RdHash_t hash)
  * there is a reasonable upper limit on names' bytecounts
  */
 struct SatVarIdx {
+// TODO: this has been factored out to struct SatVarStr
 	unsigned char *pstr;
 	size_t sallocd;
 	size_t sused;
+//
 
 	uint32_t offset[ SAT_MAX_VARS ];  // (name, nbytes) inside pstr[.sused]
 	uint8_t  bytes[ SAT_MAX_VARS ];
@@ -387,6 +270,24 @@ struct SatHeader {
 #define SAT_HEADER_INIT0  { 0, 0, }
 
 
+//--------------------------------------
+static size_t sat__vstr_append(struct SatVarStr *ps,
+                                     const void *name, size_t nbytes) ;
+
+
+/*--------------------------------------
+ * wipes but does not release struct itself
+ */
+static inline void sat__vstr_dispose(struct SatVarStr *ps)
+{
+	if (ps) {
+		free(ps->pstr);
+
+		memset(ps, 0, sizeof(*ps));
+	}
+}
+
+
 /*--------------------------------------
  * returns 1-based index, string representation of 'name' appended to sat_varidx
  *         0  if can not allocate, or invalid input, incl. empty 'name/nbytes'
@@ -399,6 +300,9 @@ static uint32_t sat_varstr_append(const void *name, size_t nbytes)
 
 		// note: NULL check is redundant with 0-initialized struct
 
+// TODO: factor out: work with any varidx
+// see sat__vstr_append()
+{
 	if (!sat_varidx.pstr ||
 	    (sat_varidx.sused +nbytes +1 > sat_varidx.sallocd))
 	{
@@ -425,6 +329,7 @@ static uint32_t sat_varstr_append(const void *name, size_t nbytes)
 
 	return sat_varidx.used;
 }
+}
 
 
 
@@ -448,7 +353,6 @@ static int is_ualpha(unsigned char c)
 }
 
 
-#if 0
 //--------------------------------------
 // isspace -> is UTF-8 whitespace?
 //
@@ -465,7 +369,6 @@ static int is_uspace(unsigned char c)
 		return 0;
 	}
 }
-#endif
 
 
 //--------------------------------------
@@ -475,15 +378,6 @@ static int is_udigit(unsigned char c)
 {
 	return (('0' <= c) && (c <= '9'));
 }
-
-
-//--------------------------------------
-struct SatRegion {
-	size_t offset;
-	size_t bytes;
-} ;
-//
-#define  SAT_REGION_INIT0  { 0, 0, }
 
 
 //--------------------------------------
@@ -732,6 +626,28 @@ static struct SatVar satvar_next(const struct SatVar *prev,
 }
 
 
+#if 0
+/*--------------------------------------
+ * register a variable number, if not yet known
+ * returns >0 if registered, or was already present
+ */
+{
+
+	nameidx = sat_varstr_append(&( sat[ v.name.offset ] ), v.name.bytes);
+	if (!nameidx)
+		return cu_reportrc("name-hash out of memory", 0);
+
+	if (v.nr > sat_varidx.maxvarnr)
+		sat_varidx.maxvarnr = v.nr;
+
+	sat_varidx.idx2cnf[ nameidx -1 ] = v.nr    -1;
+	sat_varidx.cnf2idx[ v.nr -1    ] = nameidx -1;
+
+	return 1;
+}
+#endif
+
+
 /*--------------------------------------
  * populates imhash-originated imhash_main[] from (sat, sbytes) DIMACS-encoded
  * variable(name)->index mapping
@@ -777,6 +693,8 @@ static unsigned int sat_spec2variables(const unsigned char *sat, size_t sbytes)
 		break;
 	}
 
+// TODO: factor this out
+{
 	hash = imh_append(NULL, &idx, &( sat[ v.name.offset ] ), v.name.bytes);
 	if (hash == IMH_SIZE_INVALID)
 		return cu_reportrc("hash table out of elements", 0);
@@ -792,9 +710,34 @@ static unsigned int sat_spec2variables(const unsigned char *sat, size_t sbytes)
 	sat_varidx.cnf2idx[ v.nr -1    ] = nameidx -1;
 
 	++n;
+}
 	} while (n);
 
 	return n;
+}
+
+
+/*--------------------------------------
+ * wrapper: append string if not yet present in hash table
+ *
+ * returns >0  if was already present, or just added
+ *         0   if could not add (hash table capacity)
+ */
+static uint32_t hash_add_if(const void *data, size_t dbytes)
+{
+	uint32_t idx;
+
+	if (!data || !dbytes)
+		return 0;
+
+	idx = imh_idx(data, dbytes);
+	if (idx)
+		return idx;
+
+	if (imh_append(NULL, &idx, data, dbytes) == IMH_SIZE_INVALID)
+		return cu_reportrc("hash table full", 0);
+
+	return idx;
 }
 
 
@@ -1024,8 +967,8 @@ int main(int argc, const char **argv)
 	for (i=0; i<vars; ++i) {
 // TODO: centralized 'is valid entry' check
 		printf("V[");
-		fwrite(&( sat_varidx.pstr[ sat_varidx.offset[i] ] ),
-		       sat_varidx.bytes[i], 1, stdout);
+		printf_buf(&( sat_varidx.pstr[ sat_varidx.offset[i] ] ),
+		           sat_varidx.bytes[i]);
 		printf("]=%" PRIu32 "\n", sat_varidx.idx2cnf[i] +1);
 	}
 
@@ -1057,36 +1000,847 @@ int main(int argc, const char **argv)
 #endif   /*=====  /delimiter: CNF var.numbers <-> string mapper  ===========*/
 
 
-struct PNR_DB {
-#if !defined(SYS_NO_LMDB)
-	struct {
-		MDB_env *henv;
-		MDB_env *aenv;
+#if 1   /*=====  delimiter: expression parser  =============================*/
+// keep valid values >0
+typedef enum {
+	SX_OPR_OR     =  1,    // OR(...)
+	SX_OPR_OR1    =  2,    // OR(...) with result forced to True
+	SX_OPR_AND    =  3,    // AND(...)
+	SX_OPR_NAND   =  4,    // NAND(...)
+	SX_OPR_NAND1  =  5,    // NAND(...) with result forced to True
+	SX_OPR_1OFN   =  6,    // 1-of-N
+	SX_OPR_1OFN_1 =  7,    // 1-of-N; result forced to True
+	SX_OPR_LT1    =  8,    // combination < ...N fixed bits... (fixed True)
+	SX_OPR_NEQ0   =  9,    // 2x N bit combinations differ, or any is 0
+	SX_OPR_DIFF   = 10     // 2x N bit combinations differ, or any is 0
+} SX_OPR_t;
+//
+// see sx__str2id() for recognized types,
+// sat__expr_op2properties() for operator-to-bitmask mappings
 
-		MDB_dbi hdbi;
-		MDB_dbi adbi;
-	} lm ;
-#endif
+
+// properties of operations
+typedef enum {
+	SX_OPROP_FIXEDR =          1, // result is fixed; OR/TRUE etc.
+	SX_OPROP_PAIRS  =          2, // operates on even nr. of variables
+	                              // typically (1x N) || (1x N) as inputs
+	SX_OPROP_CONSTL =          4, // last operand is verbatim constant
+	SX_OPROP_NOP    = 0x80000000  // marks 'present'
+} SX_OPROP_t;
+//
+// see sx__str2id() for recognized types
+
+
+//--------------------------------------
+// recurring pattern: (...content...); capture offset of parenthesis pair
+struct SX_Parens {
+	size_t start, end;
 } ;
+//
+#define SX_PARENS_INIT0  { 0, 0 }
+
+
+//--------------------------------------
+static inline struct SAT_Expr *sat_expr_init0(struct SAT_Expr *ps)
+{
+	if (ps)
+		*ps = (struct SAT_Expr) SAT_EXPR_INIT0;
+
+	return ps;
+}
+
+
+//--------------------------------------
+static size_t lead_uspace(const void *str, size_t sbytes)
+{
+	size_t rc = 0;
+
+	if (str && sbytes) {
+		const unsigned char *ps = (const unsigned char *) str;
+
+		while ((rc < sbytes) && is_uspace(ps[ rc ]))
+			++rc;
+	}
+
+	return rc;
+}
+// TODO: factor out to common-text.h fn
+
+
+//--------------------------------------
+static inline int is_expr_useparator(unsigned char c)
+{
+	if (is_uspace(c)) {
+		return 1;
+	} else {
+		switch (c) {
+			case '\x2c':           // ASCII ','
+				return 1;
+
+			default:
+				return 0;
+		}
+	}
+}
 
 
 /*--------------------------------------
- * releases everything related to DBs/backends
- * clears structure, but does not release it
+ * first list-separator instance, 1-based offset
  */
-static struct PNR_DB *db_release(struct PNR_DB *db)
+static size_t sx_1st_sepr_offset(const void *str, size_t sbytes)
 {
-	if (db) {
-#if !defined(SYS_NO_LMDB)
-		ldb_close(&( db->lm.henv ), &( db->lm.hdbi ));
-		ldb_close(&( db->lm.aenv ), &( db->lm.adbi ));
-#endif
+	size_t rc = 0;
 
-		memset(db, 0, sizeof(*db));
+	if (str && sbytes) {
+		const unsigned char *ps = (const unsigned char *) str;
+		size_t i = 0;
+
+		while (i < sbytes) {
+			if (is_expr_useparator(ps[ i ])) {
+				rc = i+1;
+				break;
+			}
+			++i;
+		}
 	}
 
-	return db;
+	return rc;
 }
+
+
+/*--------------------------------------
+ * returns offset of first byte of (ps->pstr[ ps->sallocd ]) region
+ * where (name, nbytes) has been copied
+ */
+static size_t sat__vstr_append(struct SatVarStr *ps,
+                                     const void *name, size_t nbytes)
+{
+	size_t rc;
+
+	if (!ps || !name || !nbytes)
+		return SAT_SIZET_INVD;
+
+	if (!ps->pstr || (ps->sused +nbytes +1 > ps->sallocd)) {
+		size_t nb = ps->sused +nbytes +1 +STV_STR_UNITS;
+		void *n   = realloc(ps->pstr, nb);
+
+		if (!n)
+			return cu_reportrc("var-str table out of memory", 0);
+
+		ps->pstr    = n;
+		ps->sallocd = nb;
+	}
+	// if we got here, bytes between (.sused .. sallocd) fit <name || 0>
+
+	rc = ps->sused;
+
+	memmove(&(ps->pstr[ rc ]), name, nbytes);
+	ps->sused += nbytes +1;
+
+	ps->pstr[ ps->sused -1 ] = '\0';          // always \0-separate entries
+
+	ps->sused++;
+
+	return rc;
+}
+
+
+/*--------------------------------------
+ * TODO: this is generated code; reflow and simplify
+ *
+ * sat__expr_oprtype_base() generates canonical machine-readable forms,
+ * sat__expr_oprtype() human-readable ones
+ */
+static unsigned int sx__str2id(const void *str, size_t sbytes)
+{
+	unsigned int rc = 0;
+
+// expect inlined+specialized strnlen(), and the whole fn collapsing
+// to fixed comparisons
+
+	switch ((str && sbytes) ? strnlen(str, sbytes) : 0) {
+	case 2:
+		if (!memcmp(str, "OR", 2)) {         // TODO: ASCII
+			rc = SX_OPR_OR;
+		} else if (!memcmp(str, "LT1", 2)) {         // TODO: ASCII
+			rc = SX_OPR_LT1;
+		}
+		break;
+
+	case 3:
+		if (!memcmp(str, "OR1", 3)) {         // TODO: ASCII
+			rc = SX_OPR_OR1;
+		} else if (!memcmp(str, "AND", 3)) {  // TODO: ASCII
+			rc = SX_OPR_AND;
+		} else if (!memcmp(str, "LT1", 3)) {  // TODO: ASCII
+			rc = SX_OPR_LT1;
+		}
+		break;
+
+	case 4:
+		if (!memcmp(str, "1OFN", 4)) {            // TODO: ASCII
+			rc = SX_OPR_1OFN;
+		} else if (!memcmp(str, "NAND", 4)) {     // TODO: ASCII
+			rc = SX_OPR_NAND;
+		} else if (!memcmp(str, "NEQ0", 4)) {     // TODO: ASCII
+			rc = SX_OPR_NEQ0;
+		} else if (!memcmp(str, "DIFF", 4)) {     // TODO: ASCII
+			rc = SX_OPR_DIFF;
+		}
+		break;
+
+	case 5:
+		if (!memcmp(str, "NAND1", 5)) {        // TODO: ASCII
+			rc = SX_OPR_NAND1;
+		}
+		break;
+
+	case 7:
+		if (!memcmp(str, "OR/TRUE", 7))   // TODO: ASCII
+			rc = SX_OPR_OR1;
+		break;
+
+	case 9:
+		if (!memcmp(str, "1OFN/TRUE", 9)) {           // TODO: ASCII
+			rc = SX_OPR_1OFN_1;
+		} else if (!memcmp(str, "NAND/TRUE", 9)) {    // TODO: ASCII
+			rc = SX_OPR_NAND1;
+		}
+		break;
+
+	default:
+		break;
+	}
+
+	return rc;
+}
+
+
+/*--------------------------------
+ * canonical forms, to be able to output processed forms
+ * see sat__expr_oprtype_base() for human-readable
+ */
+static const char *sat__expr_oprtype_base(unsigned int opr)
+{
+	switch (opr) {
+		case SX_OPR_OR:     return "OR";
+		case SX_OPR_OR1:    return "OR1";
+		case SX_OPR_AND:    return "AND";
+		case SX_OPR_NAND:   return "NAND";
+		case SX_OPR_NAND1:  return "NAND1";
+		case SX_OPR_1OFN:   return "1OFN";
+		case SX_OPR_1OFN_1: return "1OFN/TRUE";
+		case SX_OPR_LT1:    return "LT1";
+		case SX_OPR_NEQ0:   return "NEQ0";
+		case SX_OPR_DIFF:   return "DIFF";
+
+		default:
+			return "UNKNOWN";
+	}
+}
+
+
+/*--------------------------------
+ * see sat__expr_oprtype_base() for machine-readable equivalent
+ */
+static const char *sat__expr_oprtype(unsigned int opr)
+{
+	switch (opr) {
+		case SX_OPR_OR:     return "OR()";
+		case SX_OPR_OR1:    return "OR;TRUE()";
+		case SX_OPR_AND:    return "AND()";
+		case SX_OPR_NAND:   return "NAND()";
+		case SX_OPR_NAND1:  return "NAND;TRUE()";
+		case SX_OPR_1OFN:   return "1-OF-N()";
+		case SX_OPR_1OFN_1: return "1-OF-N;TRUE()";
+		case SX_OPR_LT1:    return "LESS-THAN;TRUE()";
+		case SX_OPR_NEQ0:   return "NEQ-OR-0()";
+		case SX_OPR_DIFF:   return "DIFF()";
+
+		default:
+			return "UNKNOWN";
+	}
+}
+
+
+#if 0
+//--------------------------------------
+static size_t sx_id_bytes(const void *str, size_t sbytes)
+{
+	size_t rc = 0;
+
+	if (str && sbytes) {
+		const unsigned char *ps = (const unsigned char *) str;
+
+		while ((rc < sbytes) && is_uspace(ps[ rc ]))
+			++rc;
+	}
+
+	return rc;
+}
+#endif
+
+
+/*--------------------------------  
+ * is there a single pair of parens within input?
+ *
+ * returns SAT_SIZET_INVD .start if input is inconsistent, such
+ * as "...)...(..." paren pair.  (other fields are all-zero)
+ *
+ * returns (0, 0) if there are no parens within input
+ */
+static struct SX_Parens sx_paren_pair(const void *str, size_t sbytes)
+{
+	struct SX_Parens rc = SX_PARENS_INIT0;
+
+	do {
+	if (str && sbytes) {
+		void *op = memchr(str, U8_PAREN_OPEN,  sbytes),
+		     *cl = memchr(str, U8_PAREN_CLOSE, sbytes);
+		const char *s = (const char *) str;
+
+		if (!op && !cl)
+			break;                                    // none found
+
+		rc.start = ((const char *) op) - s;
+		rc.end   = ((const char *) cl) - s;
+
+				// (1) only one
+				// (2) "...)...(..." pattern
+				// more than one opening(3) or closing(4)
+
+		if ((!op != !cl)                                             ||
+		    (rc.start > rc.end)                                      ||
+		    memchr(s +rc.start+1, U8_PAREN_OPEN,  sbytes-rc.start-1) ||
+		    memchr(s +rc.end+1,   U8_PAREN_CLOSE, sbytes-rc.end-1  ))
+		{
+			rc.start = SAT_SIZET_INVD;
+			rc.end   = 0;
+			break;
+		}
+	}
+	} while (0);
+
+	return rc;
+}
+
+
+/*--------------------------------
+ * 1-based offset of first instance
+ * 0  if none found
+ */
+static inline
+size_t sx_pattern_zoffs(const void *str, size_t sbytes, int pattern)
+{
+	size_t rc = 0;
+
+	if (str && sbytes) {
+		void *op = memchr(str, pattern, sbytes);
+
+		if (op)
+			rc = ((const char *) op) - ((const char *) str) +1;
+	}
+
+	return rc;
+}
+
+
+//--------------------------------
+static size_t sx_eqsign_zoffs(const void *str, size_t sbytes)
+{
+	return sx_pattern_zoffs(str, sbytes, U8_EQSIGN);
+}
+
+
+//--------------------------------
+static size_t sx_paren_close_zoffs(const void *str, size_t sbytes)
+{
+	return sx_pattern_zoffs(str, sbytes, U8_PAREN_CLOSE);
+}
+
+
+/*--------------------------------
+ * is (offs, bytecount) within pointed region (which is non-NULL)?
+ */
+static int is_valid_subregion(const void *data, size_t dbytes,
+                                  size_t offs,  size_t bytecount)
+{
+	return (data && dbytes && (offs <= dbytes) &&
+	        (offs + bytecount <= dbytes));
+}
+// TODO: are there consistently defined macros for wrap checks?
+// see is_compatible_region() which attempts the same; merge them
+
+
+/*--------------------------------
+ * returns nr. of bytes consumed at start of (str, sbytes)
+ *         0  if out of input
+ *
+ * 'offs' preceding bytes have been processed from start of (str, sbytes)
+ *
+ * may leave 'ps' in inconsistent state if failing
+ */
+static unsigned int sat_next_expr(struct SAT_Expr *ps,
+                          const void *str, size_t sbytes, size_t offs)
+{
+	const unsigned char *s = (const unsigned char *) str;
+	struct SX_Parens par;
+	unsigned int n = 0;
+	size_t rd = 0;
+
+	if (!sat_expr_init0(ps))
+		return SAT_UINT_INVD;
+	if (!str || !sbytes)
+		return 0;
+
+					// lines up until first closing ')'
+	rd = sx_paren_close_zoffs(s, sbytes);
+	if (!rd)
+		return 0;         // TODO: report partial line?
+
+	sbytes = rd;              // 1-based -> bytecount incl. ')'
+
+	par = sx_paren_pair(s, sbytes);
+	if ((!par.start && !par.end) || (par.start == SAT_UINT_INVD))
+		return SAT_UINT_INVD;
+// TODO: malformed line
+
+					// result/assignment, if present
+	rd = sx_eqsign_zoffs(s, sbytes);
+	if (rd == 1) {
+		return 0;         // TODO: report empty assignment
+
+	} else if (rd) {
+		ps->assign = offs + lead_uspace(s, rd-1);
+		ps->abytes = rd -1;
+	}                         // leave at +1: skips over '='
+
+				// ID, always present, after .assign
+// TODO: lead-uspace() etc. removal
+	ps->opr    = offs + ps->abytes + !!(ps->abytes);
+	ps->obytes = par.start + offs - ps->opr;
+// TODO: trim to net ID
+
+	ps->operation = sx__str2id(&(s[ ps->opr -offs ]), ps->obytes);
+
+	rd = par.start +1;
+	--sbytes;                      // last byte before list-terminating ')'
+
+	for (n = 0; n < ARRAY_ELEMS(ps->offs); ++n) {
+		size_t curr = sx_1st_sepr_offset(&( s[rd] ), sbytes -rd);
+
+		ps->offs [ n ] = offs + rd;
+		ps->bytes[ n ] = curr ? curr-1 : (sbytes -rd);
+
+		if (!curr || (rd >= sbytes)) {
+			++n;
+			break;
+		}
+
+		rd += curr;
+	}
+// TODO: report too many elements
+
+	ps->used = n;
+
+	return par.end +1;
+}
+
+
+/*--------------------------------
+ * (data, dbytes) is optional. Actual fields are reported if present,
+ * and it belongs to 'ps'
+ */
+static void sat__expr_report(const struct SAT_Expr *ps,
+                                        const void *data, size_t dbytes)
+{
+// TODO: is_valid_expr()
+	if (ps) {
+		const unsigned char *pd = (const unsigned char *) data;
+		unsigned int i;
+
+		printf("OPR=%s(norm:%s)\n", sat__expr_oprtype(ps->operation),
+		       sat__expr_oprtype_base(ps->operation));
+
+		if (ps->abytes) {
+			printf("RESULT[%u,%u][idx=%u]", ps->assign, ps->abytes,
+			       ps->assignnr);
+
+			if (is_valid_subregion(pd, dbytes, ps->assign,
+			                       ps->abytes))
+			{
+				printf("<<");
+// TODO: centralized LOCAL-aware report, even if all these inputs
+// are all non-local
+				printf_buf(&(pd[ ps->assign ]), ps->abytes);
+				printf(">>");
+			}
+			printf("\n");
+		}
+
+		printf("NR.INPUTS=%u\n", ps->used);
+
+		for (i=0; i<ps->used; ++i) {
+			unsigned int offs = ps->offs[i],
+			             odb  = ps->bytes[i];
+
+			printf("TERM[%u][%u,%u][idx=%u]=<<", i, offs, odb,
+			       ps->varnr[i]);
+
+			if (is_valid_subregion(pd, dbytes, offs, odb)) {
+				printf_buf(&(pd[ offs ]), odb);
+			} else {
+				printf("...");
+			}
+			printf(">>\n");
+		}
+	}
+}
+
+
+//--------------------------------
+static unsigned int sat__expr_op2properties(unsigned int opr)
+{
+	switch (opr) {
+	case SX_OPR_OR1:
+	case SX_OPR_NAND1:
+	case SX_OPR_1OFN_1:
+		return SX_OPROP_FIXEDR;
+
+	case SX_OPR_LT1:
+		return (SX_OPROP_FIXEDR | SX_OPROP_CONSTL);
+
+	case SX_OPR_OR:
+	case SX_OPR_AND:
+	case SX_OPR_NAND:
+	case SX_OPR_1OFN:
+		return SX_OPROP_NOP;
+
+	case SX_OPR_NEQ0:
+		return (SX_OPROP_FIXEDR | SX_OPROP_PAIRS);
+
+	case SX_OPR_DIFF:
+		return SX_OPROP_PAIRS;
+
+		default:
+			return 0;
+	}
+}
+
+
+/*--------------------------------
+ * returns 1-based index of invalid entry
+ * reports empty expression collection as invalid
+ */
+static unsigned int is_invalid_expr_set(const struct SAT_Expressions *pe)
+{
+	unsigned int i;
+
+	if (!pe || !pe->used || (pe->used > ARRAY_ELEMS(pe->x)))
+		return 1;
+
+	for (i=0; i<pe->used; ++i) {
+		unsigned int opr = sat__expr_op2properties(pe->x[i].operation);
+
+		if (pe->x[i].used > ARRAY_ELEMS(pe->x[i].varnr)) {
+			fprintf(stderr, "too many fn arguments [%u]\n", i+1);
+			return cu_reportrc("", 1+i);
+		}
+
+		if ((SX_OPROP_FIXEDR & opr) && pe->x[i].abytes) {
+			fprintf(stderr, "fixed-result expression with "
+			        "result(assigned) variable [%u]\n", i+1);
+			return cu_reportrc("", 1+i);
+		}
+
+		if ((SX_OPROP_PAIRS & opr) && (pe->x[i].used & 1)) {
+			fprintf(stderr, "fixed-result expression with "
+			        "result(assigned) variable [%u]\n", i+1);
+			return cu_reportrc("", 1+i);
+		}
+	}
+
+	return 0;
+}
+
+
+/*--------------------------------
+ * we may have added a new variable (idx)
+ * register it if so
+ * 'prevvars' was previously known largest index
+ * return current-best 
+ *
+ * assume (offs, dbytes) are valid: they are from preceding succesful step
+ * 'dbytes' MAY include SAT_OFFSET_LOCAL
+ *
+ * TODO: clean up u32/uint mismatch
+ */
+static unsigned int sat__expr_next_idx(struct SAT_Expressions *pe,
+                                                     uint32_t newidx,
+                                                 unsigned int prevvars,
+                                          size_t offs, size_t dbytes)
+{
+	if (pe && dbytes && newidx && (newidx > prevvars)) {
+		pe->varname[ newidx-1 ].offset = offs;
+		pe->varname[ newidx-1 ].bytes  = dbytes;
+		pe->idxused = newidx;
+
+		prevvars = newidx;
+	}
+
+	return prevvars;
+}
+
+
+/*--------------------------------
+ * scratch-initializes hash-related parts of 'pe'
+ */
+static int sat__expr_vars2ints(struct SAT_Expressions *pe,
+                                           const void *data, size_t dbytes)
+{
+	const unsigned char *pd = (const unsigned char *) data;
+	unsigned int i, vars = 0;
+
+	if (!pe || !data || !dbytes)
+		return 0;
+
+	for (i=0; i<pe->used; ++i) {
+		unsigned int j;
+		uint32_t idx;
+
+		if (!(pe->x[i].used) || (pe->x[i].used > SAT_EXPR_MAX_TERMS))
+			continue;
+// TODO: proper is_consistent_expression() check
+
+		if (pe->x[i].abytes) {
+			size_t offs = pe->x[i].assign,
+			         db = pe->x[i].abytes;
+			uint32_t idx0;
+
+// TODO: let hash_add_if() report 'was present' vs. 'just added';
+// sync conditional-register paths
+
+			idx0 = imh_idx(&(pd[ offs ]), db);
+
+			idx = hash_add_if(&(pd[ offs ]), db);
+			if (!idx)
+				return cu_reportrc("hash table full", 0);
+
+			pe->x[i].assignnr = idx;
+
+			if (!idx0) {
+				vars = sat__expr_next_idx(pe, idx, vars,
+				                          offs, db);
+			}
+// TODO: the two paths are now sync'd; factor them out
+		}
+
+		for (j=0; j<pe->x[i].used; ++j) {
+			size_t offs = pe->x[i].offs [j],
+			         db = pe->x[i].bytes[j];
+			uint32_t idx0;
+
+			if (!db)
+				continue;                  // no var. reference
+
+			idx0 = imh_idx(&(pd[ offs ]), db);
+			idx  = hash_add_if(&(pd[ offs ]), db);
+			if (!idx)
+				return cu_reportrc("hash table full", 0);
+
+			pe->x[i].varnr[j] = idx;
+
+			if (!idx0) {
+				vars = sat__expr_next_idx(pe, idx, vars,
+				                          offs, db);
+			}
+// TODO: the two paths are now sync'd; factor them out
+		}
+	}
+
+	return vars+1;
+}
+
+
+/*-----  text-to-aux.variable mgmt  ----------------------------------------*/
+
+#include "cnf-templates.h"
+/**/
+#include "cnf-lessthan-forced-template.h"
+#include "cnf-and-template.h"
+#include "cnf-nand1-template.h"
+#include "cnf-or1-template.h"
+#include "cnf-or-template.h"
+#include "cnf-neq0forced-template.h"
+
+
+static
+unsigned int template2nrauxvars(const struct TemplIndex *pi,
+                                           unsigned int count, 
+                                              const int *pints,
+                                           unsigned int icount, 
+                                           unsigned int n, 
+                                           unsigned int base) ;
+
+
+/*--------------------------------------
+ * number of aux. variables used by expression
+ * may return SAT_UINT_INVD
+ */
+static unsigned int
+sat__opr2nrauxvars(unsigned int opr, unsigned int inputs)
+{
+// TODO: MUST have checked before
+	if (SX_OPROP_PAIRS & sat__expr_op2properties(opr)) {
+		if (inputs & 1) {
+			cu_reportrc("invalid: expected 2x input.set", -1);
+			return SAT_UINT_INVD;
+		}
+		inputs /= 2;
+	}
+
+	switch (opr) {
+// TODO: this section should be template-generated
+
+#if 0
+	case SX_OPR_NAND:
+	case SX_OPR_1OFN:
+	case SX_OPR_1OFN_1:
+	case SX_OPR_DIFF:
+#endif
+
+	case SX_OPR_AND:
+		return template2nrauxvars(cnf_and_templ_ints_idx,
+		              ARRAY_ELEMS(cnf_and_templ_ints_idx),
+		                          cnf_and_template_ints,
+		              ARRAY_ELEMS(cnf_and_template_ints),
+		                          inputs, 1);
+
+	case SX_OPR_NAND1:
+		return template2nrauxvars(cnf_nand1_templ_ints_idx,
+		              ARRAY_ELEMS(cnf_nand1_templ_ints_idx),
+		                          cnf_nand1_template_ints,
+		              ARRAY_ELEMS(cnf_nand1_template_ints),
+		                          inputs, 1);
+
+	case SX_OPR_OR:
+		return template2nrauxvars(cnf_or_templ_ints_idx,
+		              ARRAY_ELEMS(cnf_or_templ_ints_idx),
+		                          cnf_or_template_ints,
+		              ARRAY_ELEMS(cnf_or_template_ints),
+		                          inputs, 1);
+
+	case SX_OPR_OR1:
+		return template2nrauxvars(cnf_or1_templ_ints_idx,
+		              ARRAY_ELEMS(cnf_or1_templ_ints_idx),
+		                          cnf_or1_template_ints,
+		              ARRAY_ELEMS(cnf_or1_template_ints),
+		                          inputs, 1);
+
+	case SX_OPR_LT1:
+		return template2nrauxvars(cnf_ltf_template_ints_idx,
+		              ARRAY_ELEMS(cnf_ltf_template_ints_idx),
+		                          cnf_ltf_template_ints,
+		              ARRAY_ELEMS(cnf_ltf_template_ints),
+		                          inputs, 1);
+
+	case SX_OPR_NEQ0:
+		return template2nrauxvars(cnf_neq0forced_template_ints_idx,
+		              ARRAY_ELEMS(cnf_neq0forced_template_ints_idx),
+		                          cnf_neq0forced_template_ints,
+		              ARRAY_ELEMS(cnf_neq0forced_template_ints),
+		                          inputs, 1);
+
+	default:
+		return SAT_UINT_INVD;
+	}
+}
+
+
+/*--------------------------------------
+ * only list, or actually register, all aux. variables
+ * may return SAT_UINT_INVD (expect underlying code to log reason)
+ */
+static int sat__expr_set_auxvars(struct SAT_Expressions *pe, int set)
+{
+	unsigned int i, add = 0;
+
+	if (!pe)
+		return -1;
+
+	for (i=0; i<pe->used; ++i) {
+		unsigned int n;
+
+		n = sat__opr2nrauxvars(pe->x[i].operation, pe->x[i].used);
+
+		printf("## +VARS[%u][v=%u](%s)->+%u\n", i, pe->x[i].used,
+		       sat__expr_oprtype(pe->x[i].operation), n);
+		if (n == SAT_UINT_INVD)
+			return n;
+
+		if (pe->auxvars[i]) {
+			if (pe->auxvars[i] != n+1) {
+				cu_reportrc("inconsistent aux/var query", -1);
+				return SAT_UINT_INVD;
+			}
+		} else {
+			pe->auxvars[i] = n+1;
+		}
+
+		add += n;
+(void) set;
+	}
+
+	printf("## +VARS.TOTAL=%u\n", add);
+
+	return add+1;
+}
+
+
+//--------------------------------------
+static void sat__expr_vars_report(const struct SAT_Expressions *pe,
+                                    const void *data, size_t dbytes)
+{
+	const unsigned char *pd = (const unsigned char *) data,
+	                  *padd = (const unsigned char *) pe->addstr.pstr;
+	unsigned int i;
+
+	if (!pe || !data || !dbytes)
+		return;
+
+	printf("## NR.VARS=%u\n", pe->idxused);
+
+	for (i=0; i<ARRAY_ELEMS(pe->varname); ++i) {
+		size_t offs, db;
+
+		if (i >= pe->idxused)
+			break;
+
+		offs = pe->varname[i].offset;
+		db   = pe->varname[i].bytes;
+
+		printf("VAR[");
+
+		if (SAT_OFFSET_LOCAL & db) {
+			db &= ~SAT_OFFSET_LOCAL;
+
+			if (!is_valid_subregion(padd, pe->addstr.sused,
+			                        offs, db))
+				break;
+
+			printf_buf(&(padd[ offs ]), db);
+		} else {
+			if (!is_valid_subregion(data, dbytes, offs, db))
+				break;
+
+			printf_buf(&(pd[ offs ]), db);
+		}
+
+
+		printf("]=%u\n", i+1);
+	}
+}
+#endif   /*=====  /delimiter: expression parser  ===========================*/
 
 
 #if 1   /*=====  delimiter: SAT converter  =================================*/
@@ -1120,16 +1874,12 @@ typedef enum {
 
 
 #if 2   /*=====  delimiter: SAT template-to-CNF converter (v2)  ============*/
-#include "cnf-templates.h"
+// search for #include "cnf-lessthan-forced-template.h"
 #include "cnf-lessthan-template.h"
 #include "cnf-neq0-template.h"     // we do not actually use this non-forced
                                    // version for current schedules
-#include "cnf-neq0forced-template.h"
 #include "cnf-diff-template.h"
 #include "cnf-1ofn-template.h"
-#include "cnf-and-template.h"
-#include "cnf-or-template.h"
-#include "cnf-or1-template.h"
 #endif
 
 /*--------------------------------------
@@ -1263,8 +2013,6 @@ struct SatNrRefs {
 
 //--------------------------------------
 struct SatState {
-	struct PNR_DB db;
-
 	struct SatStrings s;
 
 	struct SatStrings comments;
@@ -2107,7 +2855,6 @@ int is_valid_cstring2(const struct SatState *ps, uint64_t s1, uint64_t s2)
 static uint64_t sat_varname2int(struct SatState *ps,
                                      const char *name, size_t nbytes)
 {
-//	if (!name || !nbytes || !ps || !ps->db.rd.ctx)
 	if (!name || !nbytes || !ps)
 		return 0;
 
@@ -2139,30 +2886,9 @@ static uint64_t sat_name2cs(struct SatState *ps,
 		uint64_t cs = 0;                      /* from database if >0 */
 
 		do {
-#if 0
-// TODO: non-Redis
-		if (ps->db.rd.ctx) {
-			cs = sat_varname2int(ps, name, nbytes);
-			if (cs && (cs != ~((uint64_t) 0))) {
-				rc = cs;
-				break;                         // found, report
-			}
-		}
-#endif
-
 		cs = sat_str_append(&( ps->s ), name, nbytes);
 		if (!cs)
 			break;
-
-#if 0
-// TODO: non-Redis
-		if (ps->db.rd.ctx) {
-			int dbrc = rds_str2db_main(ps->db.rd.ctx, name, nbytes,
-			               (uint64_t) ps->addvars + ps->vars +1);
-			if (dbrc < 0)
-				break;
-		}
-#endif
 
 		if (mode == HSH_MAINHASH) {
 			ps->vars++;
@@ -5065,6 +5791,53 @@ static struct TemplIndex sat_table2idx(const struct TemplIndex *pi,
  * common primitive: pick up template for a size-selected instance
  * of an operation
  *
+ * returns SAT_UINT_INVD if anything out of range
+ *
+ * query-only subset of template2entry(): number of aux. variables only
+ */
+static
+unsigned int template2nrauxvars(const struct TemplIndex *pi,
+                                           unsigned int count, 
+                                              const int *pints,
+                                           unsigned int icount, 
+                                           unsigned int n, 
+                                           unsigned int base)
+{
+	struct TemplIndex tidx = sat_table2idx(pi, count, n, base);
+
+// includes 0, which was returned if for not found
+// any value < header count is invalid
+
+	if (tidx.count < SAT_TEMPLHDR_UNITS)
+		return SAT_UINT_INVD;
+
+	if (pints && icount) {
+// TODO: is the centralized checker macro
+		if ((tidx.offset >= icount)          ||
+		    (tidx.offset + tidx.count > icount))
+		{
+			cu_reportrc("template is invalid!", -1);
+			return SAT_UINT_INVD;
+		}
+// TODO: do we have a template(header)-to-ints unwrapper?
+// [1] is +aux.variables' count
+
+		return (unsigned int) pints[ tidx.offset +1 ];
+	}
+
+//	start is header ;
+
+	return 1;
+}
+
+
+/*--------------------------------------
+ * common primitive: pick up template for a size-selected instance
+ * of an operation
+ *
+ * see template2nrauxvars() for a smaller version which only counts/lists
+ * variables
+ *
  * sets *pc to struct describing additions (variables etc.) without
  * updating *ps
  *
@@ -5175,6 +5948,7 @@ size_t cnf_or(struct SatState *ps,
 	                      &(cnf_or_template_ints[ cv.ix.offset ]),
 	                      cv.ix.count, a, an, ret,
 	                      sat_next_var_index(ps), cv.add.addvars);
+
 	if (is_valid_unsigned_int(c))
 		ps->ns.used += c;
 
@@ -5435,30 +6209,151 @@ static struct SAT_Summary templ2vars(const void *templ, unsigned int units,
 #endif    //=================================================================
 
 
+#if defined(CNF_LT_TEMPLATE_H__)  //=========================================
+
+// unconditionally set for 1=True
+// assume being called after expr 0-initialized
+// do not expect to ever fail
+//
+static unsigned int sat__expr_vars_init0(void)
+{
+	size_t nvb = sizeof("true") -1;
+	const char *nvar = "true";
+	unsigned int nidx;
+	uint32_t idx;
+	size_t offs;
+
+	offs = imh_append(NULL, &idx, nvar, nvb);
+	if (offs == IMH_SIZE_INVALID)
+		return cu_reportrc("hash table out of elements", 0);
+
+	offs = sat__vstr_append(&( exprs.addstr ), nvar, nvb);
+	if (offs == IMH_SIZE_INVALID)
+		return cu_reportrc("can not register 'true'", 0);
+
+		// permanent copy at addstr[ offs ]
+
+	nidx = sat__expr_next_idx(&exprs, idx, 0 /*prev.vars*/, offs,
+	                          nvb | SAT_OFFSET_LOCAL);
+
+// TODO: error check
+(void) nidx;
+
+	return 1;
+}
+
+
+//--------------------------------------
+static void sat__exprs_dispose(void)
+{
+	sat__vstr_dispose(&( exprs.addstr ));
+
+	memset(&exprs, 0, sizeof(exprs));
+}
+
+
+//--------------------------------------
+static int txt2sat(const char *arg)
+{
+	size_t ebytes, offs = 0;
+	const unsigned char *e;
+	unsigned int line;
+	long eb;
+
+	if (!arg)
+		return cu_reportrc("missing txt-to-SAT argument", -1);
+
+	eb = cu_readall(arg, &e, ~0);
+	if (eb < 0)
+		return -1;
+	ebytes = (size_t) eb;
+
+	memset(&exprs, 0, sizeof(exprs));
+	sat__expr_vars_init0();
+
+	for (line=0; line<ARRAY_ELEMS(exprs.x); ++line) {
+		const void *nln;
+		unsigned int rc;
+		size_t lnbytes;
+
+		nln = memchr(&(e[ offs ]), '\n', ebytes-offs);
+
+		lnbytes = nln
+		          ? (((const unsigned char *) nln -e) -offs)
+		          : (ebytes-offs);
+
+		rc = sat_next_expr(&(exprs.x[ line ]), 
+		                   &(e[ offs ]), lnbytes, offs);
+		if (!rc) {
+			++line;
+			break;
+		} else if (rc == SAT_UINT_INVD) {
+// TODO: dispose everything
+			return cu_reportrc("invalid line", -1);
+		}
+
+		offs += lnbytes + !!nln;
+
+		if (offs >= ebytes) {
+			++line;
+			break;
+		}
+	}
+	exprs.used = line;
+
+// TODO: check that variable/forced-True/False setup is
+// consistent: forced-value expressions MUST NOT have an assigned variable
+//
+// TODO: predefined TRUE[1] variable
+
+	if (is_invalid_expr_set(&exprs))
+		return cu_reportrc("invalid set of expressions", -1);
+
+	sat__expr_vars2ints(&exprs, e, ebytes);
+
+	if (sat__expr_set_auxvars(&exprs, 1) <0)
+		return cu_reportrc("setting aux.variables failed", -1);
+
+	{
+	unsigned int i;
+printf("====================================================\n");
+
+	for (i=0; i<line; ++i) {
+		sat__expr_report(&(exprs.x[i]), e, ebytes);
+printf("##\n");
+	}
+
+printf("====================================================\n");
+	sat__expr_vars_report(&exprs, e, ebytes);
+	}
+
+	sat__exprs_dispose();
+return 0;
+
+}
+#endif
+
+
 //----------------------------------------------------------------------------
 int main(int argc, char **argv)
 {
-// TODO: non-Redis
-//	const char *hostname = (argc > 1) ? argv[1] : "localhost";
-//	int port = (argc > 2) ? atoi(argv[2]) : 6379;
 	struct SatState psat;
-	struct PNR_DB db;
 	int rc = -1;
 
 	--argc;
 	++argv;
 
+	if ((argc > 0) && !strcmp(argv[0], "--txt2sat"))
+		return txt2sat((argc >= 2) ? argv[1] : "-");
+
 	if ((argc >= 2) && !strcmp(argv[0], "SAT.CMD"))
 		return sat_varmgr(argv[1], (const char **) &(argv[2]), argc-2);
 
-	memset(&db,   0, sizeof(db));
 	memset(&psat, 0, sizeof(psat));
 
 	if (0) {            // reference static fns
-		imh_append(NULL, NULL, NULL, ~0);
 		imh_idx(NULL, ~0);
 		imh_entry(NULL, ~0);
-		imh_main_dispose();
 
 		report_conversion_state(NULL);
 		report_sat_state(NULL, NULL);
@@ -5642,22 +6537,6 @@ return 0;
 	sat_xor1(NULL, &psat, r, a, b, 0);
 
 	{
-	char tmpname[ 32 +1 ] = { 0, };
-
-if (0) {
-	for (i=0; i<ARRAY_ELEMS(varr); ++i) {
-		size_t wr;
-
-		wr = snprintf(tmpname, sizeof(tmpname), "d999t%04u", i);
-
-		varr[i] = sat_name2cs(&psat, tmpname, wr, HSH_MAINHASH);
-		if (!varr[i])
-			return -1;
-	}
-}
-	}
-
-	{
 	uint64_t arr[6] = { a, b, c, d, e0, f1 };
 	struct SatName nn;
 
@@ -5720,7 +6599,7 @@ if (0) {
 	}
 	} while (0);
 
-	db_release(&db);
+	imh_main_dispose();
 	sat_dispose(&psat);
 
 	return (rc < 0) ? EXIT_FAILURE : EXIT_SUCCESS;
