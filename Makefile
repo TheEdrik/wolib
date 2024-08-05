@@ -29,7 +29,7 @@ SAT := 1                ## produce SAT solver expression
 			## rough-estimate minimum (+...)
 			##
 ifeq (,$(SAT_VEHICLES))
-SAT_V := +4
+SAT_V := +12
 else
 SAT_V := $(SAT_VEHICLES)
 endif
@@ -46,22 +46,6 @@ packnroute.txt:  $(ORDERS)  $(BASEXY_C)  $(DISTANCES)
 		SAT=$(SAT) SAT_VEHICLES=$(SAT_V) SATDEBUG=$(SAT_DEBUG)  \
 		MAX1=8542700000 TUPLE_N=6 NONSEL=1                      \
 		./pack.py  $(ORDERS) n=$(R) | tee $@
-
-
-##--------------------------------------
-## test loop
-## everything through SAT solver
-##
-VHC := "'D0=VB0;D1=-VB2;D2=!FIXV1;D3=!FIXV2;D3=FIXV3'"
-##
-packnroute-t.txt:  orders1.txt  $(BASEXY_C)  $(DISTANCES)
-	BASE=$(shell cat $(BASEXY_C)) DIST=$(DISTANCES)                 \
-		TRACE=$(TRACE) DEBUG=$(DEBUG)                           \
-		SAT_VEHCONSTRAINTS=$(VHC)                               \
-		PACK_N_ROUTE_SKIP=1                                     \
-		SAT=$(SAT) SAT_VEHICLES=$(SAT_V) SATDEBUG=$(SAT_DEBUG)  \
-		MAX1=8542700000 TUPLE_N=6 NONSEL=1                      \
-		./pack.py  orders1.txt | tee $@
 
 
 ##--------------------------------------
@@ -82,14 +66,7 @@ sat: packnroute.txt
 	grep -v -e ' NV' -e _x_ -e _nn_ pnr.log | tee pnr2.log
 
 ## cryptominisat invocation above:
-## time cryptominisat5 --verb 2 p.sat | tee p.solv
-
-## sample loop
-sat.full: packnroute-t.txt
-	grep ^SAT= $^ | sed 'sQSAT=QQ' > p.sat
-	kissat -s -v -v p.sat          | tee p.solv
-	dev/sat2back.py p.sat p.solv   | tee pnr.log
-	grep -v -e ' NV' pnr.log       | tee pnr2.log
+## time cryptominisat5 --verb 2 p.sat      | tee p.solv
 
 $(BASEXY_C): $(BASEXY)
 	$(shell tr '\t' , < $^ > $@)
@@ -163,6 +140,6 @@ clean: $(wildcard $(CLEAN))
 	$(RM) $(wildcard $(CLEAN))
 
 
-.PHONY: clean sat sat.full
+.PHONY: clean sat
 .PRECIOUS: packnroute.txt
 

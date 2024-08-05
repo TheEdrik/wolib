@@ -15,7 +15,6 @@ a.*
 a[0-9].*
 p.*
 pnr*.log
-sat*.log
 profile*.log
 sch*csv
 sat
